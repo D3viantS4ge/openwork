@@ -133,6 +133,15 @@ export default defineConfig({
     strictPort: true,
     ...(allowedHosts.size > 0 ? { allowedHosts: Array.from(allowedHosts) } : {}),
   },
+  optimizeDeps: {
+    esbuildOptions: {
+      // Vite's dep optimizer hardcodes the multi-browser "modules" target
+      // array, which esbuild 0.28.x (pinned in pnpm-workspace.yaml) fails to
+      // transform destructuring against. A single-string target avoids the
+      // regression while staying no-downlevel in dev, like build.target.
+      target: "esnext",
+    },
+  },
   build: {
     target: "esnext",
     rollupOptions: {
