@@ -268,7 +268,7 @@ if (shouldDownloadOpencode) {
     const psScript = [
       "$ErrorActionPreference = 'Stop'",
       `Invoke-WebRequest -Uri ${psQuote(opencodeUrl)} -OutFile ${psQuote(archivePath)}`,
-      `Expand-Archive -Path ${psQuote(archivePath)} -DestinationPath ${psQuote(extractDir)} -Force`,
+      `Microsoft.PowerShell.Archive\\Expand-Archive -Path ${psQuote(archivePath)} -DestinationPath ${psQuote(extractDir)} -Force`,
     ].join("; ");
 
     const result = spawnSync("powershell", ["-NoProfile", "-Command", psScript], {
