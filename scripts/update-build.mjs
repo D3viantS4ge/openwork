@@ -21,11 +21,12 @@ function quoteToken(token) {
   return /[\s"&|<>^]/.test(token) ? `"${token.replace(/"/g, '""')}"` : token;
 }
 
-// Spawn a command, inheriting stdio. .cmd/.bat shims on Windows need a shell;
-// passing args with shell:true triggers node's DEP0190 deprecation, so quote
-// them into a single command line instead.
+// Spawn a command, inheriting stdio. On Windows, anything that is not a real
+// executable (e.g. pnpm -> pnpm.cmd, or any extension-less PATH shim) must go
+// through a shell; passing args with shell:true triggers node's DEP0190
+// deprecation, so quote them into a single command line instead.
 function run(command, args = []) {
-  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
+  if (process.platform === "win32" && !/\.(exe|com)$/i.test(command)) {
     const line = [command, ...args].map(quoteToken).join(" ");
     return spawnSync(line, { stdio: "inherit", shell: true });
   }
@@ -70,7 +71,11 @@ if (git(["rebase", BRANCH_TARGET]).status !== 0) {
 // 6. Build pipeline.
 for (const [command, args] of BUILD_STEPS) {
   console.log(`[update-build] ${command} ${args.join(" ")}`);
-  if (run(command, args).status !== 0) {
+  const result = run(command, args);
+  if (result.error) {
+    console.error(`update-build: spawn error: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
     fail(`${command} ${args.join(" ")} failed`);
   }
 }
