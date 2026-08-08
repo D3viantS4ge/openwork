@@ -4,6 +4,7 @@ import { useState } from "react"
 import { ChevronRight } from "lucide-react"
 
 import { FileChip } from "@/components/chat/file-chip"
+import { DiffView, getToolInputDiff } from "@/components/ui/diff-view"
 import { DotMatrixLoader } from "@/components/ui/dot-matrix-loader"
 import {
   getAggregateNowLabel,
@@ -12,7 +13,7 @@ import {
   getAggregateSummary,
   type AnyToolPart,
 } from "@/lib/tool-aggregate"
-import { isBashToolPart } from "@/lib/build-in-tools"
+import { isApplyPatchToolPart, isBashToolPart, isEditToolPart } from "@/lib/build-in-tools"
 import { isToolPartInFlight } from "@/lib/tool-activity"
 import { trackToolCallDuration } from "@/lib/tool-call-duration"
 import { cn } from "@/lib/utils"
@@ -151,6 +152,12 @@ export function ToolAggregateGroup({ parts, className }: ToolAggregateGroupProps
                       </pre>
                     ) : null}
                   </div>
+                ) : null}
+                {isEditToolPart(part) || isApplyPatchToolPart(part) ? (
+                  (() => {
+                    const diff = getToolInputDiff(part.input, part.metadata)
+                    return diff ? <DiffView key="diff" diff={diff} className="mt-1 max-h-40 overflow-auto rounded-md font-mono leading-relaxed" /> : null
+                  })()
                 ) : null}
                 {reason ? (
                   <div className="text-[11px] text-muted-foreground">failed — {reason}</div>

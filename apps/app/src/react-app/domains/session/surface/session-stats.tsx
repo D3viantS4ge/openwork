@@ -66,7 +66,7 @@ export function SessionStats({ session, className }: SessionStatsProps) {
   return (
     <div
       className={cn(
-        "mx-3 mb-1 flex min-w-0 items-center gap-3 overflow-hidden rounded-lg border border-border/60 bg-dls-surface/60 px-3 py-1 text-[11px] tabular-nums text-dls-secondary",
+        "mx-3 mb-1 flex min-w-0 items-center gap-3 overflow-hidden rounded-lg border border-border/60 bg-dls-surface/60 px-3 py-1 text-xs tabular-nums text-dls-secondary",
         className,
       )}
       data-testid="session-stats"
