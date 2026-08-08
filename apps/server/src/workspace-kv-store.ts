@@ -46,6 +46,25 @@ type WorkspaceKvDb = {
 
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const dbByPath = new Map<string, Promise<RuntimeSqliteDatabase>>();
+
+/**
+ * Close every cached runtime-DB handle and drop the caches. Needed for test
+ * cleanup and graceful process shutdown: on Windows an open sqlite handle
+ * blocks recursive directory removal (EBUSY).
+ */
+export async function closeWorkspaceKvDbs(): Promise<void> {
+  const dbs = [...dbByPath.values()];
+  dbByPath.clear();
+  tableDbByPath.clear();
+  for (const dbPromise of dbs) {
+    const db = await dbPromise.catch(() => null);
+    try {
+      db?.close();
+    } catch {
+      // already closed or closing — ignore
+    }
+  }
+}
 const tableDbByPath = new Map<string, Map<string, Promise<WorkspaceKvDb>>>();
 
 export function isRecord(value: unknown): value is Record<string, unknown> {

@@ -12,6 +12,8 @@ import {
   syncAllWorkspacesRuntimeMcpToEngine,
 } from "./server.js";
 import { readRuntimeOpencodeConfig, writeRuntimeOpencodeConfig } from "./runtime-opencode-config-store.js";
+import { writeOpenworkRuntimeConfigFile } from "./openwork-runtime-config.js";
+import { closeWorkspaceKvDbs } from "./workspace-kv-store.js";
 import type { ServerConfig } from "./types.js";
 
 type Served = { port: number; stop: (closeActiveConnections?: boolean) => void | Promise<void> };
@@ -30,9 +32,26 @@ const stops: Array<() => void | Promise<void>> = [];
 const roots: string[] = [];
 let nextTestProcessGeneration = 0;
 
+// Windows keeps the sqlite runtime DB handle open briefly after server.stop(),
+// so recursive removal can race it with EBUSY. Retry before failing.
+async function rmWithRetry(target: string, attempts = 6) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await rm(target, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (attempt >= attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
+    }
+  }
+}
+
 afterEach(async () => {
   while (stops.length) await stops.pop()?.();
-  while (roots.length) await rm(roots.pop()!, { recursive: true, force: true });
+  // Windows keeps an open sqlite handle locked, which makes recursive
+  // removal fail with EBUSY; close the cached runtime-DB handles first.
+  await closeWorkspaceKvDbs();
+  while (roots.length) await rmWithRetry(roots.pop()!);
 });
 
 async function createWorkspaceRoot() {
@@ -181,7 +200,7 @@ describe("runtime MCP engine sync", () => {
       const addRequest = mock.requests.find((entry) => entry.method === "POST" && entry.pathname === "/mcp");
       expect(addRequest).toBeDefined();
       expect(addRequest?.body).toEqual({ name: "posthog", config: POSTHOG_CONFIG });
-      expect(addRequest?.search).toContain(`directory=${encodeURIComponent(workspaceRoot)}`);
+      expect(decodeURIComponent(addRequest?.search ?? "")).toContain(`directory=${workspaceRoot}`);
     } finally {
       if (previousDb === undefined) delete process.env.OPENWORK_RUNTIME_DB;
       else process.env.OPENWORK_RUNTIME_DB = previousDb;
@@ -874,7 +893,7 @@ describe("runtime MCP engine sync", () => {
         (entry) => entry.method === "POST" && entry.pathname === "/mcp/posthog/disconnect",
       );
       expect(disconnectRequest).toBeDefined();
-      expect(disconnectRequest?.search).toContain(`directory=${encodeURIComponent(workspaceRoot)}`);
+      expect(decodeURIComponent(disconnectRequest?.search ?? "")).toContain(`directory=${workspaceRoot}`);
     } finally {
       if (previousDb === undefined) delete process.env.OPENWORK_RUNTIME_DB;
       else process.env.OPENWORK_RUNTIME_DB = previousDb;
@@ -969,8 +988,115 @@ describe("runtime MCP engine sync", () => {
 
       const syncs = mock.requests.filter((entry) => entry.method === "POST" && entry.pathname === "/mcp");
       const byName = new Map(syncs.map((entry) => [(entry.body as { name?: string } | null)?.name, entry.search]));
-      expect(byName.get("posthog")).toContain(`directory=${encodeURIComponent(rootA)}`);
-      expect(byName.get("stripe")).toContain(`directory=${encodeURIComponent(rootB)}`);
+      expect(decodeURIComponent(byName.get("posthog") ?? "")).toContain(`directory=${rootA}`);
+      expect(decodeURIComponent(byName.get("stripe") ?? "")).toContain(`directory=${rootB}`);
+    } finally {
+      if (previousDb === undefined) delete process.env.OPENWORK_RUNTIME_DB;
+      else process.env.OPENWORK_RUNTIME_DB = previousDb;
+    }
+  });
+
+  test("does not re-register runtime MCPs the engine already loaded from the config file (fixes #3325)", async () => {
+    const workspaceRoot = await createWorkspaceRoot();
+    const previousDb = process.env.OPENWORK_RUNTIME_DB;
+    process.env.OPENWORK_RUNTIME_DB = join(workspaceRoot, "runtime.sqlite");
+    try {
+      const mock = startMockOpencode();
+      const openwork = await startOpenworkServer(workspaceRoot, `http://127.0.0.1:${mock.server.port}`);
+
+      await writeRuntimeOpencodeConfig(openwork.config, "ws_1", (current) => ({
+        ...current,
+        mcp: { posthog: POSTHOG_CONFIG },
+      }));
+      // The managed-engine spawn path writes the OPENCODE_CONFIG file before
+      // starting the engine, so the engine loads posthog from that file itself.
+      await writeOpenworkRuntimeConfigFile(openwork.config, "ws_1");
+
+      mock.requests.length = 0;
+      await syncAllWorkspacesRuntimeMcpToEngine(openwork.config, { configCoveredWorkspaceId: "ws_1" });
+
+      const mcpPosts = mock.requests.filter((entry) => entry.method === "POST" && entry.pathname === "/mcp");
+      expect(mcpPosts).toHaveLength(0);
+    } finally {
+      if (previousDb === undefined) delete process.env.OPENWORK_RUNTIME_DB;
+      else process.env.OPENWORK_RUNTIME_DB = previousDb;
+    }
+  });
+
+  test("still registers runtime MCPs absent from the config-covered file", async () => {
+    const workspaceRoot = await createWorkspaceRoot();
+    const previousDb = process.env.OPENWORK_RUNTIME_DB;
+    process.env.OPENWORK_RUNTIME_DB = join(workspaceRoot, "runtime.sqlite");
+    try {
+      const mock = startMockOpencode();
+      const openwork = await startOpenworkServer(workspaceRoot, `http://127.0.0.1:${mock.server.port}`);
+
+      await writeRuntimeOpencodeConfig(openwork.config, "ws_1", (current) => ({
+        ...current,
+        mcp: { posthog: POSTHOG_CONFIG },
+      }));
+      // The engine loads the file written at spawn time; a runtime entry
+      // added afterwards (e.g. a cloud MCP) is not in that file and must
+      // still reach the engine explicitly.
+      await writeOpenworkRuntimeConfigFile(openwork.config, "ws_1");
+      await writeRuntimeOpencodeConfig(openwork.config, "ws_1", (current) => ({
+        ...current,
+        mcp: { ...(current.mcp as Record<string, unknown>), stripe: POSTHOG_CONFIG },
+      }));
+
+      mock.requests.length = 0;
+      await syncAllWorkspacesRuntimeMcpToEngine(openwork.config, { configCoveredWorkspaceId: "ws_1" });
+
+      const mcpPosts = mock.requests.filter((entry) => entry.method === "POST" && entry.pathname === "/mcp");
+      // posthog is covered by the config file (engine-loaded at spawn); stripe
+      // was added to the runtime DB after the file was written and must still
+      // be registered explicitly.
+      expect(mcpPosts.filter((entry) => (entry.body as { name?: string } | null)?.name === "posthog")).toHaveLength(0);
+      expect(mcpPosts.filter((entry) => (entry.body as { name?: string } | null)?.name === "stripe").length).toBeGreaterThan(0);
+    } finally {
+      if (previousDb === undefined) delete process.env.OPENWORK_RUNTIME_DB;
+      else process.env.OPENWORK_RUNTIME_DB = previousDb;
+    }
+  });
+
+  test("non-covered workspaces still get their runtime MCPs registered at startup", async () => {
+    const rootA = await createWorkspaceRoot();
+    const rootB = await createWorkspaceRoot();
+    const previousDb = process.env.OPENWORK_RUNTIME_DB;
+    process.env.OPENWORK_RUNTIME_DB = join(rootA, "runtime.sqlite");
+    try {
+      const mock = startMockOpencode();
+      const baseUrl = `http://127.0.0.1:${mock.server.port}`;
+      const config: ServerConfig = {
+        host: "127.0.0.1",
+        port: 0,
+        token: "owt_test_token",
+        hostToken: "owt_host_token",
+        approval: { mode: "auto", timeoutMs: 1000 },
+        corsOrigins: ["*"],
+        workspaces: [
+          { id: "ws_1", name: "A", path: rootA, preset: "starter", workspaceType: "local", baseUrl },
+          { id: "ws_2", name: "B", path: rootB, preset: "starter", workspaceType: "local", baseUrl },
+        ],
+        authorizedRoots: [rootA, rootB],
+        readOnly: false,
+        startedAt: Date.now(),
+        tokenSource: "cli",
+        hostTokenSource: "cli",
+        logFormat: "pretty",
+        logRequests: false,
+      };
+
+      await writeRuntimeOpencodeConfig(config, "ws_1", (current) => ({ ...current, mcp: { posthog: POSTHOG_CONFIG } }));
+      await writeRuntimeOpencodeConfig(config, "ws_2", (current) => ({ ...current, mcp: { stripe: POSTHOG_CONFIG } }));
+      await writeOpenworkRuntimeConfigFile(config, "ws_1");
+
+      mock.requests.length = 0;
+      await syncAllWorkspacesRuntimeMcpToEngine(config, { configCoveredWorkspaceId: "ws_1" });
+
+      const mcpPosts = mock.requests.filter((entry) => entry.method === "POST" && entry.pathname === "/mcp");
+      expect(mcpPosts).toHaveLength(1);
+      expect((mcpPosts[0]?.body as { name?: string } | null)?.name).toBe("stripe");
     } finally {
       if (previousDb === undefined) delete process.env.OPENWORK_RUNTIME_DB;
       else process.env.OPENWORK_RUNTIME_DB = previousDb;
