@@ -54,6 +54,7 @@ export function getAggregateSummary(parts: AnyToolPart[], tense: "present" | "pa
   const commands = parts.filter((part) => getToolFamily(part) === "command").length
   const editPaths = new Set<string>()
   let editCalls = 0
+  let writeCalls = 0
   const readPaths = new Set<string>()
   let readCalls = 0
   let searches = 0
@@ -64,6 +65,7 @@ export function getAggregateSummary(parts: AnyToolPart[], tense: "present" | "pa
       editCalls += 1
       const path = filePathOf(part)
       if (path) editPaths.add(path)
+      if (isWriteToolPart(part)) writeCalls += 1
     } else if (family === "read") {
       readCalls += 1
       const path = filePathOf(part)
@@ -76,7 +78,17 @@ export function getAggregateSummary(parts: AnyToolPart[], tense: "present" | "pa
   const pieces: string[] = []
   if (editCalls > 0) {
     const count = editPaths.size > 0 ? editPaths.size : editCalls
-    pieces.push(`${tense === "past" ? "edited" : "editing"} ${plural(count, "file")}`)
+    // A group whose edit-family calls are all writes reads "wrote/writing";
+    // any real edit keeps the "edited/editing" verb for the whole group.
+    const verb =
+      writeCalls === editCalls
+        ? tense === "past"
+          ? "wrote"
+          : "writing"
+        : tense === "past"
+          ? "edited"
+          : "editing"
+    pieces.push(`${verb} ${plural(count, "file")}`)
   }
   if (commands > 0) {
     pieces.push(`${tense === "past" ? "ran" : "running"} ${plural(commands, "command")}`)
