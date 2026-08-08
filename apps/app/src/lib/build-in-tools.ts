@@ -315,7 +315,7 @@ export function isEditToolPart(part: ToolUIPart | DynamicToolUIPart): part is Ed
   return part.type === "dynamic-tool" && part.toolName === "edit";
 }
 
-export type WriteToolPart = BuiltInDynamicToolPart<"write", WriteInput>;
+export type WriteToolPart = BuiltInDynamicToolPart<"write", WriteInput, string, WriteMetadata>;
 
 export function isWriteToolPart(part: ToolUIPart | DynamicToolUIPart): part is WriteToolPart {
   return part.type === "dynamic-tool" && part.toolName === "write";

@@ -1,5 +1,12 @@
 import type { ReadToolPart, WriteToolPart } from "@/lib/build-in-tools"
 import { parseFilename } from "@/components/tools/path"
+import {
+  CollapsibleTool,
+  CollapsibleToolContent,
+  CollapsibleToolStep,
+  CollapsibleToolTrigger,
+} from "@/components/tools/collapsible-tool"
+import { FilePen } from "lucide-react"
 
 interface ReadFileToolProps {
   part: ReadToolPart
@@ -53,7 +60,7 @@ export function WriteFileTool({ part }: WriteFileToolProps) {
   if (part.state === "output-error") {
     return (
       <div>
-        <span className="text-muted-foreground">Write attempted {filename}</span> 
+        <span className="text-muted-foreground">Write attempted {filename}</span>
       </div>
     )
   }
@@ -62,10 +69,23 @@ export function WriteFileTool({ part }: WriteFileToolProps) {
     return null;
   }
 
+  const overwrote = part.metadata?.exists === true
+
   return (
-    <div>
-      <span className="text-muted-foreground">Write {filename}</span> 
-    </div>
+    <CollapsibleTool>
+      <CollapsibleToolStep defaultOpen className="flex flex-col gap-2">
+        <CollapsibleToolTrigger leftIcon={<FilePen className="size-4" />}>
+          <span className="flex gap-2">
+            <span className="shrink-0">{overwrote ? `Overwrote ${filename}` : `Write ${filename}`}</span>
+          </span>
+        </CollapsibleToolTrigger>
+        <CollapsibleToolContent className="bg-muted rounded-lg p-2">
+          <pre className="max-h-[32rem] overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-xs opacity-80">
+            {part.input.content}
+          </pre>
+        </CollapsibleToolContent>
+      </CollapsibleToolStep>
+    </CollapsibleTool>
   )
 }
 
