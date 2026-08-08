@@ -290,8 +290,11 @@ export interface PlanExitInput {}
 
 export interface PlanExitMetadata extends ToolMetadata {}
 
-type BuiltInDynamicToolPart<ToolName extends string, Input, Output = string> =
-  DynamicToolUIPart & { toolName: ToolName } & (
+type BuiltInDynamicToolPart<ToolName extends string, Input, Output = string, Metadata extends ToolMetadata = ToolMetadata> =
+  DynamicToolUIPart & { toolName: ToolName } & {
+    /** Engine-side metadata (e.g. bash exit code, edit diff) passed through by the sync layer. */
+    metadata?: Metadata;
+  } & (
     | { state: "output-available"; input: Input; output: Output }
     | { state: "output-error"; input: Input; errorText: string }
     | {
@@ -300,13 +303,13 @@ type BuiltInDynamicToolPart<ToolName extends string, Input, Output = string> =
       }
   );
 
-export type BashToolPart = BuiltInDynamicToolPart<"bash", BashInput>;
+export type BashToolPart = BuiltInDynamicToolPart<"bash", BashInput, string, BashMetadata>;
 
 export function isBashToolPart(part: ToolUIPart | DynamicToolUIPart): part is BashToolPart {
   return part.type === "dynamic-tool" && part.toolName === "bash";
 }
 
-export type EditToolPart = BuiltInDynamicToolPart<"edit", EditInput>;
+export type EditToolPart = BuiltInDynamicToolPart<"edit", EditInput, string, EditMetadata>;
 
 export function isEditToolPart(part: ToolUIPart | DynamicToolUIPart): part is EditToolPart {
   return part.type === "dynamic-tool" && part.toolName === "edit";

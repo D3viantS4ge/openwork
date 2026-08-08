@@ -12,6 +12,7 @@ import {
   getAggregateSummary,
   type AnyToolPart,
 } from "@/lib/tool-aggregate"
+import { isBashToolPart } from "@/lib/build-in-tools"
 import { isToolPartInFlight } from "@/lib/tool-activity"
 import { trackToolCallDuration } from "@/lib/tool-call-duration"
 import { cn } from "@/lib/utils"
@@ -137,6 +138,18 @@ export function ToolAggregateGroup({ parts, className }: ToolAggregateGroupProps
                     </span>
                   ) : null}
                 </div>
+                {isBashToolPart(part) ? (
+                  <div className="mt-0.5 flex flex-col gap-0.5">
+                    <pre className="whitespace-pre-wrap wrap-break-word font-mono text-[11px]">
+                      $ {part.input.command}
+                    </pre>
+                    {part.state === "output-available" && part.output ? (
+                      <pre className="max-h-40 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] opacity-70">
+                        {part.output}
+                      </pre>
+                    ) : null}
+                  </div>
+                ) : null}
                 {reason ? (
                   <div className="text-[11px] text-muted-foreground">failed — {reason}</div>
                 ) : null}

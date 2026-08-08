@@ -18,12 +18,11 @@ type ReasoningBlockProps = {
 }
 
 /**
- * Thinking is collapsed by default — a single "Thinking… / Thought"
- * line with a chevron; the full reasoning renders as markdown only
- * when the user opens it.
+ * Thinking is open by default — the full reasoning renders as markdown
+ * under the "Thinking… / Thought" header; a chevron collapses it.
  */
 export function ReasoningBlock({ text, isStreaming, className }: ReasoningBlockProps) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(true)
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className={cn("w-full", className)} data-reasoning-block="">

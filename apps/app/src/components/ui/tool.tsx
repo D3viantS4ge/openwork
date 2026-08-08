@@ -36,6 +36,7 @@ import {
 } from "lucide-react"
 import { useCallback, useState } from "react"
 import type { DynamicToolUIPart, ToolUIPart } from "ai"
+import { diffWords } from "diff"
 
 function toolIcon(part: ToolPart) {
   const name = part.type === "dynamic-tool" ? part.toolName : part.type
@@ -97,8 +98,17 @@ function isDiffText(value: unknown): value is string {
   )
 }
 
-/** Tools like apply_patch carry the diff in their input (patchText). */
-function getInputDiff(input: unknown): string | null {
+/** Tools like apply_patch carry the diff in their input (patchText); edit tools carry it in engine metadata. */
+function getInputDiff(input: unknown, metadata?: Record<string, unknown>): string | null {
+  if (metadata) {
+    if (isDiffText(metadata.diff)) {
+      return metadata.diff
+    }
+    const filediff = metadata.filediff
+    if (typeof filediff === "object" && filediff !== null && "patch" in filediff && isDiffText(filediff.patch)) {
+      return filediff.patch
+    }
+  }
   if (isDiffText(input)) {
     return input
   }
@@ -111,29 +121,108 @@ function getInputDiff(input: unknown): string | null {
   return null
 }
 
-function diffLineClass(line: string) {
-  if (line.startsWith("+")) return "text-green-11 bg-green-1/40"
-  if (line.startsWith("-")) return "text-red-11 bg-red-1/40"
-  if (line.startsWith("@@")) return "text-blue-11 bg-blue-1/30"
-  return ""
+/** Word-level pair for one removed + one added diff line (green/red like opencode). */
+function WordDiffPair({ before, after }: { before: string; after: string }) {
+  const changes = diffWords(before, after)
+  const removed: React.ReactNode[] = []
+  const added: React.ReactNode[] = []
+  let removedKey = 0
+  let addedKey = 0
+  for (const change of changes) {
+    if (change.added) {
+      added.push(
+        <span key={`a${addedKey++}`} className="rounded-sm bg-green-2 font-medium text-green-11">
+          {change.value}
+        </span>,
+      )
+    } else if (change.removed) {
+      removed.push(
+        <span key={`r${removedKey++}`} className="rounded-sm bg-red-2 font-medium text-red-11">
+          {change.value}
+        </span>,
+      )
+    } else {
+      removed.push(<span key={`rc${removedKey++}`}>{change.value}</span>)
+      added.push(<span key={`ac${addedKey++}`}>{change.value}</span>)
+    }
+  }
+  return (
+    <>
+      <div className="whitespace-pre-wrap wrap-break-word bg-red-1/40 px-1 text-red-11">-{removed}</div>
+      <div className="whitespace-pre-wrap wrap-break-word bg-green-1/40 px-1 text-green-11">+{added}</div>
+    </>
+  )
 }
 
-function DiffLines({ diff }: { diff: string }) {
-  return (
-    <div className="max-h-60 overflow-auto rounded-md font-mono leading-relaxed">
-      {diff.split("\n").map((line, index) => (
-        <div
-          key={`${index}:${line}`}
-          className={cn(
-            "whitespace-pre-wrap wrap-break-word px-1",
-            diffLineClass(line)
-          )}
-        >
-          {line || " "}
-        </div>
-      ))}
-    </div>
-  )
+function DiffView({ diff }: { diff: string }) {
+  const rows: React.ReactNode[] = []
+  let removed: string[] = []
+  let added: string[] = []
+  let key = 0
+
+  const flushPair = () => {
+    if (removed.length === 0 && added.length === 0) return
+    const count = Math.max(removed.length, added.length)
+    for (let index = 0; index < count; index++) {
+      const before = removed[index]
+      const after = added[index]
+      if (before !== undefined && after !== undefined) {
+        rows.push(<WordDiffPair key={key++} before={before} after={after} />)
+      } else if (before !== undefined) {
+        rows.push(
+          <div key={key++} className="whitespace-pre-wrap wrap-break-word bg-red-1/40 px-1 text-red-11">
+            -{before}
+          </div>,
+        )
+      } else if (after !== undefined) {
+        rows.push(
+          <div key={key++} className="whitespace-pre-wrap wrap-break-word bg-green-1/40 px-1 text-green-11">
+            +{after}
+          </div>,
+        )
+      }
+    }
+    removed = []
+    added = []
+  }
+
+  for (const raw of diff.split("\n")) {
+    if (raw.startsWith("@@")) {
+      flushPair()
+      rows.push(
+        <div key={key++} className="whitespace-pre-wrap wrap-break-word bg-blue-1/30 px-1 text-blue-11">
+          {raw}
+        </div>,
+      )
+      continue
+    }
+    if (raw.startsWith("--- ") || raw.startsWith("+++ ")) {
+      flushPair()
+      rows.push(
+        <div key={key++} className="whitespace-pre-wrap wrap-break-word px-1 text-muted-foreground/80">
+          {raw}
+        </div>,
+      )
+      continue
+    }
+    if (raw.startsWith("-")) {
+      removed.push(raw.slice(1))
+      continue
+    }
+    if (raw.startsWith("+")) {
+      added.push(raw.slice(1))
+      continue
+    }
+    flushPair()
+    rows.push(
+      <div key={key++} className="whitespace-pre-wrap wrap-break-word px-1 text-muted-foreground/80">
+        {raw || " "}
+      </div>,
+    )
+  }
+  flushPair()
+
+  return <div className="max-h-80 overflow-auto rounded-md font-mono leading-relaxed">{rows}</div>
 }
 
 function reconnectAttribution(action: ChatToolReconnectAction, label: string): ToolErrorAttribution {
@@ -173,7 +262,8 @@ const Tool = ({
     : isError && toolPart.errorText
       ? toolPart.errorText
       : null
-  const inputDiff = getInputDiff(input)
+  const metadata = (toolPart as { metadata?: Record<string, unknown> }).metadata
+  const inputDiff = getInputDiff(input, metadata)
   const Icon = toolIcon(toolPart)
   const [copied, setCopied] = useState(false)
   const ReconnectIcon = reconnectState === "opening"
@@ -283,7 +373,7 @@ const Tool = ({
           ) : null}
           {hasInput ? (
             inputDiff !== null ? (
-              <DiffLines diff={inputDiff} />
+              <DiffView diff={inputDiff} />
             ) : (
               <pre className="whitespace-pre-wrap wrap-break-word">
                 {formatValue(input)}
@@ -292,9 +382,9 @@ const Tool = ({
           ) : null}
           {hasOutput ? (
             isDiffText(toolPart.output) ? (
-              <DiffLines diff={toolPart.output} />
+              <DiffView diff={toolPart.output} />
             ) : (
-              <pre className="max-h-60 overflow-auto whitespace-pre-wrap wrap-break-word opacity-80">
+              <pre className="max-h-[32rem] overflow-auto whitespace-pre-wrap wrap-break-word opacity-80">
                 {formatValue(toolPart.output)}
               </pre>
             )

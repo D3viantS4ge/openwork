@@ -5,6 +5,11 @@ import { safeStringify } from "@/app/utils";
 
 export const STRUCTURED_OUTPUT_TOOL = "StructuredOutput";
 
+/** Dynamic tool parts extended with the engine's tool metadata (diff, exit code, truncation). */
+export type OpenworkDynamicToolUIPart = DynamicToolUIPart & {
+  metadata?: Record<string, unknown>;
+};
+
 function shouldDeferInProgressTool(part: ToolPart) {
   if (part.state.status === "completed" || part.state.status === "error") {
     return false;
@@ -32,7 +37,7 @@ export function parseStructuredOutputUIPart(part: ToolPart): TextUIPart | null {
   };
 }
 
-export function parseDynamicToolUIPart(part: ToolPart): DynamicToolUIPart | null {
+export function parseDynamicToolUIPart(part: ToolPart): OpenworkDynamicToolUIPart | null {
   if (part.tool === STRUCTURED_OUTPUT_TOOL) {
     return null;
   }
@@ -45,6 +50,7 @@ export function parseDynamicToolUIPart(part: ToolPart): DynamicToolUIPart | null
       state: "output-error",
       input: part.state.input,
       errorText: part.state.error,
+      metadata: part.state.metadata,
       callProviderMetadata: { opencode: { partId: part.id } },
     };
   }
@@ -57,6 +63,7 @@ export function parseDynamicToolUIPart(part: ToolPart): DynamicToolUIPart | null
       state: "output-available",
       input: part.state.input,
       output: part.state.output,
+      metadata: part.state.metadata,
       callProviderMetadata: { opencode: { partId: part.id } },
     };
   }
@@ -73,6 +80,7 @@ export function parseDynamicToolUIPart(part: ToolPart): DynamicToolUIPart | null
     toolCallId: part.callID,
     state: "input-streaming",
     input: part.state.input,
+    metadata: "metadata" in part.state ? part.state.metadata : undefined,
     callProviderMetadata: { opencode: { partId: part.id } },
   };
 }

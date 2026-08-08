@@ -14,23 +14,53 @@ interface BashToolProps {
 }
 
 export function BashTool({ part }: BashToolProps) {
+  const exit = typeof part.metadata?.exit === "number" ? part.metadata.exit : null
+  const truncated = part.metadata?.truncated === true
+
   return (
     <CollapsibleTool>
-      <CollapsibleToolStep className="flex flex-col gap-2">
+      <CollapsibleToolStep defaultOpen className="flex flex-col gap-2">
         <CollapsibleToolTrigger leftIcon={<SquareTerminalIcon className="size-4" />}>
           <span className="flex gap-2">
             <span className="shrink-0">
               {part.input.description}
             </span>
-            <span className="opacity-80 truncate grow">
+            <span className="min-w-0 flex-1 whitespace-pre-wrap wrap-break-word opacity-80">
               {part.input.command}
             </span>
           </span>
         </CollapsibleToolTrigger>
         <CollapsibleToolContent className="bg-muted rounded-lg p-2">
           <div className="flex flex-col gap-2 text-xs">
-            <pre>$ {part.input.command}</pre>
-            <pre className="opacity-80">{part.output}</pre>
+            <pre className="whitespace-pre-wrap wrap-break-word">$ {part.input.command}</pre>
+            <span className="flex items-center gap-2">
+              {exit !== null ? (
+                <span
+                  className={
+                    exit === 0
+                      ? "text-green-11 inline-flex items-center gap-1"
+                      : "text-destructive inline-flex items-center gap-1"
+                  }
+                >
+                  <span
+                    className={
+                      exit === 0
+                        ? "size-1.5 rounded-full bg-green-9"
+                        : "size-1.5 rounded-full bg-red-9"
+                    }
+                  />
+                  exit {exit}
+                </span>
+              ) : null}
+              {truncated ? (
+                <span className="text-muted-foreground">(output truncated)</span>
+              ) : null}
+            </span>
+            {part.output ? (
+              <pre className="max-h-[32rem] overflow-auto whitespace-pre-wrap wrap-break-word opacity-80">
+                {part.output}
+              </pre>
+            ) : null}
           </div>
         </CollapsibleToolContent>
       </CollapsibleToolStep>
