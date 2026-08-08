@@ -59,7 +59,7 @@ if (git(["rebase", BRANCH_TARGET]).status !== 0) {
   console.warn("[update-build] Rebase failed, aborting and falling back to merge...");
   git(["rebase", "--abort"]);
   console.log(`[update-build] Merging ${BRANCH_TARGET}...`);
-  if (git(["merge", BRANCH_TARGET]).status !== 0) {
+  if (git(["merge", "--no-edit", BRANCH_TARGET]).status !== 0) {
     git(["merge", "--abort"]);
     fail(`${BRANCH_TARGET} could not be rebased or merged — resolve the conflicts manually`);
   }
