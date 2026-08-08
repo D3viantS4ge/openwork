@@ -674,8 +674,21 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
       snapshotKey(workspaceId, update.sessionId),
       (current) => {
         if (!current) return current;
-        const revert = (update.info as { revert?: OpenworkSessionSnapshot["session"]["revert"] }).revert;
-        return { ...current, session: { ...current.session, revert } };
+        // The renderer derives the visible transcript from the revert cursor,
+        // so a revert (or its cleanup on the next prompt) must reach the
+        // snapshot cache or the transcript stays frozen on stale history.
+        // Cost/token usage also arrives here live via session.updated.
+        const info = update.info as Partial<OpenworkSessionSnapshot["session"]>;
+        const revert = info.revert;
+        return {
+          ...current,
+          session: {
+            ...current.session,
+            ...(revert !== undefined ? { revert } : {}),
+            ...(typeof info.cost === "number" ? { cost: info.cost } : {}),
+            ...(info.tokens ? { tokens: info.tokens } : {}),
+          },
+        };
       },
     );
     for (const listener of entry.sessionUpdatedListeners) listener(update);

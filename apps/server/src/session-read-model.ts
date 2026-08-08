@@ -51,6 +51,15 @@ export const sessionInfoSchema = z
     directory: z.string().nullish(),
     time: sessionTimeSchema.optional(),
     summary: sessionSummarySchema.optional(),
+    cost: z.number().optional(),
+    tokens: z
+      .object({
+        input: z.number(),
+        output: z.number(),
+        reasoning: z.number().optional(),
+        cache: z.object({ read: z.number(), write: z.number() }).optional(),
+      })
+      .optional(),
   })
   .passthrough();
 
