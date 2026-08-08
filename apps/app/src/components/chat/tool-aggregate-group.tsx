@@ -48,7 +48,9 @@ function failureReason(part: AnyToolPart): string | null {
  */
 export function ToolAggregateGroup({ parts, className }: ToolAggregateGroupProps) {
   const groupKey = parts[0]?.toolCallId ?? "aggregate"
-  const [expanded, setExpandedState] = useState(() => expandedByGroupKey.get(groupKey) ?? false)
+  // Unrolled by default so command/output rows are visible without a click,
+  // like reasoning; a manual collapse persists for the mounted session.
+  const [expanded, setExpandedState] = useState(() => expandedByGroupKey.get(groupKey) ?? true)
   const [showAll, setShowAllState] = useState(() => showAllByGroupKey.get(groupKey) ?? false)
 
   const setExpanded = (value: boolean) => {
