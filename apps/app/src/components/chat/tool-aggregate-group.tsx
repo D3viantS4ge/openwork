@@ -13,7 +13,7 @@ import {
   getAggregateSummary,
   type AnyToolPart,
 } from "@/lib/tool-aggregate"
-import { isApplyPatchToolPart, isBashToolPart, isEditToolPart } from "@/lib/build-in-tools"
+import { isApplyPatchToolPart, isBashToolPart, isEditToolPart, isWriteToolPart } from "@/lib/build-in-tools"
 import { isToolPartInFlight } from "@/lib/tool-activity"
 import { trackToolCallDuration } from "@/lib/tool-call-duration"
 import { cn } from "@/lib/utils"
@@ -158,6 +158,11 @@ export function ToolAggregateGroup({ parts, className }: ToolAggregateGroupProps
                     const diff = getToolInputDiff(part.input, part.metadata)
                     return diff ? <DiffView key="diff" diff={diff} className="mt-1 max-h-40 overflow-auto rounded-md font-mono leading-relaxed" /> : null
                   })()
+                ) : null}
+                {isWriteToolPart(part) ? (
+                  <pre className="mt-0.5 max-h-40 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] opacity-70">
+                    {part.input.content}
+                  </pre>
                 ) : null}
                 {reason ? (
                   <div className="text-[11px] text-muted-foreground">failed — {reason}</div>
