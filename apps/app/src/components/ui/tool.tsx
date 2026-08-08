@@ -36,7 +36,7 @@ import {
 } from "lucide-react"
 import { useCallback, useState } from "react"
 import type { DynamicToolUIPart, ToolUIPart } from "ai"
-import { diffWords } from "diff"
+import { createTwoFilesPatch, diffWords } from "diff"
 
 function toolIcon(part: ToolPart) {
   const name = part.type === "dynamic-tool" ? part.toolName : part.type
@@ -98,6 +98,15 @@ function isDiffText(value: unknown): value is string {
   )
 }
 
+/** Edit tools carry oldString/newString, so a diff can always be built even if the engine omits metadata. */
+function getEditDiffFromInput(input: unknown): string | null {
+  if (typeof input !== "object" || input === null) return null
+  const record = input as Record<string, unknown>
+  if (typeof record.oldString !== "string" || typeof record.newString !== "string") return null
+  const filePath = typeof record.filePath === "string" && record.filePath ? record.filePath : "file"
+  return createTwoFilesPatch(filePath, filePath, record.oldString, record.newString)
+}
+
 /** Tools like apply_patch carry the diff in their input (patchText); edit tools carry it in engine metadata. */
 function getInputDiff(input: unknown, metadata?: Record<string, unknown>): string | null {
   if (metadata) {
@@ -118,7 +127,7 @@ function getInputDiff(input: unknown, metadata?: Record<string, unknown>): strin
       return value
     }
   }
-  return null
+  return getEditDiffFromInput(input)
 }
 
 /** Word-level pair for one removed + one added diff line (green/red like opencode). */
