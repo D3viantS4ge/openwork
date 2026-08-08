@@ -95,11 +95,18 @@ if (!config.opencodeBaseUrl && process.env.OPENWORK_MANAGE_OPENCODE === "1") {
 const server = await startServer(config);
 const workerActivityHeartbeat = startWorkerActivityHeartbeat(config, logger);
 
-// The runtime config file above only covers workspaces[0]. Push every
-// workspace's runtime-DB MCPs into the engine so they aren't invisible
-// until a manual reload. Best-effort.
+// The runtime config file above only covers the managed engine's workspace.
+// Push every workspace's runtime-DB MCPs into the engine so they aren't
+// invisible until a manual reload. Best-effort. The covered workspace's MCPs
+// are already in the OPENCODE_CONFIG file the engine loaded at spawn, so
+// only entries the file does not contain are registered explicitly —
+// re-POSTing every entry would spawn a duplicate, idle process tree per
+// server (see #3325).
 if (managedOpencode) {
-  void syncAllWorkspacesRuntimeMcpToEngine(config);
+  const workspace = findManagedEngineWorkspace(config.workspaces);
+  void syncAllWorkspacesRuntimeMcpToEngine(config, {
+    configCoveredWorkspaceId: workspace?.id,
+  });
 }
 
 const url = `http://${config.host}:${server.port}`;
