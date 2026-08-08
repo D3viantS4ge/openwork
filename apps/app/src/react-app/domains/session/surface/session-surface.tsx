@@ -40,7 +40,6 @@ import type {
   CloudMcpSubmissionResult,
 } from "@/react-app/domains/connections/cloud-mcp-submit-readiness";
 import { ReactSessionComposer } from "./composer/composer";
-import { SessionStats } from "./session-stats";
 import { useSessionModelSelection } from "./session-model-store";
 import type { ProviderCatalog } from "./use-model-behavior";
 import { decodeComposerMentionValue, encodeComposerMentionValue, type ComposerMentionKind } from "./composer/mention-encoding";
@@ -2045,10 +2044,10 @@ export function SessionSurface(props: SessionSurfaceProps) {
             </button>
           </div>
         ) : null}
-        <SessionStats session={currentSnapshot?.session} />
         <ReactSessionComposer
           draft={draft}
           mentions={mentions}
+          stats={currentSnapshot?.session}
           onDraftChange={handleComposerDraftChange}
         onSend={handleSend}
         onSteer={handleSteer}

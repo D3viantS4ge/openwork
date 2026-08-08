@@ -24,6 +24,7 @@ import { ModelSelect } from "@/components/model-select";
 import { LexicalPromptEditor, type LexicalPromptEditorHandle } from "./editor";
 import { listRunningAppsForMention } from "./app-mentions";
 import type { ComposerMentionKind } from "./mention-encoding";
+import { SessionStats, type SessionStatsProps } from "../session-stats";
 import {
   connectSkillSlashCommandOptions,
   getSlashCommandQuery,
@@ -118,6 +119,8 @@ type ComposerProps = {
   /** Render inline in a page (new-task hero): no sticky dock chrome or inner max-width, aligning with sibling content. */
   flush?: boolean;
   topAccessory?: ReactNode;
+  /** Session usage stats (cost/tokens/cache) rendered below the composer box. */
+  stats?: SessionStatsProps["session"];
 };
 
 const FLUSH_PROMPT_EVENT = "openwork:flushPromptDraft";
@@ -1869,7 +1872,7 @@ export function ReactSessionComposer(props: ComposerProps) {
             </div>
           </div>
         </div>
-
+        <SessionStats session={props.stats} className="mt-1" />
       </div>
     </div>
   );
