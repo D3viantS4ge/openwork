@@ -1,7 +1,7 @@
-import { spawnSync } from "node:child_process";
 import { copyFileSync, cpSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnSyncWith } from "./spawn-util.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(__dirname, "..");
@@ -14,15 +14,10 @@ const packagedServerRoot = resolve(desktopRoot, "server");
 const pnpmCmd = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const nodeCmd = process.execPath;
 
-function needsShell(command) {
-  return process.platform === "win32" && /\.(cmd|bat)$/i.test(command);
-}
-
 function run(command, args, cwd, env) {
-  const result = spawnSync(command, args, {
+  const result = spawnSyncWith(command, args, {
     cwd,
     stdio: "inherit",
-    shell: needsShell(command),
     env: env ? { ...process.env, ...env } : process.env,
   });
   if (result.status !== 0) {

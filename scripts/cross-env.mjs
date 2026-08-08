@@ -5,7 +5,7 @@
 // uses to execute scripts on Windows. This helper replicates the bash
 // semantics those scripts rely on:
 //
-//   node scripts/with-env.mjs FOO=1 BAR=${BAR:-2} 'BAZ=http://$FOO' -- <command...>
+//   node scripts/cross-env.mjs FOO=1 BAR=${BAR:-2} 'BAZ=http://$FOO' -- <command...>
 //
 // - Tokens before `--` are env assignments, applied in order. The command
 //   after `--` runs with those vars added to the inherited environment.
@@ -15,9 +15,12 @@
 //   `${NAME:-default}` (nested defaults included).
 // - Surrounding single/double quotes on a token are stripped, so bash on unix
 //   does not expand inner `$REF`s before we do (cmd.exe passes them through).
-// - `&&` chains are shell-native on both platforms, so only the command that
-//   carried the env prefix needs wrapping, e.g.
-//   `pnpm run a && node scripts/with-env.mjs FOO=1 -- cmd b`.
+// - `&&` chains are split here and run sequentially instead of being handed
+//   to a shell, so they behave identically on cmd.exe and sh and each
+//   segment's quoting stays deterministic. Like bash, the env assignments
+//   apply to the first segment only; later segments run with the inherited
+//   environment and the chain stops at the first failing segment. Example:
+//   `node scripts/cross-env.mjs FOO=1 -- cmd a && cmd b`.
 import { spawnSync } from "node:child_process";
 
 const stripQuotes = (value) => {
@@ -99,12 +102,12 @@ for (const token of assignTokens) {
     if (!assignment) continue;
     const eq = assignment.indexOf("=");
     if (eq <= 0) {
-      console.error(`with-env: expected NAME=value, got: ${assignment}`);
+      console.error(`cross-env: expected NAME=value, got: ${assignment}`);
       process.exit(2);
     }
     const name = assignment.slice(0, eq);
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
-      console.error(`with-env: invalid env name: ${name}`);
+      console.error(`cross-env: invalid env name: ${name}`);
       process.exit(2);
     }
     const raw = stripQuotes(assignment.slice(eq + 1));
@@ -122,27 +125,53 @@ for (const token of assignTokens) {
 }
 
 if (commandTokens.length === 0) {
-  console.error("with-env: no command after `--`");
+  console.error("cross-env: no command after `--`");
   process.exit(2);
 }
 
-// On unix, avoid a shell round-trip unless the command needs one, so glob
+// Split `&&` chains at the token level so a `&&` inside a quoted arg is never
+// mistaken for a separator (cmd.exe and sh would both mis-parse one passed
+// through a shell). Segments run sequentially; like bash, the env assignments
+// apply to the first segment only and the chain stops at the first failure.
+const segments = [];
+let segment = [];
+for (const token of commandTokens) {
+  if (token === "&&") {
+    segments.push(segment);
+    segment = [];
+  } else {
+    segment.push(token);
+  }
+}
+segments.push(segment);
+
+// On unix, avoid a shell round-trip unless a segment needs one, so glob
 // patterns stay literal (matching the original single-quoted bash behavior)
 // and tokens with spaces survive as single argv entries. On Windows, go
 // through cmd.exe so .cmd shims resolve; cmd does not glob.
-const needsShell = /[&|<>;`]/.test(commandTokens.join(" "));
-let result;
-if (needsShell || process.platform === "win32") {
-  const commandLine = commandTokens
-    .map((token) => (/[\s"&|<>^]/.test(token) ? `"${token.replace(/"/g, '""')}"` : token))
-    .join(" ");
-  result = spawnSync(commandLine, { env, shell: true, stdio: "inherit" });
-} else {
-  const [command, ...args] = commandTokens;
-  result = spawnSync(command, args, { env, stdio: "inherit" });
+function spawnSegment(tokens, segmentEnv) {
+  if (tokens.length === 0) {
+    console.error("cross-env: empty command in `&&` chain");
+    process.exit(2);
+  }
+  if (/[&|<>;`]/.test(tokens.join(" ")) || process.platform === "win32") {
+    const commandLine = tokens
+      .map((token) => (/[\s"&|<>^]/.test(token) ? `"${token.replace(/"/g, '""')}"` : token))
+      .join(" ");
+    return spawnSync(commandLine, { env: segmentEnv, shell: true, stdio: "inherit" });
+  }
+  const [command, ...args] = tokens;
+  return spawnSync(command, args, { env: segmentEnv, stdio: "inherit" });
 }
-if (result.error) {
-  console.error(`with-env: ${result.error.message}`);
-  process.exit(1);
+
+for (let index = 0; index < segments.length; index++) {
+  const result = spawnSegment(segments[index], index === 0 ? env : process.env);
+  if (result.error) {
+    console.error(`cross-env: ${result.error.message}`);
+    process.exit(1);
+  }
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1);
+  }
 }
-process.exit(result.status ?? 0);
+process.exit(0);

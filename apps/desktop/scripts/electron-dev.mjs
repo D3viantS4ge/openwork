@@ -1,7 +1,8 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import net from "node:net";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnSyncWith, spawnWith } from "./spawn-util.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(__dirname, "..");
@@ -52,22 +53,16 @@ const viteProbeUrls = explicitStartUrl
       `http://localhost:${devPort}`,
     ];
 
-function needsShell(command) {
-  return process.platform === "win32" && /\.(cmd|bat)$/i.test(command);
-}
-
 function run(command, args, options = {}) {
-  return spawn(command, args, {
+  return spawnWith(command, args, {
     stdio: ["ignore", "inherit", "inherit"],
-    shell: needsShell(command),
     ...options,
   });
 }
 
 function runSync(command, args, options = {}) {
-  const result = spawnSync(command, args, {
+  const result = spawnSyncWith(command, args, {
     stdio: "inherit",
-    shell: needsShell(command),
     ...options,
   });
   if (result.status !== 0) {
