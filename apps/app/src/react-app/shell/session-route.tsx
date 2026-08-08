@@ -1774,7 +1774,6 @@ export function SessionRoute() {
     setSessionSearchOpen,
     terminalOpen,
     setTerminalOpen,
-    sessionNumberShortcuts,
   } = useShellShortcuts({
     canCreateTask,
     workspaceId: selectedWorkspaceId,
@@ -2435,7 +2434,6 @@ export function SessionRoute() {
       />
     ) : null}
     <SessionPage
-      sessionNumberShortcuts={sessionNumberShortcuts}
       selectedSessionId={selectedSessionId}
       selectedWorkspaceId={selectedWorkspaceId}
       selectedWorkspaceDisplay={selectedWorkspace ? {

@@ -3,6 +3,7 @@
 // session-route.tsx.
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { usePlatform } from "../kernel/platform";
+import { useSessionNumberShortcutsStore } from "./session-number-shortcuts-store";
 import {
   getSessionNumberShortcutIntent,
   hasSessionNumberShortcutOwner,
@@ -13,7 +14,6 @@ import {
   resolveSessionNumberShortcutOs,
   sameSessionNumberShortcutTargets,
   type SessionNumberShortcutOs,
-  type SessionNumberShortcutTarget,
   type SessionNumberShortcutTransition,
 } from "./session-number-shortcuts";
 
@@ -51,8 +51,10 @@ export function useShellShortcuts(input: UseShellShortcutsInput) {
   const { commandPaletteOpen, setCommandPaletteOpen } = useCommandPaletteShortcut();
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
-  const [sessionNumberModifierHeld, setSessionNumberModifierHeld] = useState(false);
-  const [sessionNumberTargets, setSessionNumberTargets] = useState<SessionNumberShortcutTarget[]>([]);
+  // The modifier-held/targets state lives in the shortcuts store, not in
+  // local useState: writing it here would re-render SessionRoute (and the
+  // whole un-memoized SessionPage/SessionSurface chain) on every bare
+  // Ctrl press and release. Only AppSidebar subscribes to the store.
   const sessionNumberCancelledRef = useRef(false);
   const sessionNumberModifierHeldRef = useRef(false);
   const sessionNumberOs: SessionNumberShortcutOs = resolveSessionNumberShortcutOs(
@@ -67,8 +69,9 @@ export function useShellShortcuts(input: UseShellShortcutsInput) {
     sessionNumberCancelledRef.current = cancelUntilRelease;
     const modifierHeld = nextSessionNumberModifierHeld(transition);
     sessionNumberModifierHeldRef.current = modifierHeld;
-    setSessionNumberModifierHeld(modifierHeld);
-    setSessionNumberTargets((current) => current.length === 0 ? current : []);
+    const store = useSessionNumberShortcutsStore.getState();
+    if (store.modifierHeld !== modifierHeld) store.setModifierHeld(modifierHeld);
+    if (store.targets.length > 0) store.setTargets([]);
   });
 
   const refreshSessionNumberShortcuts = useEffectEvent(() => {
@@ -78,10 +81,9 @@ export function useShellShortcuts(input: UseShellShortcutsInput) {
     }
     const targets = readVisibleSessionNumberShortcutTargets(document);
     sessionNumberModifierHeldRef.current = true;
-    setSessionNumberModifierHeld(true);
-    setSessionNumberTargets((current) => (
-      sameSessionNumberShortcutTargets(current, targets) ? current : targets
-    ));
+    const store = useSessionNumberShortcutsStore.getState();
+    if (!store.modifierHeld) store.setModifierHeld(true);
+    if (!sameSessionNumberShortcutTargets(store.targets, targets)) store.setTargets(targets);
     return targets;
   });
 
@@ -188,6 +190,9 @@ export function useShellShortcuts(input: UseShellShortcutsInput) {
   }, []);
 
   useEffect(() => {
+    // Seed the store's os once; it cannot change for the lifetime of the app.
+    useSessionNumberShortcutsStore.getState().setOs(sessionNumberOs);
+
     const keyDown = (event: KeyboardEvent) => handleSessionNumberKeyDown(event);
     const keyUp = (event: KeyboardEvent) => handleSessionNumberKeyUp(event);
     const mouseMove = (event: MouseEvent) => handleSessionNumberMouseMove(event);
@@ -243,10 +248,5 @@ export function useShellShortcuts(input: UseShellShortcutsInput) {
     setSessionSearchOpen,
     terminalOpen,
     setTerminalOpen,
-    sessionNumberShortcuts: {
-      modifierHeld: sessionNumberModifierHeld,
-      os: sessionNumberOs,
-      targets: sessionNumberTargets,
-    },
   };
 }

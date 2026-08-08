@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 
 import {
@@ -164,11 +164,32 @@ function MarkdownBlockInner({
 
   const html = !streaming && highlightedHtml?.text === text ? highlightedHtml.html : syncHtml;
 
+  // In the browser, write the rendered HTML into the DOM only when the html
+  // string itself changes. motion.div re-sets dangerouslySetInnerHTML on
+  // unrelated re-renders (e.g. open-target context updates), replacing every
+  // node and collapsing any text selection inside the message. Writing
+  // through a ref makes re-renders with unchanged html a DOM no-op, so a
+  // selection survives unrelated shell re-renders. Static/server rendering
+  // (renderToStaticMarkup) has no layout effects, so it keeps
+  // dangerouslySetInnerHTML to include the content in the markup.
+  const isServerRender = typeof window === "undefined";
+  const appliedHtmlRef = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    if (isServerRender) return;
+    const root = rootRef.current;
+    if (!root) return;
+    if (appliedHtmlRef.current === html) return;
+    root.innerHTML = html;
+    appliedHtmlRef.current = html;
+  }, [html, isServerRender]);
+
   // Re-apply search highlights after EVERY render (no dependency array on
-  // purpose): motion.div re-sets dangerouslySetInnerHTML on unrelated
-  // re-renders (e.g. open-target context updates), silently wiping the
-  // <mark> nodes without `html`/`highlightQuery` changing. With no active
-  // query this is a single querySelector fast path.
+  // purpose): the layout effect above re-writes innerHTML whenever `html`
+  // changes (streaming tokens, code-highlight resolution), wiping the
+  // <mark> nodes. Re-applying keeps marks consistent even though neither
+  // `html` nor `highlightQuery` changed. With no active query this is a
+  // single querySelector fast path.
   useEffect(() => {
     const root = rootRef.current;
 
@@ -274,7 +295,7 @@ function MarkdownBlockInner({
       <motion.div
         ref={rootRef}
         className={cn("markdown-content max-w-none text-foreground", className)}
-        dangerouslySetInnerHTML={{ __html: html }}
+        {...(isServerRender ? { dangerouslySetInnerHTML: { __html: html } } : {})}
         {...props}
       />
       {linkMenu && onOpenTarget ? (

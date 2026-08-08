@@ -113,8 +113,8 @@ import {
   sessionNumberShortcutDescription,
   sessionNumberShortcutLabel,
   sessionNumberShortcutTargetKey,
-  type SessionNumberShortcutsState,
 } from "../../../shell/session-number-shortcuts";
+import { useSessionNumberShortcutsStore } from "../../../shell/session-number-shortcuts-store";
 import type { SidebarContextValue } from "./app-sidebar-provider";
 import {
   MAX_SESSIONS_PREVIEW,
@@ -820,7 +820,6 @@ function SidebarSplitPill({ workspaceSessionGroups, selectedWorkspaceId, selecte
 }
 
 export type AppSidebarProps = {
-  sessionNumberShortcuts: SessionNumberShortcutsState;
   workspaceSessionGroups: WorkspaceSessionGroup[];
   showInitialLoading?: boolean;
   selectedWorkspaceId: string;
@@ -889,12 +888,19 @@ export function AppSidebar(props: AppSidebarProps) {
     () => new Set(),
   );
   const previousSessionStatusRef = React.useRef<Record<string, string>>({});
+  // Subscribed directly to the shortcuts store: holding Ctrl/Cmd only
+  // re-renders this sidebar, never the session surface (a bare modifier
+  // keydown used to flip route-level state, cascading a re-render that
+  // could wipe text selections inside re-rendering chat markdown).
+  const sessionNumberShortcutModifierHeld = useSessionNumberShortcutsStore((state) => state.modifierHeld);
+  const sessionNumberShortcutTargets = useSessionNumberShortcutsStore((state) => state.targets);
+  const sessionNumberShortcutOs = useSessionNumberShortcutsStore((state) => state.os);
   const sessionNumberShortcutByTarget = React.useMemo(
-    () => new Map(props.sessionNumberShortcuts.targets.map((target) => [
+    () => new Map(sessionNumberShortcutTargets.map((target) => [
       sessionNumberShortcutTargetKey(target.workspaceId, target.sessionId),
       target.digit,
     ])),
-    [props.sessionNumberShortcuts.targets],
+    [sessionNumberShortcutTargets],
   );
 
   // Green unread dots: agent finished while the user was on another session.
@@ -1032,7 +1038,7 @@ export function AppSidebar(props: AppSidebarProps) {
     toggleSessionExpanded,
     expandedWorkspaceIds,
     expandedSessionIds,
-    sessionNumberShortcutOs: props.sessionNumberShortcuts.os,
+    sessionNumberShortcutOs,
     sessionNumberShortcutByTarget,
   };
 
@@ -1172,7 +1178,7 @@ export function AppSidebar(props: AppSidebarProps) {
             layoutScroll
             data-slot="sidebar-content"
             data-sidebar="content"
-            data-session-number-modifier-held={props.sessionNumberShortcuts.modifierHeld ? "true" : undefined}
+            data-session-number-modifier-held={sessionNumberShortcutModifierHeld ? "true" : undefined}
             className="no-scrollbar flex min-h-0 flex-1 flex-col gap-px overflow-auto [--radius:var(--radius-xl)] group-data-[collapsible=icon]:overflow-hidden"
           >
             {pinnedSessions.length > 0 ? (
