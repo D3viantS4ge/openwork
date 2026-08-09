@@ -45,7 +45,7 @@ ReactDOM.createRoot(root).render(
       <TooltipProvider>
         <PlatformProvider value={platform}>
           <AppProviders>
-            <Router>
+            <Router useTransitions={false}>
               <AppRoot />
             </Router>
           </AppProviders>
