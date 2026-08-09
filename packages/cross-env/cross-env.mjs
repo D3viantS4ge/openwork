@@ -5,7 +5,7 @@
 // uses to execute scripts on Windows. This helper replicates the bash
 // semantics those scripts rely on:
 //
-//   node scripts/cross-env.mjs FOO=1 BAR=${BAR:-2} 'BAZ=http://$FOO' -- <command...>
+//   cross-env FOO=1 BAR=${BAR:-2} 'BAZ=http://$FOO' -- <command...>
 //
 // - Tokens before `--` are env assignments, applied in order. The command
 //   after `--` runs with those vars added to the inherited environment.
@@ -20,7 +20,7 @@
 //   segment's quoting stays deterministic. Like bash, the env assignments
 //   apply to the first segment only; later segments run with the inherited
 //   environment and the chain stops at the first failing segment. Example:
-//   `node scripts/cross-env.mjs FOO=1 -- cmd a && cmd b`.
+//   `cross-env FOO=1 -- cmd a && cmd b`.
 import { spawnSync } from "node:child_process";
 
 const stripQuotes = (value) => {

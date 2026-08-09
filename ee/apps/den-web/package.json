@@ -3,8 +3,8 @@
   "private": true,
   "version": "0.0.0",
   "scripts": {
-    "dev": "node ../../../scripts/cross-env.mjs OPENWORK_DEV_MODE=1 NEXT_PUBLIC_POSTHOG_KEY= NEXT_PUBLIC_POSTHOG_API_KEY= -- next dev --hostname 0.0.0.0 --port 3005",
-    "dev:local": "node ../../../scripts/cross-env.mjs OPENWORK_DEV_MODE=1 NEXT_PUBLIC_POSTHOG_KEY= NEXT_PUBLIC_POSTHOG_API_KEY= -- next dev --hostname ${DEN_WEB_HOST:-0.0.0.0} --port ${DEN_WEB_PORT:-3005}",
+    "dev": "cross-env OPENWORK_DEV_MODE=1 NEXT_PUBLIC_POSTHOG_KEY= NEXT_PUBLIC_POSTHOG_API_KEY= -- next dev --hostname 0.0.0.0 --port 3005",
+    "dev:local": "cross-env OPENWORK_DEV_MODE=1 NEXT_PUBLIC_POSTHOG_KEY= NEXT_PUBLIC_POSTHOG_API_KEY= -- next dev --hostname ${DEN_WEB_HOST:-0.0.0.0} --port ${DEN_WEB_PORT:-3005}",
     "prebuild": "pnpm --dir ../../../packages/ui build && pnpm --dir ../../packages/utils build",
     "build": "next build",
     "start": "next start --hostname 0.0.0.0 --port 3005",
@@ -37,6 +37,7 @@
     "react-dom": "catalog:"
   },
   "devDependencies": {
+    "@openwork/cross-env": "workspace:*",
     "@types/node": "20.12.12",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",

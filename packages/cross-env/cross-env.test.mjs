@@ -1,5 +1,5 @@
 // Unit tests for the cross-platform env-setter used by pnpm scripts.
-// Run with: node --test scripts/cross-env.test.mjs
+// Run with: node --test cross-env.test.mjs (or pnpm test)
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";

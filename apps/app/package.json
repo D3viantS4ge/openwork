@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "test": "bun test --isolate tests/",
-    "dev": "node ../../scripts/cross-env.mjs OPENWORK_DEV_MODE=1 -- vite",
+    "dev": "cross-env OPENWORK_DEV_MODE=1 -- vite",
     "build": "vite build",
-    "dev:web": "node ../../scripts/cross-env.mjs OPENWORK_DEV_MODE=1 -- vite",
-    "build:web": "node ../../scripts/cross-env.mjs VITE_OPENWORK_DEPLOYMENT=web VITE_DEN_REQUIRE_SIGNIN=1 -- vite build",
+    "dev:web": "cross-env OPENWORK_DEV_MODE=1 -- vite",
+    "build:web": "cross-env VITE_OPENWORK_DEPLOYMENT=web VITE_DEN_REQUIRE_SIGNIN=1 -- vite build",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:health": "node scripts/health.mjs",
@@ -93,6 +93,7 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
+    "@openwork/cross-env": "workspace:*",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.2",

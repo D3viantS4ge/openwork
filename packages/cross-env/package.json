@@ -1,0 +1,11 @@
+{
+  "name": "@openwork/cross-env",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "cross-env": "./cross-env.mjs"
+  },
+  "scripts": {
+    "test": "node --test cross-env.test.mjs"
+  }
+}
