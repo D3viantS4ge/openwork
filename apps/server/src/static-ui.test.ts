@@ -59,8 +59,8 @@ async function withBootstrapTokenEnv(value: string | null, run: () => Promise<vo
   }
 }
 
-function staticConfig(token = "client-token") {
-  return { token };
+function staticConfig(token = "client-token", hostToken = "host-token") {
+  return { token, hostToken };
 }
 
 function serverConfig(root: string, port: number): ServerConfig {
@@ -181,11 +181,23 @@ describe("serveStaticUi", () => {
     const root = await createWebRoot();
     await withBootstrapTokenEnv(null, async () => {
       await withWebRoot(root, async () => {
-        const response = await serveStaticUi(new Request("http://openwork.test/"), staticConfig("tok<\u2028>\u2029&"));
+        const response = await serveStaticUi(new Request("http://openwork.test/"), staticConfig("tok<\u2028>\u2029&", ""));
         if (!response) throw new Error("expected index response");
         const body = await response.text();
         expect(body).toContain("<script>window.__OPENWORK_BOOTSTRAP__ = {\"token\":\"tok\\u003c\\u2028\\u003e\\u2029\\u0026\"}</script></head>");
         expect(body).not.toContain("tok<");
+      });
+    });
+  });
+
+  test("injects the host token alongside the client token", async () => {
+    const root = await createWebRoot();
+    await withBootstrapTokenEnv(null, async () => {
+      await withWebRoot(root, async () => {
+        const response = await serveStaticUi(new Request("http://openwork.test/"), staticConfig("client-token", "host-token"));
+        if (!response) throw new Error("expected index response");
+        const body = await response.text();
+        expect(body).toContain("<script>window.__OPENWORK_BOOTSTRAP__ = {\"token\":\"client-token\",\"hostToken\":\"host-token\"}</script></head>");
       });
     });
   });

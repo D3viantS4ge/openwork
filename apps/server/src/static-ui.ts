@@ -9,7 +9,7 @@ const WEB_BOOTSTRAP_TOKEN_ENV = "OPENWORK_WEB_BOOTSTRAP_TOKEN";
 const ASSET_CACHE = "public, max-age=31536000, immutable";
 const INDEX_CACHE = "no-cache";
 
-type StaticUiConfig = Pick<ServerConfig, "token">;
+type StaticUiConfig = Pick<ServerConfig, "token" | "hostToken">;
 
 export async function serveStaticUi(request: Request, config: StaticUiConfig): Promise<Response | null> {
   const root = process.env[WEB_ROOT_ENV]?.trim();
@@ -27,10 +27,10 @@ export async function serveStaticUi(request: Request, config: StaticUiConfig): P
   }
 
   try {
-    const fileResponse = await serveFile(root, relativePath, url.pathname, method, config.token);
+    const fileResponse = await serveFile(root, relativePath, url.pathname, method, config.token, config.hostToken);
     if (fileResponse) return fileResponse;
     if (url.pathname.startsWith("/assets/")) return null;
-    return serveFile(root, "index.html", "/index.html", method, config.token);
+    return serveFile(root, "index.html", "/index.html", method, config.token, config.hostToken);
   } catch (error) {
     if (error instanceof ApiError) return jsonError(error);
     throw error;
@@ -52,6 +52,7 @@ async function serveFile(
   requestPathname: string,
   method: string,
   token: string,
+  hostToken: string,
 ): Promise<Response | null> {
   const filePath = await resolveWithinRoot(root, relativePath);
   const fileStat = await stat(filePath).catch(() => null);
@@ -68,7 +69,7 @@ async function serveFile(
 
   if (isTextExtension(extension)) {
     const body = await readFile(filePath, "utf8");
-    const text = relativePath === "index.html" ? injectBootstrap(body, token) : body;
+    const text = relativePath === "index.html" ? injectBootstrap(body, token, hostToken) : body;
     return withCacheControl(textResponse(extension, text), cacheControl);
   }
 
@@ -119,13 +120,17 @@ function contentType(extension: string): string {
   return "application/octet-stream";
 }
 
-function injectBootstrap(html: string, token: string): string {
+function injectBootstrap(html: string, token: string, hostToken: string): string {
   if (!shouldInjectBootstrapToken()) return html;
 
   const clientToken = token.trim();
-  if (!clientToken) return html;
+  const hostTokenValue = hostToken.trim();
+  if (!clientToken && !hostTokenValue) return html;
 
-  const bootstrap = escapeScriptJson(JSON.stringify({ token: clientToken }));
+  const bootstrap = escapeScriptJson(JSON.stringify({
+    ...(clientToken ? { token: clientToken } : {}),
+    ...(hostTokenValue ? { hostToken: hostTokenValue } : {}),
+  }));
   const script = `<script>window.__OPENWORK_BOOTSTRAP__ = ${bootstrap}</script>`;
   const headCloseIndex = html.toLowerCase().indexOf("</head>");
   if (headCloseIndex < 0) return `${script}${html}`;

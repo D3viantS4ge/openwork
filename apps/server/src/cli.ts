@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 
 import { parseCliArgs, printHelp, resolveServerConfig } from "./config.js";
+import { EnvService } from "./env-file.js";
 import { createManagedOpencodeServer, type ManagedOpencodeServer } from "./managed-opencode.js";
 import {
   clearTrustedOpencodeProcess,
@@ -54,11 +55,18 @@ if (!config.opencodeBaseUrl && process.env.OPENWORK_MANAGE_OPENCODE === "1") {
     await mkdir(managedOpencodeCwd, { recursive: true });
     await sweepLegacyOpenCodeConfig(config).catch(() => undefined);
     const opencodeModelsUrl = await resolveOpencodeModelsUrl();
+    // User-level env vars (env.json) are injected by the desktop shell into
+    // every child it spawns; the standalone server must do the same for the
+    // managed engine so Environment settings apply here too. readForInjection
+    // strips OPENWORK_*/OPENCODE_* keys, so runtime wiring below cannot be
+    // shadowed.
+    const userEnv = await EnvService.readForInjection();
     managedOpencode = await createManagedOpencodeServer({
       bin: process.env.OPENWORK_OPENCODE_BIN,
       cwd: managedOpencodeCwd,
       excludedPorts: [config.port],
       env: {
+        ...userEnv,
         ...(process.env.OPENWORK_DEV_MODE ? { OPENWORK_DEV_MODE: process.env.OPENWORK_DEV_MODE } : {}),
         ...(process.env.OPENWORK_UI_CONTROL_DISCOVERY ? { OPENWORK_UI_CONTROL_DISCOVERY: process.env.OPENWORK_UI_CONTROL_DISCOVERY } : {}),
         OPENWORK_SERVER_URL: serverUrl,

@@ -1967,11 +1967,22 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
   });
 
   const handleApplyEnvironmentChanges = async () => {
-    if (!isDesktopRuntime()) {
-      throw new Error(t("settings.environment.apply_unavailable"));
-    }
     if (activeReloadBlockingSessions.length > 0) {
       throw new Error(t("settings.environment.apply_blocked_active_tasks"));
+    }
+    if (!isDesktopRuntime()) {
+      // Web mode: the standalone server owns the engine, so "apply" is the
+      // server's engine-reload route instead of the desktop bridge.
+      const serverClient = openworkServerSnapshot.openworkServerClient;
+      const localWorkspace = workspaces.find(
+        (workspace) => workspace.id === selectedWorkspaceId && workspace.workspaceType !== "remote",
+      );
+      if (!serverClient || !localWorkspace) {
+        throw new Error(t("settings.environment.apply_unavailable"));
+      }
+      await serverClient.reloadEngine(localWorkspace.id);
+      await refreshRouteState();
+      return;
     }
     if (!selectedWorkspaceRoot) {
       throw new Error(t("settings.environment.apply_no_local_workspace"));
@@ -2462,7 +2473,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
           <EnvironmentView
             client={openworkServerSnapshot.openworkServerClient}
             isRemoteWorkspace={isRemoteWorkspace}
-            onApplyChanges={isDesktopRuntime() && !isRemoteWorkspace ? handleApplyEnvironmentChanges : undefined}
+            onApplyChanges={!isRemoteWorkspace && (isDesktopRuntime() || Boolean(openworkServerSnapshot.openworkServerClient)) ? handleApplyEnvironmentChanges : undefined}
             applyBlocked={activeReloadBlockingSessions.length > 0}
             applyBlockedReason={
               activeReloadBlockingSessions.length > 0

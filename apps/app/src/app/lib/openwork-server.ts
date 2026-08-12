@@ -848,6 +848,7 @@ const STORAGE_REMOTE_ACCESS = "openwork.server.remoteAccessEnabled";
 
 type OpenworkBootstrap = {
   token?: string;
+  hostToken?: string;
 };
 
 declare global {
@@ -1067,8 +1068,11 @@ export function hydrateOpenworkServerSettingsFromEnv() {
   const bootstrapToken = typeof window.__OPENWORK_BOOTSTRAP__?.token === "string"
     ? window.__OPENWORK_BOOTSTRAP__.token.trim()
     : "";
+  const bootstrapHostToken = typeof window.__OPENWORK_BOOTSTRAP__?.hostToken === "string"
+    ? window.__OPENWORK_BOOTSTRAP__.hostToken.trim()
+    : "";
 
-  if (!envUrl && !envPort && !envToken && !envHostToken && !bootstrapToken) return;
+  if (!envUrl && !envPort && !envToken && !envHostToken && !bootstrapToken && !bootstrapHostToken) return;
 
   try {
     const current = readOpenworkServerSettings();
@@ -1098,6 +1102,14 @@ export function hydrateOpenworkServerSettingsFromEnv() {
 
     if (!current.hostToken && envHostToken) {
       next.hostToken = envHostToken;
+      changed = true;
+    }
+
+    // The server mints fresh tokens on every boot, so the bootstrap host
+    // token must win over a stale stored value (same rule as the client
+    // token above) — otherwise /env and friends 401 after a restart.
+    if (bootstrapHostToken && current.hostToken !== bootstrapHostToken) {
+      next.hostToken = bootstrapHostToken;
       changed = true;
     }
 

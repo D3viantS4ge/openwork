@@ -76,8 +76,13 @@ export async function resolveOpenworkConnection(): Promise<ResolvedOpenworkConne
       ? normalizeOpenworkServerUrl(window.location.origin) ?? ""
       : "";
   const resolvedToken = settings.token?.trim() ?? "";
+  // The host token follows the effective loopback server: the stored override
+  // when set, otherwise the same-origin fallback (web deployment served by a
+  // local server). Storing it only under `normalizedBaseUrl` would leave the
+  // same-origin path without host auth, 401-ing /env and friends.
+  const effectiveLoopbackBaseUrl = normalizedBaseUrl || sameOriginBaseUrl;
   const resolvedHostToken =
-    normalizedBaseUrl && isLoopbackOpenworkServerUrl(normalizedBaseUrl)
+    effectiveLoopbackBaseUrl && isLoopbackOpenworkServerUrl(effectiveLoopbackBaseUrl)
       ? settings.hostToken?.trim() ?? ""
       : "";
   const storedConnectionIsStaleDesktopRuntime = Boolean(

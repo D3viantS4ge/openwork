@@ -9,6 +9,7 @@
     "build": "vite build",
     "dev:web": "cross-env OPENWORK_DEV_MODE=1 -- vite",
     "build:web": "cross-env VITE_OPENWORK_DEPLOYMENT=web VITE_DEN_REQUIRE_SIGNIN=1 -- vite build",
+    "build:web:local": "cross-env VITE_OPENWORK_DEPLOYMENT=web -- vite build",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:health": "node scripts/health.mjs",

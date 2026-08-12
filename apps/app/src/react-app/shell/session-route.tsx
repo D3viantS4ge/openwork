@@ -704,11 +704,17 @@ export function SessionRoute() {
   );
 
   const handleApplyEnvironmentChanges = useCallback(async () => {
-    if (!isDesktopRuntime()) {
-      throw new Error(t("settings.environment.apply_unavailable"));
-    }
     if (activeReloadBlockingSessions.length > 0) {
       throw new Error(t("settings.environment.apply_blocked_active_tasks"));
+    }
+    if (!isDesktopRuntime()) {
+      // Web mode: the standalone server owns the engine, so "apply" is the
+      // server's engine-reload route instead of the desktop bridge.
+      if (!client || !selectedWorkspace || selectedWorkspace.workspaceType === "remote") {
+        throw new Error(t("settings.environment.apply_unavailable"));
+      }
+      await client.reloadEngine(selectedWorkspace.id);
+      return;
     }
     if (!selectedWorkspaceRoot) {
       throw new Error(t("settings.environment.apply_no_local_workspace"));
@@ -717,7 +723,7 @@ export function SessionRoute() {
     if (!reloaded) {
       throw new Error(t("app.error_connect_first"));
     }
-  }, [activeReloadBlockingSessions.length, reloadWorkspaceEngineFromUi, selectedWorkspaceRoot]);
+  }, [activeReloadBlockingSessions.length, client, reloadWorkspaceEngineFromUi, selectedWorkspace, selectedWorkspaceRoot]);
 
   const shareWorkspaceState = useShareWorkspaceState({
     workspaces,
@@ -1397,7 +1403,7 @@ export function SessionRoute() {
         }));
       },
       environmentRuntimeKey,
-      onApplyEnvironmentChanges: isDesktopRuntime() && selectedWorkspace?.workspaceType !== "remote"
+      onApplyEnvironmentChanges: (isDesktopRuntime() || Boolean(client)) && selectedWorkspace?.workspaceType !== "remote"
         ? handleApplyEnvironmentChanges
         : undefined,
     };
