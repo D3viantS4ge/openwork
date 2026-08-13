@@ -9,12 +9,12 @@ import {
 } from "../src/react-app/kernel/notification-sound-preferences";
 
 describe("notification sound preferences", () => {
-  test("defaults to off with a sensible sound per event", () => {
+  test("defaults to off with the opencode web default sound per event", () => {
     expect(DEFAULT_NOTIFICATION_SOUND_PREFERENCES.enabled).toBe(false);
-    expect(DEFAULT_NOTIFICATION_SOUND_PREFERENCES.sounds["task.completed"]).toBe("yup-01");
-    expect(DEFAULT_NOTIFICATION_SOUND_PREFERENCES.sounds["task.failed"]).toBe("nope-01");
-    expect(DEFAULT_NOTIFICATION_SOUND_PREFERENCES.sounds["permission.asked"]).toBe("alert-01");
-    expect(DEFAULT_NOTIFICATION_SOUND_PREFERENCES.sounds["question.asked"]).toBe("alert-01");
+    expect(DEFAULT_NOTIFICATION_SOUND_PREFERENCES.sounds["task.completed"]).toBe("staplebops-01");
+    expect(DEFAULT_NOTIFICATION_SOUND_PREFERENCES.sounds["task.failed"]).toBe("nope-03");
+    expect(DEFAULT_NOTIFICATION_SOUND_PREFERENCES.sounds["permission.asked"]).toBe("staplebops-02");
+    expect(DEFAULT_NOTIFICATION_SOUND_PREFERENCES.sounds["question.asked"]).toBe("staplebops-02");
   });
 
   test("sanitizer accepts valid preferences, including empty sound maps", () => {

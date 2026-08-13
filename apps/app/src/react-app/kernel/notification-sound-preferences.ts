@@ -107,16 +107,18 @@ export type NotificationSoundPreferences = {
 
 /**
  * Off by default so upgrading users are not surprised by chimes. When
- * enabled, each event falls back to a sensible default sound unless the
- * user picked one (or explicitly chose none).
+ * enabled, each event falls back to the opencode web client's default
+ * sound for that event (staplebops-01 for turn complete, staplebops-02
+ * for permissions/questions, nope-03 for errors) unless the user picked
+ * one (or explicitly chose none).
  */
 export const DEFAULT_NOTIFICATION_SOUND_PREFERENCES: NotificationSoundPreferences = {
   enabled: false,
   sounds: {
-    "task.completed": "yup-01",
-    "task.failed": "nope-01",
-    "permission.asked": "alert-01",
-    "question.asked": "alert-01",
+    "task.completed": "staplebops-01",
+    "task.failed": "nope-03",
+    "permission.asked": "staplebops-02",
+    "question.asked": "staplebops-02",
   },
 };
 
