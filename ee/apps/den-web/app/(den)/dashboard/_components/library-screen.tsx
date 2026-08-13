@@ -23,12 +23,13 @@ import {
 
 type LibraryStateTab = "all" | "needs_signin" | "needs_admin_setup" | "ready";
 type LibrarySectionState = Exclude<LibraryStateTab, "all">;
-type KindFilter = "all" | "connections" | "skills" | "mcps" | "plugins";
+type KindFilter = "all" | "programs" | "connections" | "skills" | "mcps" | "plugins";
 type FromFilter = "anyone" | "mine" | "shared" | "team" | "everyone";
-type RowKind = "connection" | "skill" | "plugin";
+type RowKind = "program" | "connection" | "skill" | "plugin";
 
 const KIND_FILTERS: readonly { value: KindFilter; label: string }[] = [
   { value: "all", label: "All kinds" },
+  { value: "programs", label: "Programs" },
   { value: "connections", label: "Connections" },
   { value: "skills", label: "Skills" },
   { value: "mcps", label: "MCPs" },
@@ -63,6 +64,7 @@ function hasComponentKind(item: LibraryPluginItem, kind: "skill" | "mcp"): boole
 
 function matchesKind(item: LibraryItem, kind: KindFilter): boolean {
   if (kind === "all") return true;
+  if (kind === "programs") return item.type === "program";
   if (kind === "connections") return item.type === "connection";
   if (kind === "plugins") return item.type === "plugin";
   if (kind === "skills") return item.type === "plugin" && hasComponentKind(item, "skill");
@@ -73,6 +75,8 @@ function matchesKind(item: LibraryItem, kind: KindFilter): boolean {
 function getSectionState(item: LibraryItem): LibrarySectionState {
   if (item.type === "connection" && item.state === "needs_signin") return "needs_signin";
   if (item.type === "connection" && item.state === "needs_admin_setup") return "needs_admin_setup";
+  if (item.type === "program" && item.state === "needs_signin") return "needs_signin";
+  if (item.type === "program" && item.state === "needs_admin_setup") return "needs_admin_setup";
   return "ready";
 }
 
@@ -81,11 +85,13 @@ function matchesState(item: LibraryItem, state: LibraryStateTab): boolean {
 }
 
 function getRowKind(item: LibraryItem): RowKind {
+  if (item.type === "program") return "program";
   if (item.type === "connection") return "connection";
   return hasComponentKind(item, "skill") ? "skill" : "plugin";
 }
 
 function getKindLabel(kind: RowKind): string {
+  if (kind === "program") return "Program";
   if (kind === "skill") return "Skill";
   if (kind === "plugin") return "Plugin";
   return "Connection";
@@ -93,7 +99,7 @@ function getKindLabel(kind: RowKind): string {
 
 function KindChip({ kind }: { kind: RowKind }) {
   return (
-    <DenChip data-library-chip="" tone={kind === "connection" ? "info" : "neutral"}>
+    <DenChip data-library-chip="" tone={kind === "connection" ? "info" : kind === "program" ? "teal" : "neutral"}>
       {getKindLabel(kind)}
     </DenChip>
   );
@@ -173,7 +179,9 @@ function LibraryRow({ item, isAdmin, isFocused, orgName, orgSlug }: { item: Libr
   const connectionHref = item.type === "connection"
     ? `${getYourConnectionsRoute(orgSlug)}?connectionId=${encodeURIComponent(item.id)}`
     : undefined;
-  const rowHref = item.type === "plugin" && isAdmin ? getPluginRoute(orgSlug, item.id) : undefined;
+  const rowHref = item.type === "program"
+    ? `/dashboard/library/programs/${encodeURIComponent(item.id)}`
+    : item.type === "plugin" && isAdmin ? getPluginRoute(orgSlug, item.id) : undefined;
   const iconUrl = item.type === "connection" && item.provider === "google-workspace"
     ? "/integrations/google.svg"
     : item.type === "plugin"
@@ -216,6 +224,16 @@ function LibraryRow({ item, isAdmin, isFocused, orgName, orgSlug }: { item: Libr
         <>
           <KindChip kind={rowKind} />
           {item.type === "connection" ? <TransportChip transport={item.transport} /> : null}
+          {item.type === "program" ? (
+            <>
+              <DenChip data-library-chip="" tone={item.resultState === "fresh" ? "success" : item.resultState === "needs_attention" ? "danger" : "warning"}>
+                {item.resultState.replace("_", " ")}
+              </DenChip>
+              <DenChip data-library-chip="" tone={item.viewState === "custom_active" ? "info" : item.viewState === "build_failed" ? "danger" : "neutral"}>
+                {item.viewState === "custom_active" ? item.activeViewTitle ?? "Custom view" : item.viewState.replace("_", " ")}
+              </DenChip>
+            </>
+          ) : null}
           {sectionState !== "ready" ? (
             <DenChip data-library-chip="" tone="warning">
               {sectionState === "needs_signin" ? "Connect your account" : "Waiting on your admin"}
@@ -228,9 +246,15 @@ function LibraryRow({ item, isAdmin, isFocused, orgName, orgSlug }: { item: Libr
           ) : null}
         </>
       )}
-      meta={item.description || nonPersonSource ? (
+      meta={item.description || nonPersonSource || item.type === "program" ? (
         <>
           {item.description}
+          {item.type === "program" ? (
+            <>
+              {item.description ? <span aria-hidden> · </span> : null}
+              <span>{item.plugin ? `Plugin ${item.plugin.name} · ` : ""}{item.latestSuccessfulAt ? `Last run ${new Date(item.latestSuccessfulAt).toLocaleString()}` : "Not run yet"} · {item.automationCount} Automation{item.automationCount === 1 ? "" : "s"}</span>
+            </>
+          ) : null}
           {nonPersonSource ? (
             <>
               {item.description ? <span aria-hidden> · </span> : null}
@@ -244,7 +268,7 @@ function LibraryRow({ item, isAdmin, isFocused, orgName, orgSlug }: { item: Libr
       focused={isFocused}
       dataAttributes={{
         "data-library-item-type": item.type,
-        "data-library-item-state": item.type === "connection" ? item.state : undefined,
+        "data-library-item-state": item.type === "connection" || item.type === "program" ? item.state : undefined,
         "data-library-item-key": rowKey,
         "data-library-focused": isFocused ? "" : undefined,
       }}
@@ -345,7 +369,7 @@ export function LibraryScreen() {
 
   useEffect(() => {
     if (!requestedFocus || handledFocusRef.current === requestedFocus) return;
-    if (!/^(plugin|connection)-.+$/.test(requestedFocus)) return;
+    if (!/^(program|plugin|connection)-.+$/.test(requestedFocus)) return;
     const item = items.find((candidate) => `${candidate.type}-${candidate.id}` === requestedFocus);
     if (!item) return;
     handledFocusRef.current = requestedFocus;
@@ -369,12 +393,14 @@ export function LibraryScreen() {
   const normalizedQuery = query.trim().toLowerCase();
   const kindCounts = useMemo(() => {
     const counts: Record<Exclude<KindFilter, "all">, number> = {
+      programs: 0,
       connections: 0,
       skills: 0,
       mcps: 0,
       plugins: 0,
     };
     for (const item of items) {
+      if (matchesKind(item, "programs")) counts.programs += 1;
       if (matchesKind(item, "connections")) counts.connections += 1;
       if (matchesKind(item, "skills")) counts.skills += 1;
       if (matchesKind(item, "mcps")) counts.mcps += 1;
@@ -453,7 +479,7 @@ export function LibraryScreen() {
           {stateCounts.ready} ready to use
         </DenChip>
       )}
-      title="Library"
+      title="My Library"
       description="Everything you can use in chat — yours, shared with you, from your teams, and org-wide."
       descriptionPlacement="hero"
       colors={["#DBEAFE", "#1E3A8A", "#2563EB", "#A7F3D0"]}

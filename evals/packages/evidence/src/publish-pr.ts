@@ -202,7 +202,7 @@ export async function publishPr(
   const fetcher = dependencies.fetch ?? globalThis.fetch;
   const rollName = basename(options.rollDir);
   const pr = options.pr === undefined ? "<n>" : String(options.pr);
-  const reproCommand = `pnpm fraimz:publish -- --pr ${pr} --roll ${rollName}`;
+  const reproCommand = `pnpm evals --publish --pr ${pr} --roll ${rollName}`;
 
   if (options.dryRun) {
     const markdown = renderPrMarkdown(roll, {}, {

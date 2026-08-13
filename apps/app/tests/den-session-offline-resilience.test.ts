@@ -271,8 +271,17 @@ describe("ensureDenActiveOrganization", () => {
 });
 
 describe("isDenSessionRevokedError", () => {
-  test("only treats Den-shaped 401s as revoked sessions", () => {
+  test("treats only explicit invalid/expired/revoked session codes as revoked", () => {
     expect(isDenSessionRevokedError(new DenApiError(401, "unauthorized", "Unauthorized"))).toBe(
+      true,
+    );
+    expect(
+      isDenSessionRevokedError(new DenApiError(401, "session_expired", "Session expired")),
+    ).toBe(true);
+    expect(
+      isDenSessionRevokedError(new DenApiError(401, "session_revoked", "Session revoked")),
+    ).toBe(true);
+    expect(isDenSessionRevokedError(new DenApiError(401, "invalid_token", "Invalid token"))).toBe(
       true,
     );
     expect(isDenSessionRevokedError(new DenApiError(401, "request_failed", "Proxy 401"))).toBe(
@@ -282,6 +291,25 @@ describe("isDenSessionRevokedError", () => {
       false,
     );
     expect(isDenSessionRevokedError(new Error("Request timed out."))).toBe(false);
+  });
+
+  test("keeps the session for structured 401s minted by infrastructure", () => {
+    // Deployment platforms, proxies, and misrouted edges answer with their
+    // own JSON 401 envelopes while the control plane is unreachable. None of
+    // them prove the stored session is invalid.
+    expect(
+      isDenSessionRevokedError(
+        new DenApiError(401, "base_url_not_present", "Base URL not present"),
+      ),
+    ).toBe(false);
+    expect(
+      isDenSessionRevokedError(
+        new DenApiError(401, "deployment_not_found", "Deployment not found"),
+      ),
+    ).toBe(false);
+    expect(
+      isDenSessionRevokedError(new DenApiError(401, "proxy_authentication", "Proxy auth")),
+    ).toBe(false);
   });
 });
 
@@ -293,6 +321,63 @@ describe("resolveDenAuthFailureStatus", () => {
     expect(resolveDenAuthFailureStatus(new DenApiError(401, "unauthorized", "Unauthorized"))).toBe(
       "signed_out",
     );
+    expect(
+      resolveDenAuthFailureStatus(new DenApiError(401, "session_expired", "Session expired")),
+    ).toBe("signed_out");
     expect(resolveDenAuthFailureStatus(new Error("Request timed out."))).toBe("unavailable");
+  });
+
+  test("reports transient structured 401s as unavailable, retaining the session", () => {
+    expect(
+      resolveDenAuthFailureStatus(
+        new DenApiError(401, "base_url_not_present", "Base URL not present"),
+      ),
+    ).toBe("unavailable");
+    expect(
+      resolveDenAuthFailureStatus(new DenApiError(401, "deployment_not_found", "Deployment not found")),
+    ).toBe("unavailable");
+  });
+});
+
+describe("explicit sign-out", () => {
+  test("clears the stored session and notifies listeners with signed_out", () => {
+    const dispatched: Event[] = [];
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        localStorage: memoryStorage(),
+        dispatchEvent: (event: Event) => {
+          dispatched.push(event);
+          return true;
+        },
+      },
+    });
+
+    writeDenSettings(
+      {
+        baseUrl: "https://den.test",
+        authToken: "tok_stored",
+        activeOrgId: "org_stored",
+        activeOrgSlug: "stored-org",
+        activeOrgName: "Stored Org",
+      },
+      { persistBootstrap: false },
+    );
+    dispatched.length = 0;
+
+    clearDenSession();
+
+    expect(window.localStorage.getItem("openwork.den.authToken")).toBeNull();
+    expect(window.localStorage.getItem("openwork.den.activeOrgId")).toBeNull();
+    expect(window.localStorage.getItem("openwork.den.activeOrgSlug")).toBeNull();
+    expect(window.localStorage.getItem("openwork.den.activeOrgName")).toBeNull();
+
+    // The provider store listens for this signed_out notification to remove
+    // organization and imported Cloud providers; explicit logout must keep
+    // emitting it.
+    const sessionUpdated = dispatched.find(
+      (event) => event.type === "openwork-den-session-updated",
+    ) as CustomEvent<{ status?: string }> | undefined;
+    expect(sessionUpdated?.detail.status).toBe("signed_out");
   });
 });

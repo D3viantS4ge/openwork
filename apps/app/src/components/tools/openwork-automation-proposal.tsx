@@ -5,6 +5,7 @@ import { AlertTriangle, CalendarClock, Check } from "lucide-react"
 import type { DynamicToolUIPart } from "ai"
 import { useNavigate } from "react-router"
 import { toast } from "sonner"
+import { useQuery } from "@tanstack/react-query"
 
 import { automationProposalSchema, AUTOMATION_FREE_MODEL, type AutomationProposal } from "@openwork/types/automations"
 
@@ -13,7 +14,11 @@ import { Button } from "@/components/ui/button"
 import { Tool } from "@/components/ui/tool"
 import { useDenAuth } from "@/react-app/domains/cloud/den-auth-provider"
 import { formatAutomationSchedule } from "@/react-app/domains/automations/automation-format"
-import { useFeatureFlagsPreferences } from "@/react-app/domains/settings/state/feature-flags-preferences"
+import {
+  automationModelOptions,
+  describeAutomationModel,
+  resolveProposalModel,
+} from "@/react-app/domains/automations/automation-model-options"
 import { automationsRoute } from "@/react-app/shell/workspace-routes"
 
 function parseOutputValue(output: unknown): unknown {
@@ -50,24 +55,34 @@ export function isAutomationProposalToolPart(part: DynamicToolUIPart): boolean {
 export function OpenWorkAutomationProposalTool({ part }: { part: DynamicToolUIPart }) {
   const navigate = useNavigate()
   const denAuth = useDenAuth()
-  const { automationsEnabled } = useFeatureFlagsPreferences()
   const [created, setCreated] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const proposal = part.state === "output-available" ? parseAutomationProposal(part.output) : null
-  if (!proposal) {
-    return <Tool toolPart={part} title="Proposed an Automation" />
-  }
-
   const settings = readDenSettings()
   const token = settings.authToken?.trim() ?? ""
   const organizationId = settings.activeOrgId?.trim() ?? ""
   const signedIn = denAuth.isSignedIn && Boolean(token) && Boolean(organizationId)
-  const blocker = !automationsEnabled
-    ? "Turn on the Automations preview in Settings → Preferences to create this."
-    : !signedIn
-      ? "Sign in to OpenWork Cloud to create this Automation."
-      : null
+  const providersQuery = useQuery({
+    queryKey: ["den", "automations", organizationId, "models"],
+    queryFn: () => createDenClient({ baseUrl: settings.baseUrl, token }).listOrgLlmProviders(organizationId),
+    enabled: signedIn && !created,
+  })
+  const providers = providersQuery.data ?? []
+  const resolved = providersQuery.isError || providersQuery.data === undefined || !proposal
+    ? null
+    : resolveProposalModel(proposal.model, providers)
+  const modelLabel = resolved
+    ? describeAutomationModel(resolved.model, automationModelOptions(providers))
+    : null
+
+  if (!proposal) {
+    return <Tool toolPart={part} title="Proposed an Automation" />
+  }
+
+  const blocker = !signedIn
+    ? "Sign in to OpenWork Cloud to create this Automation."
+    : null
 
   const create = async () => {
     setBusy(true)
@@ -77,7 +92,7 @@ export function OpenWorkAutomationProposalTool({ part }: { part: DynamicToolUIPa
         name: proposal.name,
         instructions: proposal.instructions,
         schedule: proposal.schedule,
-        model: proposal.model ?? {
+        model: resolved?.model ?? proposal.model ?? {
           providerId: AUTOMATION_FREE_MODEL.providerId,
           modelId: AUTOMATION_FREE_MODEL.modelId,
         },
@@ -96,6 +111,7 @@ export function OpenWorkAutomationProposalTool({ part }: { part: DynamicToolUIPa
       className="not-prose w-full max-w-2xl overflow-hidden rounded-2xl border border-dls-border bg-dls-surface/95 shadow-sm"
       data-openwork-automation-proposal
       data-automation-created={created ?? undefined}
+      data-automation-model-resolution={resolved?.resolution}
     >
       <div className="flex items-start gap-3 border-b border-dls-border px-4 py-3">
         <div className={created
@@ -120,6 +136,7 @@ export function OpenWorkAutomationProposalTool({ part }: { part: DynamicToolUIPa
         <div>
           <p className="truncate text-sm font-medium text-dls-primary" title={proposal.name}>{proposal.name}</p>
           <p className="text-xs text-dls-secondary">{formatAutomationSchedule(proposal.schedule)}</p>
+          {modelLabel ? <p className="text-xs text-dls-secondary">Runs with {modelLabel}</p> : null}
         </div>
         <p className="whitespace-pre-wrap text-sm text-dls-secondary">{proposal.instructions}</p>
       </div>
@@ -144,7 +161,7 @@ export function OpenWorkAutomationProposalTool({ part }: { part: DynamicToolUIPa
             type="button"
             size="sm"
             className="shrink-0"
-            disabled={busy || blocker !== null}
+            disabled={busy || blocker !== null || (signedIn && providersQuery.isLoading)}
             data-create-automation
             onClick={() => void create()}
           >
@@ -157,6 +174,14 @@ export function OpenWorkAutomationProposalTool({ part }: { part: DynamicToolUIPa
         <div className="flex items-center gap-2 border-t border-dls-border px-4 py-2 text-xs text-amber-11">
           <AlertTriangle className="size-3.5 shrink-0" />
           <span className="min-w-0 flex-1">{blocker}</span>
+        </div>
+      ) : null}
+      {resolved?.resolution === "fallback" && !created ? (
+        <div className="flex items-center gap-2 border-t border-dls-border px-4 py-2 text-xs text-amber-11">
+          <AlertTriangle className="size-3.5 shrink-0" />
+          <span className="min-w-0 flex-1">
+            The proposed model isn't available for Automations, so runs use the free starter model. You can change the model after creating.
+          </span>
         </div>
       ) : null}
     </div>

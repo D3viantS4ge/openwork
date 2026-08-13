@@ -20,6 +20,7 @@ import {
   shouldWaitForCloudProviderSyncBeforePolicyReconcile,
   type OrganizationModelsRefreshReason,
 } from "./managed-models-recovery";
+import { createSessionOpenworkServer } from "./session-openwork-server";
 import { createProviderAuthStore, useProviderAuthStoreSnapshot } from "./store";
 
 const emptyWorkspaceDisplay: WorkspaceDisplay = {
@@ -41,6 +42,12 @@ export type UseSessionProviderAuthInput = {
   selectedWorkspaceEndpoint: ResolvedWorkspaceEndpoint | null;
   selectedWorkspaceRoot: string;
   selectedWorkspaceId: string;
+  /**
+   * Live host token of the local OpenWork server (desktop runtime host info).
+   * Enables the server-side provider sync path: PUT /den-session and
+   * POST /cloud-provider-sync/run are host-token routes.
+   */
+  localServerHostToken?: string;
   setProviders: (value: ProviderListItem[]) => void;
   setProviderDefaults: (value: Record<string, string>) => void;
   setProviderConnectedIds: (value: string[]) => void;
@@ -59,6 +66,7 @@ export function useSessionProviderAuth(input: UseSessionProviderAuthInput) {
     selectedWorkspaceEndpoint,
     selectedWorkspaceRoot,
     selectedWorkspaceId,
+    localServerHostToken,
     setProviders,
     setProviderDefaults,
     setProviderConnectedIds,
@@ -82,6 +90,7 @@ export function useSessionProviderAuth(input: UseSessionProviderAuthInput) {
     selectedWorkspace,
     selectedWorkspaceEndpoint,
     selectedWorkspaceRoot,
+    localServerHostToken,
   });
   stateRef.current = {
     opencodeClient,
@@ -93,6 +102,7 @@ export function useSessionProviderAuth(input: UseSessionProviderAuthInput) {
     selectedWorkspace,
     selectedWorkspaceEndpoint,
     selectedWorkspaceRoot,
+    localServerHostToken,
   };
 
   // Depend on the stable callback, not the coordinator object: the context
@@ -118,17 +128,14 @@ export function useSessionProviderAuth(input: UseSessionProviderAuthInput) {
             : emptyWorkspaceDisplay,
         selectedWorkspaceRoot: () => stateRef.current.selectedWorkspaceRoot,
         runtimeWorkspaceId: () => stateRef.current.selectedWorkspaceEndpoint?.workspaceId ?? null,
-        openworkServer: {
-          getSnapshot: () => ({
-            openworkServerStatus: stateRef.current.selectedWorkspaceEndpoint ? "connected" : "disconnected",
-            openworkServerClient: stateRef.current.selectedWorkspaceEndpoint?.client ?? null,
-            openworkServerCapabilities: stateRef.current.selectedWorkspaceEndpoint
-              ? {
-                  config: { read: true, write: true },
-                }
-              : null,
-          }),
-        },
+        // Truthful endpoint-backed snapshot: local endpoints expose the
+        // server's providerSync capability and host-token auth so sign-in
+        // pushes the Den session to the local server and sync runs
+        // server-side; remote workspaces keep the config-only shape.
+        openworkServer: createSessionOpenworkServer({
+          endpoint: () => stateRef.current.selectedWorkspaceEndpoint ?? null,
+          hostToken: () => stateRef.current.localServerHostToken ?? "",
+        }),
         setProviders,
         setProviderDefaults,
         setProviderConnectedIds,

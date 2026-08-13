@@ -71,12 +71,15 @@ export async function createManagedOpencodeServer(options: {
   const password = randomSecret();
   const args = ["serve", "--hostname", hostname, "--port", String(port), "--cors", "*"];
   const command = options.bin?.trim() || "opencode";
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     ...options.env,
     OPENCODE_SERVER_USERNAME: username,
     OPENCODE_SERVER_PASSWORD: password,
   };
+  // The managed engine needs its own provider environment, but never the key
+  // that decrypts OpenWork-owned OAuth credentials.
+  delete env.OPENWORK_ENCRYPTION_KEY;
   const injectedEnv = Object.entries({
     ...(options.env ?? {}),
     OPENCODE_SERVER_USERNAME: username,

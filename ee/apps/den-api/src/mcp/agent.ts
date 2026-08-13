@@ -8,35 +8,69 @@ import { openworkCloudMcpConnectionActionSchema } from "@openwork/types/den/mcp-
 import type { Hono } from "hono"
 import type { RequestIdVariables } from "hono/request-id"
 import { z } from "zod"
-import { memberFacingMcpConnectionsEnabled } from "../capability-sources/external-mcp-rollout.js"
+import { codemodeScriptsEnabled } from "../capability-sources/codemode-rollout.js"
 import { publicRoute, tokenRoute } from "../middleware/index.js"
 import { db } from "../db.js"
 import { getMcpResourceContext, verifyMcpRequest } from "./auth.js"
-import { invokeMcpOperation, normalizeToolBody, normalizeToolRecord } from "./invoke.js"
 import { getCatalog, protectedResourceMetadata } from "./index.js"
 import { preflightMcpJsonRpcRequest } from "./json-rpc-preflight.js"
-import { compareCapabilityMatches, SEARCH_CAPABILITIES_TOOL_NAME, searchCapabilities, searchCapabilitySourceFilter, type CapabilityMatch } from "./search.js"
-import { executeExternalCapability, externalMcpSearchCoverageHint, parseExternalCapabilityName, resolveMcpMemberIdentity, searchExternalCapabilities, type ExternalCapabilityExecuteResult } from "./external-capabilities.js"
-import { executeMarketplaceCapability, listAccessibleMarketplaceSkillDescriptors, parseMarketplaceCapabilityName, searchMarketplaceCapabilities, type MarketplaceCapabilityObjectType, type RemoteSkillDescriptor } from "./marketplace-capabilities.js"
+import { SEARCH_CAPABILITIES_TOOL_NAME, type CapabilityMatch } from "./search.js"
+import { resolveMcpMemberIdentity } from "./external-capabilities.js"
+import { executeMarketplaceCapability, listAccessibleMarketplaceSkillDescriptors, parseMarketplaceCapabilityName, type RemoteSkillDescriptor } from "./marketplace-capabilities.js"
 import { resolvePublicOrigin } from "../capability-sources/generic-oauth.js"
 import { automationService } from "../automations/service.js"
 import { AGENT_AUTOMATION_INDEX_LIMIT, registerAgentAutomationResources } from "./automation-index.js"
 import { env } from "../env.js"
-import { isPlatformAdminUserId } from "../middleware/admin.js"
-import { executeAvailableAdminCapability, parseAdminCapabilityName, searchAvailableAdminCapabilities } from "./admin-capabilities.js"
+import { getOrganizationContextForUser, listTeamsForMember } from "../orgs.js"
+import { getCodemodeScriptDetail, getCodemodeScriptSnapshot } from "../codemode-scripts.js"
+import { artifactFreshness } from "../saved-script-artifacts.js"
+import { PluginArchAuthorizationError } from "../routes/org/plugin-system/access.js"
+import {
+  DYNAMIC_ARTIFACT_APP_SCHEMA_VERSION,
+  dynamicArtifactAppServerCapabilities,
+  registerAgentDynamicArtifactApp,
+  registerSelectedDynamicArtifactApp,
+} from "./dynamic-artifact-app.js"
 import {
   executeBuiltinSkillCapability,
   listBuiltinSkillDescriptors,
-  searchBuiltinSkillCapabilities,
 } from "./builtin-skills.js"
-import { executeNativeCapability, searchNativeCapabilities } from "./native-capabilities.js"
-import { externalToolContent, type AgentToolContentPart } from "./tool-content.js"
+import {
+  buildCapabilityToolTree,
+  createCapabilityRegistryContext,
+  executeCapability,
+  externalCapabilityErrorToolResult,
+  externalCapabilitySuccessToolResult,
+  searchCapabilityRegistry,
+  type ExecuteCapabilityToolResult,
+} from "./capability-registry.js"
+import { runCodemodeScript } from "./codemode-run.js"
+import { recordCodemodeScriptResult } from "../codemode-runs.js"
+import {
+  activateArtifactViewRevision,
+  getGeneratedArtifactViewRevision,
+  listArtifactViews,
+  loadArtifactViewRevision,
+  retireArtifactView,
+  saveArtifactViewRevision,
+} from "../artifact-views.js"
+import {
+  registerAgentGeneratedArtifactViews,
+  registerGeneratedArtifactResource,
+  registerSelectedGeneratedArtifactRenderTool,
+} from "./generated-artifact-views.js"
+import { requirePluginArchResourceRole, type PluginArchActorContext } from "../routes/org/plugin-system/access.js"
+import { clearProgramAgentSelection, getProgramAgentSelection, selectProgramForAgent } from "../program-agent-selection.js"
+import { getProgramDetail, listProgramLibraryItems } from "../program-library.js"
+import { parseArtifactViewResourceUri } from "../artifact-view-resource.js"
 
 export { externalToolContent } from "./tool-content.js"
+export { externalCapabilityErrorToolResult, externalCapabilitySuccessToolResult }
+export type { ExecuteCapabilityToolResult }
 
 export const EXECUTE_CAPABILITY_TOOL_NAME = "execute_capability"
+export const EXECUTE_CAPABILITY_SCRIPT_TOOL_NAME = "execute_capability_script"
 const searchCapabilityTypeSchema = z.enum(["all", "api", "admin", "mcp", "marketplace", "skills"])
-const skillMarketplaceObjectTypes: MarketplaceCapabilityObjectType[] = ["skill"]
 export const EXECUTE_CAPABILITY_TIMEOUT_MS = 180_000
 export const SEARCH_CAPABILITIES_ANNOTATIONS: ToolAnnotations = {
   readOnlyHint: true,
@@ -50,12 +84,6 @@ export const EXECUTE_CAPABILITY_ANNOTATIONS: ToolAnnotations = {
   idempotentHint: false,
   openWorldHint: true,
 }
-
-const externalMcpProviderErrorOutputSchema = z.object({
-  jsonRpcCode: z.number().int().optional(),
-  message: z.string().optional(),
-  data: z.string().optional(),
-})
 
 const connectionStatusOutputSchema = openworkCloudMcpConnectionActionSchema.extend({
   layer: z.enum(["mcp_connection", "downstream_provider"]),
@@ -87,6 +115,7 @@ const capabilityMatchOutputSchema = z.object({
   status: z.string().optional(),
   hint: z.string().optional(),
   connectionStatus: connectionStatusOutputSchema.optional(),
+  scriptPath: z.string().optional(),
 }).passthrough()
 
 export const SEARCH_CAPABILITIES_OUTPUT_SCHEMA = z.object({
@@ -94,30 +123,53 @@ export const SEARCH_CAPABILITIES_OUTPUT_SCHEMA = z.object({
   hint: z.string().optional(),
 })
 
-const externalCapabilityErrorPayloadSchema = z.object({
-  error: z.string(),
-  message: z.string(),
-  referenceId: z.string().optional(),
-  retryable: z.boolean().optional(),
-  providerError: externalMcpProviderErrorOutputSchema.optional(),
-  connectionStatus: connectionStatusOutputSchema.optional(),
-  capability: z.string().optional(),
-  issues: z.array(z.object({
-    path: z.string(),
-    keyword: z.string(),
-    message: z.string(),
-  })).optional(),
-  schemaDigest: z.string().optional(),
-  sameArgumentsRetryable: z.literal(false).optional(),
-  retry: z.object({
-    action: z.enum(["correct_arguments", "search_capabilities"]),
-    searchRequired: z.boolean(),
-  }).optional(),
-  schemaGuidance: z.unknown().optional(),
+const programSearchItemOutputSchema = z.object({
+  id: z.string(),
+  plugin: z.object({ id: z.string(), name: z.string() }).nullable(),
+  name: z.string(),
+  description: z.string().nullable(),
+  role: z.enum(["viewer", "editor", "manager"]),
+  state: z.enum(["ready", "needs_signin", "needs_admin_setup"]),
+  resultState: z.enum(["never_run", "fresh", "stale", "needs_attention"]),
+  latestSuccessfulAt: z.string().nullable(),
+  viewState: z.enum(["default", "custom_active", "build_failed", "retired"]),
+  activeViewTitle: z.string().nullable(),
+  automationCount: z.number().int().nonnegative(),
+  source: z.object({
+    kind: z.enum(["created", "installed_template"]),
+    templateName: z.string().optional(),
+    templateVersion: z.string().optional(),
+  }),
+})
+
+const programSearchOutputSchema = z.object({
+  items: z.array(programSearchItemOutputSchema),
+  nextCursor: z.string().nullable(),
+})
+
+const programSelectionOutputSchema = z.object({
+  selection: z.object({
+    programId: z.string(),
+    selectedAt: z.string(),
+  }),
+})
+
+const programSelectionClearedOutputSchema = z.object({
+  selection: z.null(),
+})
+
+const programRunOutputSchema = z.object({
+  status: z.literal("succeeded"),
+  value: z.unknown(),
+  receiptId: z.string().nullable(),
+  resultDigest: z.string().nullable(),
 })
 
 export const AGENT_MCP_INSTRUCTIONS = [
-  "This OpenWork Cloud connection intentionally exposes exactly two tools: search_capabilities and execute_capability.",
+  "This OpenWork Cloud MCP server uses standard MCP tools, resources, structured results, and list-changed notifications. OpenWork Programs add only durable identity, Plugin containment, access, retained results, selection, and lifecycle around those MCP primitives.",
+  "A Program is an immutable-versioned Code Mode Script config object inside an OpenWork Connect Plugin. Organizations with Code Mode scripts enabled receive execute_capability_script, the backwards-compatible render_dynamic_artifact MCP App tool, and a constant-size Program catalog: search_programs, select_program, and clear_program_selection.",
+  "To use a Program, search by Library metadata, select one exact accessible Program, then refresh the tool catalog. The selected context exposes run_selected_program and render_selected_program; rendering returns an Artifact as fallback text plus retained data in structuredContent and binds the exact immutable MCP App resource URI in the tool definition.",
+  "When a member asks to keep a successful Code Mode result, save it as a Program inside the existing OpenWork Connect Plugin they name by passing that pluginId to the Code Mode save operation. Omit pluginId only for a private Program in the member's My Programs Plugin. A Program inherits discovery and sharing from its Plugin and any Marketplace containing that Plugin; do not create a separate Program package or marketplace entry.",
   "Capabilities include native Google Workspace operations (Gmail read/search, Calendar list/create, Drive search/read, and Gmail draft creation) executed with the signed-in member's organization credentials, plus any MCP connections the organization has added.",
   "Allowlisted platform admins can also discover namespaced OpenWork Admin capabilities through this same connection; other members cannot discover or execute them.",
   "Always call search_capabilities first with 2-4 keyword variants before concluding something is unavailable. Use execute_capability only with exact names returned by search_capabilities.",
@@ -130,19 +182,25 @@ export const AGENT_MCP_INSTRUCTIONS = [
   "External MCP matches include the provider-advertised argumentsSchema, schemaDigest, and invocation.argumentsField. Put an object matching argumentsSchema in execute_capability.body and copy schemaDigest into execute_capability.schemaDigest.",
   "OpenWork always attempts the downstream provider call when local schema checks find a mismatch. schemaGuidance is advisory and appears alongside the provider result: if the provider succeeded, accept that result and do not retry solely because of the warning; if it failed, use the warning to correct the arguments or search again.",
   "If the provider returns invalid_capability_arguments, correct the listed issues and retry once with changed arguments; never retry the same arguments unchanged. If it returns unknown_capability, call search_capabilities again before retrying.",
+  "When save_artifact_view is advertised, create or update the saved Script with an explicit JSON Schema outputSchema matching its returned data before calling it. React is injected into view source, so use React APIs without imports and render only the supplied data prop. A failed view build includes diagnostics: change the source once and retry with the returned artifactViewId; do not search for a different Artifact tool or call render_dynamic_artifact. After a successful save, call the exact render_artifact_* or preview_artifact_* tool named in its result.",
   "When a match has kind connection_status, name connectionStatus.connectionName and relay connectionStatus.action exactly. Distinguish the member's Your Connections page, the organization Connections dashboard, and the provider's own admin console.",
   "Connection probes are live. After the requested human fixes that connector, search again in the same task; otherwise do not retry unchanged or improvise workarounds through other tools.",
 ].join("\n")
 
-async function mcpRequestMethod(request: Request): Promise<string | null> {
-  if (request.method.toUpperCase() !== "POST") return null
+async function mcpRequestInfo(request: Request): Promise<{ method: string | null; resourceUri: string | null }> {
+  if (request.method.toUpperCase() !== "POST") return { method: null, resourceUri: null }
   const body: unknown = await request.clone().json().catch(() => null)
-  return typeof body === "object"
+  const method = typeof body === "object"
     && body !== null
     && "method" in body
     && typeof body.method === "string"
     ? body.method
     : null
+  const params = typeof body === "object" && body !== null && "params" in body && typeof body.params === "object" && body.params !== null
+    ? body.params
+    : null
+  const resourceUri = params && "uri" in params && typeof params.uri === "string" ? params.uri : null
+  return { method, resourceUri }
 }
 
 export const AGENT_SKILL_INDEX_URI = "skill://index.json"
@@ -171,36 +229,8 @@ function standardSkillMarkdown(skill: RemoteSkillDescriptor, source: string): st
 
 const EXECUTE_CAPABILITY_TIMEOUT_MESSAGE = `The capability call exceeded ${EXECUTE_CAPABILITY_TIMEOUT_MS / 1_000}s. Retry once; if it times out again, narrow the request (fewer results, tighter query) and tell the user the service is slow — do NOT tell them to reconfigure or reconnect.`
 
-export type ExecuteCapabilityToolResult = {
-  isError?: boolean
-  content: AgentToolContentPart[]
-}
-
 function textContent(text: string): { text: string; type: "text" }[] {
   return [{ type: "text", text }]
-}
-
-export function externalCapabilityErrorToolResult(
-  result: Exclude<ExternalCapabilityExecuteResult, { ok: true }>,
-): ExecuteCapabilityToolResult {
-  const payload = externalCapabilityErrorPayloadSchema.parse({
-    error: result.error,
-    message: result.message,
-    ...(result.referenceId === undefined ? {} : { referenceId: result.referenceId }),
-    ...(result.retryable === undefined ? {} : { retryable: result.retryable }),
-    ...(result.providerError ? { providerError: result.providerError } : {}),
-    ...(result.connectionStatus ? { connectionStatus: result.connectionStatus } : {}),
-    ...(result.capability ? { capability: result.capability } : {}),
-    ...(result.issues ? { issues: result.issues } : {}),
-    ...(result.schemaDigest ? { schemaDigest: result.schemaDigest } : {}),
-    ...(result.sameArgumentsRetryable === false ? { sameArgumentsRetryable: false } : {}),
-    ...(result.retry ? { retry: result.retry } : {}),
-    ...(result.schemaGuidance ? { schemaGuidance: result.schemaGuidance } : {}),
-  })
-  return {
-    isError: true,
-    content: textContent(JSON.stringify(payload)),
-  }
 }
 
 export function capabilitySearchToolResult<T extends CapabilityMatch>(matches: T[], coverageHint?: string) {
@@ -212,26 +242,6 @@ export function capabilitySearchToolResult<T extends CapabilityMatch>(matches: T
   return {
     content: textContent(JSON.stringify(result, null, 2)),
     structuredContent: result,
-  }
-}
-
-function unknownCapabilityText(name: string): string {
-  return JSON.stringify({
-    error: "unknown_capability",
-    message: `No capability named "${name}". Call search_capabilities to find a valid name.`,
-  })
-}
-
-export function externalCapabilitySuccessToolResult(
-  result: Extract<ExternalCapabilityExecuteResult, { ok: true }>,
-): ExecuteCapabilityToolResult {
-  const content = externalToolContent(result.result)
-  if (!result.schemaGuidance) return { content }
-  return {
-    content: [
-      ...content,
-      ...textContent(JSON.stringify({ schemaGuidance: result.schemaGuidance })),
-    ],
   }
 }
 
@@ -284,6 +294,7 @@ export function createAgentMcpServer(): McpServer {
     name: "openwork-den-api-agent",
     version: "1.0.0",
   }, {
+    capabilities: dynamicArtifactAppServerCapabilities,
     instructions: AGENT_MCP_INSTRUCTIONS,
   })
 }
@@ -338,7 +349,8 @@ export function registerAgentSkillResources(input: {
 }
 
 /**
- * The minimal, harness-facing MCP surface: exactly two tools, full stop.
+ * The minimal, harness-facing MCP surface: two core tools plus gated Code Mode
+ * execution and standards-based Artifact presentation.
  *
  * `/mcp` (index.ts) stays exactly as it is — every catalog operation
  * individually registered, ~129 tools today. That's unchanged and still
@@ -347,13 +359,13 @@ export function registerAgentSkillResources(input: {
  *
  * `/mcp/agent` is a *different* endpoint for a *different* consumer: the
  * desktop app's "OpenWork Cloud Control" connection, which is what an
- * OpenCode/Claude Code/Codex-style harness actually sees. It registers only
- * `search_capabilities` and `execute_capability`, both backed by the exact
- * same catalog and the exact same `invokeMcpOperation` execute path used by
- * the rich endpoint — no new auth, no new policy, no new execution logic.
- * A harness connected here can only discover and call capabilities through
- * these two tools; the other ~127 operations are not individually callable
- * on this endpoint.
+ * OpenCode/Claude Code/Codex-style harness actually sees. It always registers
+ * `search_capabilities` and `execute_capability`, and conditionally registers
+ * Code Mode plus a constant-size Program search/selection catalog.
+ * One selected Program contributes exact run/render tools; its renderer is a
+ * read-only MCP App over the same authorized saved-Script snapshots and does
+ * not create a second execution or scheduling path. The other ~127 operations
+ * are not individually callable on this endpoint.
  */
 export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables & Record<string, unknown> }>(app: Hono<T>) {
   app.get("/.well-known/oauth-protected-resource/mcp/agent", publicRoute, (c) =>
@@ -385,22 +397,51 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
       userId: principal.userId,
       organizationId: principal.organizationId,
     })
-    let platformAdmin: Promise<boolean> | undefined
-    const resolvePlatformAdmin = () => {
-      platformAdmin ??= isPlatformAdminUserId(principal.userId)
-      return platformAdmin
-    }
     const organizationId = normalizeDenTypeId("organization", principal.organizationId)
     const organizationRows = await db
       .select({ metadata: OrganizationTable.metadata })
       .from(OrganizationTable)
       .where(eq(OrganizationTable.id, organizationId))
       .limit(1)
-    const externalMcpConnectionsEnabled = memberFacingMcpConnectionsEnabled(organizationRows[0]?.metadata, {
-      gatingEnabled: env.mcpConnectionsGatingEnabled,
+    const codemodeEnabled = codemodeScriptsEnabled(organizationRows[0]?.metadata)
+    const requestInfo = await mcpRequestInfo(c.req.raw)
+    const method = requestInfo.method
+    const capabilityContext = createCapabilityRegistryContext({
+      app: app as unknown as Hono,
+      env: c.env,
+      catalog,
+      principal,
+      organizationId,
+      member: memberIdentity,
+      redirectUriBase: resolvePublicOrigin(c.req.raw, env.apiPublicUrl),
+      codemodeEnabled,
+      organizationMetadata: organizationRows[0]?.metadata,
+      mcpConnectionsGatingEnabled: env.mcpConnectionsGatingEnabled,
     })
+    const { externalMcpConnectionsEnabled } = capabilityContext
     let remoteSkills: RemoteSkillDescriptor[] = []
-    const method = await mcpRequestMethod(c.req.raw)
+    let artifactContext: PluginArchActorContext | null = null
+    const artifactMethod = method === "initialize"
+      || method === "tools/list"
+      || method === "tools/call"
+      || method === "resources/list"
+      || method === "resources/read"
+    if (codemodeEnabled && memberIdentity && artifactMethod) {
+      const organizationContext = await getOrganizationContextForUser({
+        userId: normalizeDenTypeId("user", principal.userId),
+        organizationId,
+      })
+      if (organizationContext) {
+        artifactContext = {
+          organizationContext,
+          memberTeams: await listTeamsForMember({
+            organizationId,
+            memberId: memberIdentity.orgMembershipId,
+          }),
+          session: null,
+        }
+      }
+    }
     if (method === "initialize" || method === "resources/list" || method === "resources/read") {
       remoteSkills = [
         ...listBuiltinSkillDescriptors(),
@@ -442,7 +483,9 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
       {
         title: "Search capabilities",
         description: [
-          "Search for a capability by keyword. This connection only exposes this tool and execute_capability —",
+          codemodeEnabled
+            ? "Search for a capability by keyword. This connection also exposes execute_capability, execute_capability_script, and Program search/selection tools —"
+            : "Search for a capability by keyword. This connection only exposes this tool and execute_capability —",
           "there is no list of individually-named tools to browse. Always search first.",
           "Search covers native Google Workspace capabilities (Gmail, Calendar, Drive, Gmail drafts), org-connected external MCPs, and namespaced OpenWork Admin tools for allowlisted platform admins.",
           "Try 2-4 keyword variants before deciding a capability is unavailable.",
@@ -459,55 +502,8 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
       },
       async ({ query, limit, type }) => {
         const boundedLimit = limit ?? 5
-        const sourceFilter = searchCapabilitySourceFilter(type)
-        const marketplaceObjectTypes = type === "skills" ? skillMarketplaceObjectTypes : undefined
-        const restMatches = sourceFilter.api ? searchCapabilities(catalog, query, boundedLimit) : []
-        const nativeMatches = sourceFilter.api
-          ? await searchNativeCapabilities({
-            organizationId,
-            member: memberIdentity,
-            query,
-            catalog,
-            limit: boundedLimit,
-          })
-          : []
-        const adminMatches = sourceFilter.admin
-          ? await searchAvailableAdminCapabilities(await resolvePlatformAdmin(), query, boundedLimit)
-          : []
-        const builtinSkillMatches = sourceFilter.skills
-          ? searchBuiltinSkillCapabilities(query, boundedLimit)
-          : []
-        // Merged in from each connected External MCP Connection's live
-        // tools/list (capability-sources/external-mcp-client.ts) — a
-        // Notion/Linear/Stripe/... connection an admin added in Den shows
-        // up here exactly like any native capability, ranked together.
-        let externalCoverageHint: string | undefined
-        const externalMatches = sourceFilter.mcp && externalMcpConnectionsEnabled
-          ? await searchExternalCapabilities({
-            organizationId: principal.organizationId,
-            member: memberIdentity,
-            query,
-            redirectUriBase: resolvePublicOrigin(c.req.raw, env.apiPublicUrl),
-            limit: boundedLimit,
-            reportCoverage: (coverage) => {
-              externalCoverageHint = externalMcpSearchCoverageHint(coverage)
-            },
-          })
-          : []
-        const marketplaceMatches = sourceFilter.marketplace && externalMcpConnectionsEnabled
-          ? await searchMarketplaceCapabilities({
-            organizationId: principal.organizationId,
-            member: memberIdentity,
-            objectTypes: marketplaceObjectTypes,
-            query,
-            limit: boundedLimit,
-            enabled: externalMcpConnectionsEnabled,
-          })
-          : []
-        const matches = [...restMatches, ...nativeMatches, ...adminMatches, ...builtinSkillMatches, ...externalMatches, ...marketplaceMatches]
-          .sort(compareCapabilityMatches)
-          .slice(0, boundedLimit)
-        return capabilitySearchToolResult(matches, externalCoverageHint)
+        const result = await searchCapabilityRegistry(capabilityContext, { query, limit: boundedLimit, type })
+        return capabilitySearchToolResult(result.matches, result.externalCoverageHint)
       },
     )
 
@@ -534,104 +530,402 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
       async ({ name, schemaDigest, path, query, body }) => {
         return executeCapabilityWithBudget({
           capability: name,
-          invoke: async (): Promise<ExecuteCapabilityToolResult> => {
-            const adminResult = parseAdminCapabilityName(name)
-              ? await executeAvailableAdminCapability(await resolvePlatformAdmin(), name, body)
-              : null
-            if (adminResult) return adminResult
-
-            const builtinSkill = executeBuiltinSkillCapability(name)
-            if (builtinSkill) {
-              return { content: textContent(JSON.stringify(builtinSkill, null, 2)) }
-            }
-
-            const external = parseExternalCapabilityName(name)
-            if (external) {
-              if (!externalMcpConnectionsEnabled) {
-                return {
-                  isError: true,
-                  content: textContent(JSON.stringify({
-                    error: "unknown_capability",
-                    message: "No external MCP connection capabilities are available for this organization.",
-                  })),
-                }
-              }
-              const result = await executeExternalCapability({
-                organizationId: principal.organizationId,
-                member: memberIdentity,
-                connectionId: external.connectionId,
-                toolName: external.toolName,
-                args: normalizeToolBody(body),
-                schemaDigest,
-                redirectUriBase: resolvePublicOrigin(c.req.raw, env.apiPublicUrl),
-              })
-              if (!result.ok) {
-                return externalCapabilityErrorToolResult(result)
-              }
-              // The SDK's callTool() can return either the standard {content:[...]}
-              // shape or a legacy-compatibility {toolResult} shape; normalize to
-              // what McpServer's own tool callback contract requires.
-              return externalCapabilitySuccessToolResult(result)
-            }
-
-            const nativeResult = await executeNativeCapability({
-              app: app as unknown as Hono,
-              env: c.env,
-              name,
-              organizationId,
-              member: memberIdentity,
-              catalog,
-              principal,
-              path,
-              query,
-              body,
-            })
-            if (nativeResult) return nativeResult
-
-            const marketplace = parseMarketplaceCapabilityName(name)
-            if (marketplace) {
-              const result = await executeMarketplaceCapability({
-                organizationId: principal.organizationId,
-                member: memberIdentity,
-                pluginId: marketplace.pluginId,
-                configObjectId: marketplace.configObjectId,
-                body,
-                enabled: externalMcpConnectionsEnabled,
-              })
-              if (!result.ok) {
-                return {
-                  isError: true,
-                  content: textContent(result.error === "unknown_capability"
-                    ? unknownCapabilityText(name)
-                    : JSON.stringify({ error: result.error, message: result.message })),
-                }
-              }
-              return { content: textContent(JSON.stringify(result.result, null, 2)) }
-            }
-
-            const operation = catalog.find((candidate) => candidate.name === name)
-            if (!operation) {
-              return {
-                isError: true,
-                content: textContent(unknownCapabilityText(name)),
-              }
-            }
-
-            return invokeMcpOperation({
-              app: app as unknown as Hono,
-              env: c.env,
-              operation,
-              principal,
-              toolInput: {
-                path: normalizeToolRecord(path),
-                query: normalizeToolRecord(query),
-                body: normalizeToolBody(body),
-              },
-            })
-          },
+          invoke: () => executeCapability(capabilityContext, { name, schemaDigest, path, query, body }),
         })
       },
     )
+
+    if (codemodeEnabled) {
+      const loadDynamicArtifact = async ({
+        configObjectId,
+        receiptId,
+        maxAgeMs,
+        expectedOutputSchemaDigest,
+      }: {
+        configObjectId: string
+        receiptId?: string
+        maxAgeMs?: number
+        expectedOutputSchemaDigest?: string
+      }) => {
+        if (!artifactContext) {
+          return {
+            ok: false as const,
+            error: "saved_script_not_found",
+            message: "The saved Script is unavailable to this member.",
+          }
+        }
+        try {
+          const detail = await getCodemodeScriptDetail({
+            context: artifactContext,
+            configObjectId,
+            maxAgeMs,
+          })
+          const snapshot = receiptId
+            ? await getCodemodeScriptSnapshot({ context: artifactContext, configObjectId, receiptId })
+            : detail.latestSuccessfulSnapshot
+          if (!snapshot) {
+            return {
+              ok: false as const,
+              error: "saved_script_snapshot_not_found",
+              message: receiptId
+                ? "That immutable artifact snapshot was not found."
+                : "This saved Script does not have a successful artifact snapshot yet. Run it explicitly or through its Automation first.",
+            }
+          }
+          if (snapshot.status !== "succeeded" || snapshot.contentDeletedAt !== null
+            || snapshot.markdown === null
+            || snapshot.resultDigest === null || snapshot.rendererVersion !== "codemode-markdown-v1") {
+            return {
+              ok: false as const,
+              error: "saved_script_snapshot_unavailable",
+              message: "This artifact snapshot has no readable successful content.",
+            }
+          }
+          if (expectedOutputSchemaDigest && snapshot.outputSchemaDigest !== expectedOutputSchemaDigest) {
+            return {
+              ok: false as const,
+              error: "artifact_view_schema_incompatible",
+              message: "This Artifact result does not match the immutable view revision's output schema.",
+            }
+          }
+          const freshness = receiptId
+            ? artifactFreshness({
+                latestFinishedAt: new Date(snapshot.finishedAt),
+                latestStatus: "succeeded",
+                latestSuccessfulFinishedAt: new Date(snapshot.finishedAt),
+                latestSuccessfulReceiptId: snapshot.receiptId,
+                maxAgeMs: Math.min(30 * 24 * 60 * 60_000, Math.max(60_000, maxAgeMs ?? 24 * 60 * 60_000)),
+              })
+            : detail.freshness
+          return {
+            ok: true as const,
+            markdown: snapshot.markdown,
+            payload: {
+              schemaVersion: DYNAMIC_ARTIFACT_APP_SCHEMA_VERSION,
+              artifact: {
+                title: detail.title,
+                description: detail.description,
+                pluginId: snapshot.pluginId,
+                configObjectId: snapshot.configObjectId,
+                configObjectVersionId: snapshot.configObjectVersionId,
+                receiptId: snapshot.receiptId,
+                automationRunId: snapshot.automationRunId,
+                source: snapshot.source,
+                generatedAt: snapshot.finishedAt,
+                resultDigest: snapshot.resultDigest,
+                rendererVersion: snapshot.rendererVersion,
+                freshness,
+              },
+              data: snapshot.value,
+            },
+          }
+        } catch (error) {
+          if (error instanceof PluginArchAuthorizationError) {
+            return {
+              ok: false as const,
+              error: "saved_script_not_found",
+              message: "The saved Script is unavailable to this member.",
+            }
+          }
+          const message = error instanceof Error ? error.message : "saved_script_not_found"
+          return {
+            ok: false as const,
+            error: message.includes("not_found") ? "saved_script_not_found" : "saved_script_unavailable",
+            message: "The Program's retained Artifact could not be loaded.",
+          }
+        }
+      }
+
+      // Keep the existing generic MCP App tool as the interoperable baseline.
+      // OpenWork's persisted selection only adds a smaller contextual catalog;
+      // it does not replace the standard tool/resource/result contract.
+      registerAgentDynamicArtifactApp({ server, load: loadDynamicArtifact })
+
+      const notifyProgramCatalogChanged = async (extra: {
+        sendNotification: (notification: { method: "notifications/tools/list_changed" | "notifications/resources/list_changed" }) => Promise<void>
+      }) => {
+        await extra.sendNotification({ method: "notifications/tools/list_changed" })
+        if (env.generatedArtifactViewsEnabled) {
+          await extra.sendNotification({ method: "notifications/resources/list_changed" })
+        }
+      }
+
+      server.registerTool(
+        "search_programs",
+        {
+          title: "Search Programs",
+          description: "Search accessible Programs by Library metadata and parent OpenWork Connect Plugin. Results never include retained artifact data, Script source, generated source, compiled HTML, diagnostics, or credentials.",
+          annotations: SEARCH_CAPABILITIES_ANNOTATIONS,
+          inputSchema: z.object({
+            query: z.string().trim().max(255).optional(),
+            readiness: z.enum(["ready", "needs_signin", "needs_admin_setup"]).optional(),
+            source: z.enum(["created", "installed_template"]).optional(),
+            cursor: z.string().trim().min(1).max(160).optional(),
+            limit: z.number().int().min(1).max(50).optional(),
+          }),
+          outputSchema: programSearchOutputSchema,
+        },
+        async ({ query, readiness, source, cursor, limit }) => {
+          const items = artifactContext ? await listProgramLibraryItems({ context: artifactContext }) : []
+          const normalizedQuery = query?.toLocaleLowerCase() ?? ""
+          const filtered = items.filter((item) =>
+            (!normalizedQuery || `${item.name} ${item.description ?? ""}`.toLocaleLowerCase().includes(normalizedQuery))
+            && (!readiness || item.state === readiness)
+            && (!source || item.source.kind === source))
+          const start = cursor ? Math.max(0, filtered.findIndex((item) => item.id === cursor) + 1) : 0
+          const bounded = limit ?? 10
+          const page = filtered.slice(start, start + bounded).map((item) => ({
+            id: item.id,
+            plugin: item.plugin,
+            name: item.name,
+            description: item.description,
+            role: item.role,
+            state: item.state,
+            resultState: item.resultState,
+            latestSuccessfulAt: item.latestSuccessfulAt,
+            viewState: item.viewState,
+            activeViewTitle: item.activeViewTitle,
+            automationCount: item.automationCount,
+            source: item.source,
+          }))
+          const result = {
+            items: page,
+            nextCursor: start + bounded < filtered.length ? page.at(-1)?.id ?? null : null,
+          }
+          return { content: textContent(JSON.stringify(result, null, 2)), structuredContent: result }
+        },
+      )
+
+      server.registerTool(
+        "select_program",
+        {
+          title: "Select Program",
+          description: "Select one accessible Program as this member's current organization-scoped MCP context. Selection persists across chats and devices; it does not install or grant access.",
+          annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+          inputSchema: z.object({ programId: z.string().trim().min(1).max(160) }),
+          outputSchema: programSelectionOutputSchema,
+        },
+        async ({ programId }, extra) => {
+          if (!artifactContext) {
+            return { isError: true, content: textContent(JSON.stringify({ error: "program_not_found" })) }
+          }
+          const selection = await selectProgramForAgent({ context: artifactContext, programId })
+          await notifyProgramCatalogChanged(extra)
+          const result = {
+            selection: {
+              programId: selection.programId,
+              selectedAt: selection.selectedAt,
+            },
+          }
+          return {
+            content: textContent(JSON.stringify(result, null, 2)),
+            structuredContent: result,
+          }
+        },
+      )
+
+      server.registerTool(
+        "clear_program_selection",
+        {
+          title: "Clear Program selection",
+          description: "Clear this member's current organization-scoped Program selection.",
+          annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+          inputSchema: z.object({}),
+          outputSchema: programSelectionClearedOutputSchema,
+        },
+        async (_request, extra) => {
+          if (artifactContext) await clearProgramAgentSelection(artifactContext)
+          await notifyProgramCatalogChanged(extra)
+          const result = { selection: null }
+          return { content: textContent(JSON.stringify(result)), structuredContent: result }
+        },
+      )
+
+      const selection = artifactContext ? await getProgramAgentSelection(artifactContext) : null
+      const selectedDetail = artifactContext && selection
+        ? await getProgramDetail({ context: artifactContext, configObjectId: selection.programId })
+        : null
+      let registeredSelectedCustomView = false
+
+      // This server deploys independently from Desktop. Do not advertise or
+      // serve bridge-dependent generated views until the compatible Desktop
+      // MCP Apps host has been released and the operator enables the rollout.
+      if (artifactContext && env.generatedArtifactViewsEnabled) {
+        const loadGeneratedResource = async ({ artifactViewId, revisionId }: { artifactViewId: string; revisionId: string }) => {
+          const { revision } = await loadArtifactViewRevision({ context: artifactContext, artifactViewId, revisionId })
+          if (revision.build_status !== "ready" || !revision.compiled_html || !revision.resource_digest) {
+            throw new Error("artifact_view_revision_not_ready")
+          }
+          return { html: revision.compiled_html, resourceDigest: revision.resource_digest, csp: revision.csp }
+        }
+        const generatedViews = await listArtifactViews({ context: artifactContext })
+        registerAgentGeneratedArtifactViews({
+          server,
+          views: generatedViews,
+          loadResource: loadGeneratedResource,
+          loadData: loadDynamicArtifact,
+          save: (request) => saveArtifactViewRevision({ context: artifactContext, ...request }),
+          activate: (request) => activateArtifactViewRevision({ context: artifactContext, ...request }),
+          retire: (request) => retireArtifactView({ context: artifactContext, ...request }),
+          exposePerViewRenderTools: false,
+        })
+
+        const exactResource = requestInfo.resourceUri ? parseArtifactViewResourceUri(requestInfo.resourceUri) : null
+        if (exactResource && !generatedViews.some((view) => view.revisions.some((revision) => revision.resourceUri === requestInfo.resourceUri))) {
+          const exact = await getGeneratedArtifactViewRevision({ context: artifactContext, ...exactResource })
+          registerGeneratedArtifactResource({
+            server,
+            view: exact.view,
+            revision: exact.revision,
+            loadResource: loadGeneratedResource,
+          })
+        }
+
+        if (selection && selectedDetail) {
+          const activeView = selectedDetail.views.find((view) => view.status === "active" && view.activeRevisionId !== null)
+          const active = activeView?.activeRevisionId
+            ? await getGeneratedArtifactViewRevision({
+                context: artifactContext,
+                artifactViewId: activeView.id,
+                revisionId: activeView.activeRevisionId,
+              }).catch(() => null)
+            : null
+          const compatibleRevision = active?.revision.buildStatus === "ready"
+            && active.revision.retiredAt === null
+            && active.revision.outputSchemaDigest === selectedDetail.script.currentVersion.outputSchemaDigest
+            ? active.revision
+            : null
+          if (active && compatibleRevision) {
+            if (!generatedViews.some((view) => view.revisions.some((revision) => revision.resourceUri === compatibleRevision.resourceUri))) {
+              registerGeneratedArtifactResource({
+                server,
+                view: active.view,
+                revision: compatibleRevision,
+                loadResource: loadGeneratedResource,
+              })
+            }
+            registerSelectedGeneratedArtifactRenderTool({
+              server,
+              view: active.view,
+              revision: compatibleRevision,
+              loadData: loadDynamicArtifact,
+            })
+            registeredSelectedCustomView = true
+          }
+        }
+      }
+
+      if (artifactContext && selection && selectedDetail) {
+        if (!registeredSelectedCustomView) {
+          registerSelectedDynamicArtifactApp({ server, configObjectId: selection.programId, load: loadDynamicArtifact })
+        }
+
+        server.registerTool(
+          "run_selected_program",
+          {
+            title: `Run selected Program: ${selectedDetail.program.name}`,
+            description: "Execute the selected Program's current immutable Script version after validating access, input schema, and capability readiness.",
+            annotations: EXECUTE_CAPABILITY_ANNOTATIONS,
+            inputSchema: z.object({ input: z.unknown().optional() }),
+            outputSchema: programRunOutputSchema,
+          },
+          async ({ input }) => {
+            await requirePluginArchResourceRole({
+              context: artifactContext,
+              requireFreshSession: false,
+              resourceId: normalizeDenTypeId("configObject", selection.programId),
+              resourceKind: "config_object",
+              role: "editor",
+            })
+            const execution = await executeMarketplaceCapability({
+              organizationId: principal.organizationId,
+              member: memberIdentity,
+              pluginId: selectedDetail.script.pluginId,
+              configObjectId: selectedDetail.script.configObjectId,
+              configObjectVersionId: selectedDetail.script.currentVersion.id,
+              body: input,
+              codemodeEnabled: true,
+              validateScriptOutput: true,
+              buildTools: () => buildCapabilityToolTree(capabilityContext),
+            })
+            if (!execution.ok || execution.result.status !== "executed") {
+              const message = execution.ok ? execution.result.hint ?? "The selected Program could not run." : execution.message
+              return { isError: true, content: textContent(JSON.stringify({ error: "program_run_failed", message })) }
+            }
+            const result = {
+              status: "succeeded" as const,
+              value: execution.result.value,
+              receiptId: execution.result.receiptId ?? null,
+              resultDigest: execution.result.resultDigest ?? null,
+            }
+            return {
+              content: textContent(JSON.stringify(result, null, 2)),
+              structuredContent: result,
+            }
+          },
+        )
+      }
+
+      server.registerTool(
+        EXECUTE_CAPABILITY_SCRIPT_TOOL_NAME,
+        {
+          title: "Execute capability script",
+          description: [
+            "Run confined JavaScript orchestration over this organization's capabilities.",
+            "Den REST operations are available at tools.den.<operation>; connected MCP tools are available at tools.<connection>.<tool>.",
+            "search_capabilities results include scriptPath for exact paths, and tools.$codemode.search({ query }) works in-program.",
+            "The code is a plain function body in a restricted JavaScript subset: data literals, control flow, arrow functions, template strings, try/catch, common Array/String/Object/Math/JSON methods, await, and Promise.all.",
+            "Not available: import/require, classes, generators, .then/.catch chaining, timers, fetch, process, and other host globals — call tools for all external work.",
+            "Send plain source only (no markdown fences). End with `return <json-safe value>`; use console.log for progress logs.",
+            "Run independent tool calls in parallel with Promise.all and return only the fields needed.",
+          ].join(" "),
+          annotations: EXECUTE_CAPABILITY_ANNOTATIONS,
+          inputSchema: z.object({
+            code: z.string().min(1),
+            input: z.unknown().optional(),
+          }),
+        },
+        async ({ code, input }) => executeCapabilityWithBudget({
+          capability: EXECUTE_CAPABILITY_SCRIPT_TOOL_NAME,
+          invoke: async (): Promise<ExecuteCapabilityToolResult> => {
+            const { tools } = await buildCapabilityToolTree(capabilityContext)
+            const startedAt = new Date()
+            const result = await runCodemodeScript({
+              code,
+              scriptInput: input,
+              tools,
+              timeoutMs: 170_000,
+            })
+            const finishedAt = new Date()
+            await recordCodemodeScriptResult(db, {
+              organizationId,
+              orgMembershipId: memberIdentity?.orgMembershipId,
+              source: "adhoc",
+              code,
+              startedAt,
+              finishedAt,
+            }, result)
+            if (!result.ok) {
+              return {
+                isError: true,
+                content: textContent(JSON.stringify({
+                  error: "script_failed",
+                  kind: result.error.kind,
+                  message: result.error.message,
+                  ...(result.error.suggestions ? { suggestions: result.error.suggestions } : {}),
+                  toolCalls: result.toolCalls,
+                })),
+              }
+            }
+            const value = typeof result.value === "string"
+              ? result.value
+              : JSON.stringify(result.value, null, 2)
+            const logs = result.logs.length > 0 ? `\n\nLogs:\n${result.logs.join("\n")}` : ""
+            return { content: textContent(`${value}${logs}`) }
+          },
+        }),
+      )
+    }
 
     const transport = new StreamableHTTPTransport()
     await server.connect(transport)

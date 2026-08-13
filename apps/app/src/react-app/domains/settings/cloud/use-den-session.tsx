@@ -19,11 +19,11 @@ import {
   type DenSettings,
   type DenOrgSummary,
 } from "@/app/lib/den";
+import { markDesktopSignInInitiated } from "@/app/lib/den-sign-in-intent";
 import { clearDesktopBootstrapConfig } from "@/app/lib/desktop";
 import { exchangeHandoffAndSignIn } from "@/app/lib/den-handoff";
 import {
   denSessionUpdatedEvent,
-  dispatchDenSessionUpdated,
   type DenSessionUpdatedDetail,
 } from "@/app/lib/den-session-events";
 import { t } from "@/i18n";
@@ -189,7 +189,6 @@ export function useDenSession({
   const clearSignedInState = React.useCallback(
     (
       message?: string | null,
-      eventDetail?: Pick<DenSessionUpdatedDetail, "baseUrl">,
       options?: { includeBaseUrls?: boolean },
     ) => {
       const includeBaseUrls = options?.includeBaseUrls ?? !developerMode;
@@ -226,8 +225,6 @@ export function useDenSession({
           }
         }
       } catch {}
-      // Notify provider auth store so it can clean up cloud-imported providers
-      dispatchDenSessionUpdated({ status: "signed_out", ...eventDetail });
       });
     },
     [clearSessionState, developerMode, onBeforeSignedOut, setAuthToken, setBaseUrl],
@@ -244,11 +241,13 @@ export function useDenSession({
   const openBrowserAuth = React.useCallback(
     (mode: "sign-in" | "sign-up") => {
       const url = buildDenAuthUrl(baseUrl, mode);
+      const usesPasteHandoff = new URL(url).searchParams.get("desktopAuth") === "1";
+      markDesktopSignInInitiated();
       setSigninFallbackUrl(url);
       setStatusMessage(
         mode === "sign-up"
-          ? t("den.status_browser_signup")
-          : t("den.status_browser_signin"),
+          ? t(usesPasteHandoff ? "den.status_browser_signup_paste" : "den.status_browser_signup")
+          : t(usesPasteHandoff ? "den.status_browser_signin_paste" : "den.status_browser_signin"),
       );
       setAuthError(null);
       void tryOpenBrowserAuthUrl(url).then((opened) => {
@@ -283,9 +282,7 @@ export function useDenSession({
 
       setBaseUrl(persisted.baseUrl);
       setBaseUrlDraft(persisted.baseUrl);
-      await clearSignedInState(t("den.status_base_url_updated"), {
-        baseUrl: persisted.baseUrl,
-      }, { includeBaseUrls: false });
+      await clearSignedInState(t("den.status_base_url_updated"), { includeBaseUrls: false });
     } catch (error) {
       setBaseUrlError(error instanceof Error ? error.message : t("den.error_base_url"));
     } finally {
@@ -306,9 +303,7 @@ export function useDenSession({
       setBaseUrlError(null);
       setBaseUrl(persisted.baseUrl);
       setBaseUrlDraft(persisted.baseUrl);
-      await clearSignedInState(t("den.status_base_url_updated"), {
-        baseUrl: persisted.baseUrl,
-      }, { includeBaseUrls: false });
+      await clearSignedInState(t("den.status_base_url_updated"), { includeBaseUrls: false });
     } catch (error) {
       setBaseUrlError(error instanceof Error ? error.message : t("den.error_base_url"));
     } finally {
@@ -340,9 +335,7 @@ export function useDenSession({
       );
       setBaseUrl(resolved.baseUrl);
       setBaseUrlDraft(resolved.baseUrl);
-      await clearSignedInState(t("den.status_server_config_cleared"), {
-        baseUrl: resolved.baseUrl,
-      }, { includeBaseUrls: false });
+      await clearSignedInState(t("den.status_server_config_cleared"), { includeBaseUrls: false });
     } catch (error) {
       setBaseUrlError(error instanceof Error ? error.message : t("den.error_base_url"));
     } finally {
@@ -509,6 +502,8 @@ export function useDenSession({
       const result = await exchangeHandoffAndSignIn(parsed.grant, {
         baseUrl: nextBaseUrl,
         client: exchangeClient,
+        // Pasted one-time codes are desktop-initiated sign-ins.
+        desktopInitiated: true,
         fallbackErrorMessage: t("den.error_no_token"),
       });
       if (!result.ok) {

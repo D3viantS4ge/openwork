@@ -23,6 +23,24 @@ describe("Cloud provider status-only rows", () => {
     expect(resolveCloudProviderRowStatus({ ...ready, outOfSync: true })).toBe("syncing");
   });
 
+  test("never claims Connected while the server still owes an engine reload", () => {
+    // Truthfulness gate for #3671's UI layer: the provider is materialized
+    // (listed by /cloud-provider-sync/status) but its models are not served
+    // until the pending reload lands, so the row must stay in progress.
+    expect(resolveCloudProviderRowStatus({ ...ready, reloadPending: true })).toBe("syncing");
+    expect(resolveCloudProviderRowStatus({ ...ready, reloadPending: false })).toBe("connected");
+  });
+
+  test("surfaces a server-side skip as the credential attention state instead of endless Syncing", () => {
+    const skipped = resolveCloudProviderRowStatus({
+      ...ready,
+      imported: false,
+      skippedByServer: true,
+    });
+    expect(skipped).toBe("needs_credential");
+    expect(canRetryCloudProviderRow(skipped)).toBe(false);
+  });
+
   test("shows policy and workspace gates without retrying", () => {
     const blocked = resolveCloudProviderRowStatus({ ...ready, allowed: false });
     const unavailable = resolveCloudProviderRowStatus({ ...ready, importsUnavailable: true });

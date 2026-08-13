@@ -240,6 +240,7 @@ export type DenOrgEntitlements = {
 export type DenOrgCapabilities = {
   installLinks: boolean;
   mcpConnections: boolean;
+  codemodeScripts: boolean;
   cloud: boolean;
 };
 
@@ -525,6 +526,14 @@ export function getTeamRoute(orgSlug: string | null | undefined, teamId: string)
 
 export function getBackgroundAgentsRoute(orgSlug?: string | null): string {
   return `${getOrgDashboardRoute(orgSlug)}/background-agents`;
+}
+
+export function getScriptRunsRoute(orgSlug?: string | null): string {
+  return `${getOrgDashboardRoute(orgSlug)}/script-runs`;
+}
+
+export function getAutomationsRoute(orgSlug?: string | null): string {
+  return `${getOrgDashboardRoute(orgSlug)}/automations`;
 }
 
 export function getCustomLlmProvidersRoute(orgSlug?: string | null): string {
@@ -923,12 +932,13 @@ function parseOrgAuthMethods(value: unknown): DenOrgAuthMethods {
 
 function parseOrgCapabilities(value: unknown): DenOrgCapabilities {
   if (!isRecord(value)) {
-    return { installLinks: false, mcpConnections: false, cloud: false };
+    return { installLinks: false, mcpConnections: false, codemodeScripts: false, cloud: false };
   }
 
   return {
     installLinks: value.installLinks === true,
     mcpConnections: value.mcpConnections === true,
+    codemodeScripts: value.codemodeScripts === true,
     cloud: value.cloud === true,
   };
 }

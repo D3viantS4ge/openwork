@@ -64,6 +64,7 @@ export type AutomationEditorProps = {
   modelOptions: readonly AutomationModelOption[]
   providerCatalog?: AutomationProviderCatalog
   busy: boolean
+  openModelPickerOnMount?: boolean
   submitLabel: string
   onCancel: () => void
   onSave: (input: CreateAutomation) => Promise<void> | void
@@ -71,6 +72,7 @@ export type AutomationEditorProps = {
 
 export function AutomationEditor(props: AutomationEditorProps) {
   const [input, setInput] = useState<CreateAutomation>(() => props.initial ?? defaultInput(props.modelOptions))
+  const [pickerOpen, setPickerOpen] = useState(props.openModelPickerOnMount === true)
   const appliedInitialKey = useRef(props.initialKey)
 
   useEffect(() => {
@@ -83,7 +85,10 @@ export function AutomationEditor(props: AutomationEditorProps) {
     setInput(defaultInput(props.modelOptions))
   }, [props.initial, props.initialKey, props.modelOptions])
 
-  const [pickerOpen, setPickerOpen] = useState(false)
+  useEffect(() => {
+    if (props.openModelPickerOnMount) setPickerOpen(true)
+  }, [props.openModelPickerOnMount])
+
   const [modelQuery, setModelQuery] = useState("")
   const selectedModel = modelKey(input.model)
   const currentModelAvailable = props.modelOptions.some((option) => modelKey(option) === selectedModel)

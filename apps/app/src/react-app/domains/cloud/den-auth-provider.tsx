@@ -25,6 +25,7 @@ import {
   type DenUser,
 } from "../../../app/lib/den";
 import { exchangeHandoffAndSignIn } from "../../../app/lib/den-handoff";
+import { readOrgSelectionPending } from "../../../app/lib/den-sign-in-intent";
 import { readDesktopDistributionInfo } from "../../../app/lib/desktop";
 import {
   denSessionUpdatedEvent,
@@ -85,6 +86,21 @@ export function resolveDenAuthFailureStatus(
 
 export function hasRetainedDenSession(status: DenAuthStatus): boolean {
   return status === "signed_in" || status === "unavailable";
+}
+
+/**
+ * True while a retained session has not produced a confirmed user yet: the
+ * initial check is still running, or it failed with a transient error
+ * ("unavailable") before the first success — e.g. the control plane or a
+ * local proxy is unreachable during an app update or server restart. Account
+ * UI must show a restoring state in this window, never "Sign in".
+ */
+export function isDenSessionRestoring(input: {
+  status: DenAuthStatus;
+  hasUser: boolean;
+}): boolean {
+  if (input.status === "checking") return true;
+  return hasRetainedDenSession(input.status) && !input.hasUser;
 }
 
 export function shouldRetryDenAuthOnSignal(input: {
@@ -213,12 +229,17 @@ export function DenAuthProvider({ children }: DenAuthProviderProps) {
 
       if (currentRun !== refreshTokenRef.current) return;
 
-      await resolveDenActiveOrganizationWithRetry(() =>
-        ensureDenActiveOrganization({
-          forceServerSync:
-            !settings.activeOrgId?.trim() || !settings.activeOrgSlug?.trim(),
-        })
-      );
+      // While a desktop-initiated sign-in is waiting for the user's explicit
+      // organization choice, do not auto-resolve a default — that would
+      // silently commit an org the chooser is still asking about.
+      if (!readOrgSelectionPending().pending) {
+        await resolveDenActiveOrganizationWithRetry(() =>
+          ensureDenActiveOrganization({
+            forceServerSync:
+              !settings.activeOrgId?.trim() || !settings.activeOrgSlug?.trim(),
+          })
+        );
+      }
 
       if (currentRun !== refreshTokenRef.current) return;
 
@@ -292,9 +313,11 @@ export function DenAuthProvider({ children }: DenAuthProviderProps) {
     );
     // A signed-in session without an organization is a stranded first
     // sign-in (e.g. org discovery was rate limited during a handoff). Keep
-    // repairing in the background until an organization resolves.
+    // repairing in the background until an organization resolves — unless the
+    // missing org is deliberate because the chooser is waiting for the user.
     const repairMissingOrganization = () => {
       if (statusRef.current !== "signed_in") return;
+      if (readOrgSelectionPending().pending) return;
       const settings = readDenSettings();
       if (!settings.authToken?.trim() || settings.activeOrgId?.trim()) return;
       void resolveDenActiveOrganizationWithRetry(() =>

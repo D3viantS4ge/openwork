@@ -69,6 +69,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmModal } from "../../../design-system/modals/confirm-modal";
 import { AddMcpModal } from "../../connections/modals/add-mcp-modal";
+import type { McpConnectResult } from "../../connections/store";
 import { ClaudePluginImportModal } from "../../connections/modals/claude-plugin-import-modal";
 import {
   canDisconnectMemberConnection,
@@ -147,7 +148,7 @@ export type McpViewProps = {
   selectedMcp: string | null;
   setSelectedMcp: (name: string | null) => void;
   quickConnect: McpDirectoryInfo[];
-  connectMcp: (entry: McpDirectoryInfo) => void;
+  connectMcp: (entry: McpDirectoryInfo) => Promise<McpConnectResult>;
   authorizeMcp: (entry: McpServerEntry) => void;
   logoutMcpAuth: (name: string) => Promise<void> | void;
   removeMcp: (name: string) => void;
@@ -680,7 +681,7 @@ export function McpView(props: McpViewProps) {
   };
 
   const supportsOauth = (entry: McpServerEntry) =>
-    entry.config.type === "remote" && entry.config.oauth !== false;
+    Boolean(entry.managedOAuth) || (entry.config.type === "remote" && entry.config.oauth !== false);
 
   const resolveStatus = (entry: McpServerEntry): ReactMcpStatus => {
     if (entry.config.enabled === false) return "disabled";
@@ -1099,7 +1100,9 @@ export function McpView(props: McpViewProps) {
         isConfigured={isEntryConfigured}
         enablementForEntry={props.enablementContext ? enablementForEntry : undefined}
         statusForEntry={quickConnectStatus}
-        onConnect={props.connectMcp}
+        onConnect={(entry) => {
+          void props.connectMcp(entry);
+        }}
         onDetail={(entry) => openDetail({ kind: "entry", entry })}
         onSkillDetail={(skill) => openDetail({ kind: "skill", skill })}
         onConnectMcpDetail={(entry) => openDetail({ kind: "connect-mcp", entry })}
@@ -1191,7 +1194,7 @@ export function McpView(props: McpViewProps) {
       <AddMcpModal
         open={addMcpModalOpen}
         onClose={() => setAddMcpModalOpen(false)}
-        onAdd={(entry) => props.connectMcp(entry)}
+        onAdd={props.connectMcp}
         busy={props.busy}
         isRemoteWorkspace={props.isRemoteWorkspace}
       />

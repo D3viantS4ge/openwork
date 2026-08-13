@@ -16,6 +16,24 @@ export function isOrganizationModelsEmpty(input: OrganizationModelsEmptyInput) {
   );
 }
 
+export type ManagedModelAvailabilityPendingInput = {
+  signedIn: boolean;
+  selectedModelUsesCloudProvider: boolean;
+  cloudProviderSyncReady: boolean;
+  openWorkModelsSyncing: boolean;
+};
+
+/** A cloud model can temporarily disappear while its provider is being reconciled. */
+export function isManagedModelAvailabilityPending(
+  input: ManagedModelAvailabilityPendingInput,
+) {
+  return (
+    input.signedIn &&
+    input.selectedModelUsesCloudProvider &&
+    (!input.cloudProviderSyncReady || input.openWorkModelsSyncing)
+  );
+}
+
 export type UnavailableModelPickerAutoOpenInput = {
   selectedModelUnavailableKey: string | null;
   signedIn: boolean;

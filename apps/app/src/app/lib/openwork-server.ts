@@ -23,6 +23,7 @@ export type OpenworkServerCapabilities = {
   mcp: { read: boolean; write: boolean };
   commands: { read: boolean; write: boolean };
   config: { read: boolean; write: boolean };
+  engine?: { rollover: boolean };
   providerSync?: boolean;
   sandbox?: { enabled: boolean; backend: "none" | "docker" | "container" };
   proxy?: { opencode: boolean };
@@ -47,10 +48,22 @@ export type OpenworkCloudProviderSyncRun = {
   message?: string;
 };
 
+export type OpenworkCloudProviderSyncSkippedProvider = {
+  cloudProviderId: string;
+  providerId: string;
+  name: string;
+  /** Machine-readable skip reason, e.g. "missing_credentials". */
+  reason: string;
+};
+
 export type OpenworkCloudProviderSyncStatus = {
   hasSession: boolean;
   lastRun: { at: string | number; status: OpenworkCloudProviderSyncRun["status"]; message?: string } | null;
   providers: CloudImportedProvider[];
+  /** A managed engine reload is still owed: materialized providers are not served yet. */
+  reloadPending: boolean;
+  /** Den-granted providers the server sync skipped, each with a reason. */
+  skippedProviders: OpenworkCloudProviderSyncSkippedProvider[];
 };
 
 function parseCloudProviderSyncRun(value: unknown): OpenworkCloudProviderSyncRun {
@@ -102,7 +115,28 @@ function parseCloudProviderSyncStatus(value: unknown): OpenworkCloudProviderSync
     const run = parseCloudProviderSyncRun(value.lastRun);
     lastRun = { at: value.lastRun.at, status: run.status, message: run.message };
   }
-  return { hasSession: value.hasSession, lastRun, providers };
+  // Additive fields (older servers omit them): tolerate absence and malformed
+  // entries instead of failing the whole status read.
+  const reloadPending = "reloadPending" in value && value.reloadPending === true;
+  const skippedProviders: OpenworkCloudProviderSyncSkippedProvider[] = [];
+  if ("skippedProviders" in value && Array.isArray(value.skippedProviders)) {
+    for (const raw of value.skippedProviders) {
+      if (!raw || typeof raw !== "object") continue;
+      if (
+        !("cloudProviderId" in raw) || typeof raw.cloudProviderId !== "string" ||
+        !("providerId" in raw) || typeof raw.providerId !== "string" ||
+        !("name" in raw) || typeof raw.name !== "string" ||
+        !("reason" in raw) || typeof raw.reason !== "string"
+      ) continue;
+      skippedProviders.push({
+        cloudProviderId: raw.cloudProviderId,
+        providerId: raw.providerId,
+        name: raw.name,
+        reason: raw.reason,
+      });
+    }
+  }
+  return { hasSession: value.hasSession, lastRun, providers, reloadPending, skippedProviders };
 }
 
 export type OpenworkServerStatus = "connected" | "disconnected" | "limited";
@@ -362,7 +396,48 @@ export type OpenworkMcpItem = {
   config: Record<string, unknown>;
   source: "config.project" | "config.global" | "config.remote";
   disabledByTools?: boolean;
+  managedOAuth?: OpenworkManagedMcpConnection | null;
 };
+
+export type OpenworkMcpAppResource = {
+  serverName: string;
+  toolName: string;
+  resourceUri: string;
+  html: string;
+  csp: {
+    connectDomains: string[];
+    resourceDomains: string[];
+    frameDomains: string[];
+    baseUriDomains: string[];
+  };
+  prefersBorder: boolean;
+};
+
+export type OpenworkMcpAppToolResult = {
+  content: Array<Record<string, unknown>>;
+  structuredContent?: Record<string, unknown>;
+  isError?: boolean;
+  _meta?: Record<string, unknown>;
+};
+
+export type OpenworkMcpAppSandbox = {
+  url: string;
+  expectedOrigin: string;
+};
+
+export type OpenworkManagedMcpConnection = {
+  name: string;
+  serverUrl: string;
+  enabled: boolean;
+  status: "needs_auth" | "connecting" | "connected" | "reconnect_required";
+  lastError: string | null;
+  hasCredential: boolean;
+  updatedAt: number;
+};
+
+export type OpenworkManagedMcpStartResult =
+  | { status: "connected" }
+  | { status: "needs_auth"; authorizeUrl: string };
 
 export type OpenworkMcpEngineSync = {
   status: "ok" | "failed";
@@ -1049,6 +1124,14 @@ export function writeOpenworkServerSettings(next: OpenworkServerSettings): Openw
   }
 }
 
+function readForceEnvSettingsFlag(): boolean {
+  const raw =
+    typeof import.meta !== "undefined" && typeof import.meta.env?.VITE_OPENWORK_FORCE_ENV_SETTINGS === "string"
+      ? import.meta.env.VITE_OPENWORK_FORCE_ENV_SETTINGS.trim()
+      : "";
+  return /^(1|true|yes|on)$/i.test(raw);
+}
+
 export function hydrateOpenworkServerSettingsFromEnv() {
   if (typeof window === "undefined") return;
   if (isOpenworkGatewayRuntime()) return;
@@ -1071,6 +1154,7 @@ export function hydrateOpenworkServerSettingsFromEnv() {
   const bootstrapHostToken = typeof window.__OPENWORK_BOOTSTRAP__?.hostToken === "string"
     ? window.__OPENWORK_BOOTSTRAP__.hostToken.trim()
     : "";
+  const forceEnvSettings = readForceEnvSettingsFlag();
 
   if (!envUrl && !envPort && !envToken && !envHostToken && !bootstrapToken && !bootstrapHostToken) return;
 
@@ -1079,14 +1163,17 @@ export function hydrateOpenworkServerSettingsFromEnv() {
     const next: OpenworkServerSettings = { ...current };
     let changed = false;
 
-    if (!current.urlOverride && envUrl) {
-      next.urlOverride = normalizeOpenworkServerUrl(envUrl) ?? undefined;
-      changed = true;
+    if (envUrl && (forceEnvSettings || !current.urlOverride)) {
+      const normalized = normalizeOpenworkServerUrl(envUrl);
+      if (normalized && normalized !== current.urlOverride) {
+        next.urlOverride = normalized;
+        changed = true;
+      }
     }
 
-    if (!current.portOverride && envPort) {
+    if (envPort && (forceEnvSettings || !current.portOverride)) {
       const parsed = Number(envPort);
-      if (Number.isFinite(parsed) && parsed > 0) {
+      if (Number.isFinite(parsed) && parsed > 0 && parsed !== current.portOverride) {
         next.portOverride = parsed;
         changed = true;
       }
@@ -1095,13 +1182,19 @@ export function hydrateOpenworkServerSettingsFromEnv() {
     if (bootstrapToken && current.token !== bootstrapToken) {
       next.token = bootstrapToken;
       changed = true;
-    } else if (!current.token && envToken) {
+    } else if (envToken && (forceEnvSettings || !current.token) && current.token !== envToken) {
       next.token = envToken;
       changed = true;
     }
 
-    if (!current.hostToken && envHostToken) {
+    if (envHostToken && (forceEnvSettings || !current.hostToken) && current.hostToken !== envHostToken) {
       next.hostToken = envHostToken;
+      changed = true;
+    } else if (forceEnvSettings && !envHostToken && current.hostToken) {
+      // Headless web does not inject the host token into the Vite bundle.
+      // Drop a leftover value from an earlier desktop/dev session so it
+      // cannot keep authorizing host-token routes from the browser.
+      next.hostToken = undefined;
       changed = true;
     }
 
@@ -1831,6 +1924,40 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
         `/workspace/${workspaceId}/mcp`,
         { token, hostToken },
       ),
+    resolveMcpApp: (workspaceId: string, projectedToolName: string) =>
+      requestJson<{ app: OpenworkMcpAppResource | null }>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/mcp-apps/resolve`,
+        {
+          token,
+          hostToken,
+          method: "POST",
+          body: { projectedToolName },
+          timeoutMs: timeouts.config,
+        },
+      ),
+    mcpAppSandbox: (app: OpenworkMcpAppResource, hostOrigin: string): OpenworkMcpAppSandbox => {
+      const url = new URL(`${baseUrl}/mcp-apps/sandbox.html`);
+      if (url.origin === hostOrigin && url.hostname === "localhost") url.hostname = "127.0.0.1";
+      else if (url.origin === hostOrigin && url.hostname === "127.0.0.1") url.hostname = "localhost";
+      url.searchParams.set("csp", JSON.stringify(app.csp));
+      url.searchParams.set("hostOrigin", hostOrigin);
+      return { url: url.toString(), expectedOrigin: url.origin };
+    },
+    callMcpAppTool: (
+      workspaceId: string,
+      payload: { serverName: string; name: string; arguments?: Record<string, unknown> },
+    ) => requestJson<OpenworkMcpAppToolResult>(
+      baseUrl,
+      `/workspace/${encodeURIComponent(workspaceId)}/mcp-apps/call`,
+      {
+        token,
+        hostToken,
+        method: "POST",
+        body: payload,
+        timeoutMs: timeouts.binary,
+      },
+    ),
     getOpenworkCloudMcpHealth: (
       workspaceId: string,
       providerModel?: OpenworkCloudMcpProviderModelContext,
@@ -1902,6 +2029,38 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
         method: "POST",
         body: payload,
       }),
+    addManagedMcp: (
+      workspaceId: string,
+      payload: {
+        name: string;
+        url: string;
+        oauth?: {
+          applicationType?: "native" | "web";
+          requestedScopes?: string[];
+          authorizationServerIssuer?: string;
+          clientId?: string;
+          clientSecret?: string;
+        };
+      },
+    ) =>
+      requestJson<OpenworkManagedMcpStartResult>(baseUrl, `/workspace/${encodeURIComponent(workspaceId)}/mcp/managed`, {
+        token,
+        hostToken,
+        method: "POST",
+        body: payload,
+      }),
+    getManagedMcp: (workspaceId: string, name: string) =>
+      requestJson<OpenworkManagedMcpConnection>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/mcp/${encodeURIComponent(name)}/managed`,
+        { token, hostToken },
+      ),
+    connectManagedMcp: (workspaceId: string, name: string) =>
+      requestJson<OpenworkManagedMcpStartResult>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/mcp/${encodeURIComponent(name)}/managed/connect`,
+        { token, hostToken, method: "POST" },
+      ),
     removeMcp: (workspaceId: string, name: string) =>
       requestJson<{ items: OpenworkMcpItem[] }>(baseUrl, `/workspace/${workspaceId}/mcp/${encodeURIComponent(name)}`, {
         token,

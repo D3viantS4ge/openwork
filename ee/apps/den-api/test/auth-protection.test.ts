@@ -48,14 +48,14 @@ test("email password sign-in parsing normalizes the account identifier", async (
     method: "POST",
   })
 
-  await expect(authProtection.readEmailPasswordSignInAttempt(request)).resolves.toEqual({
+  await expect(authProtection.readEmailSignInAttempt(request)).resolves.toEqual({
     email: "user@example.com",
   })
 
   const ignored = new Request("http://den.local/api/auth/sign-in/social", {
     method: "POST",
   })
-  await expect(authProtection.readEmailPasswordSignInAttempt(ignored)).resolves.toBeNull()
+  await expect(authProtection.readEmailSignInAttempt(ignored)).resolves.toBeNull()
 })
 
 test("breached password screening reads password fields only on password creation routes", async () => {
@@ -155,6 +155,60 @@ test("short password response rejects passwords below the minimum length on crea
     method: "POST",
   })
   await expect(authProtection.getShortPasswordResponse(signIn)).resolves.toBeNull()
+})
+
+test("weak password response rejects low-strength signup passwords with feedback", async () => {
+  const weak = new Request("http://den.local/api/auth/sign-up/email", {
+    body: JSON.stringify({ email: "user@example.com", name: "Example User", password: "aaaaaaaa" }),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  })
+  const rejected = await authProtection.getWeakPasswordResponse(weak)
+  expect(rejected?.status).toBe(400)
+  await expect(rejected?.json()).resolves.toMatchObject({
+    error: "password_too_weak",
+    message: "Repeated characters like \"aaa\" are easy to guess.",
+    feedback: {
+      warning: "Repeated characters like \"aaa\" are easy to guess.",
+      suggestions: [
+        "Add more words that are less common.",
+        "Avoid repeated words and characters.",
+      ],
+    },
+  })
+
+  const commonPattern = new Request("http://den.local/api/auth/sign-up/email", {
+    body: JSON.stringify({ email: "user@example.com", name: "Example User", password: "Password1*" }),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  })
+  const predictable = await authProtection.getWeakPasswordResponse(commonPattern)
+  expect(predictable?.status).toBe(400)
+  await expect(predictable?.json()).resolves.toMatchObject({
+    error: "password_too_weak",
+    message: "This is similar to a commonly used password.",
+    feedback: {
+      warning: "This is similar to a commonly used password.",
+      suggestions: [
+        "Add more words that are less common.",
+        "Capitalize more than the first letter.",
+      ],
+    },
+  })
+
+  const strong = new Request("http://den.local/api/auth/sign-up/email", {
+    body: JSON.stringify({ email: "user@example.com", name: "Example User", password: "correct horse battery staple" }),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  })
+  await expect(authProtection.getWeakPasswordResponse(strong)).resolves.toBeNull()
+
+  const signIn = new Request("http://den.local/api/auth/sign-in/email", {
+    body: JSON.stringify({ email: "user@example.com", password: "aaaaaaaa" }),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  })
+  await expect(authProtection.getWeakPasswordResponse(signIn)).resolves.toBeNull()
 })
 
 test("breached password response can skip screening for isolated deployments", async () => {

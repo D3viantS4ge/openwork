@@ -1,12 +1,9 @@
-import { automationsEnglish } from "./automations";
-
 /**
  * Catalan translations (Català)
  * Professional terms (Skills, Plugins, Commands, Sessions, OpenCode, OpenPackage, OpenWork) are NOT translated
  */
 
 export default {
-  ...automationsEnglish,
   "app.compact_command_desc": "Resumeix aquesta sessió per reduir la mida del context.",
   "app.error_audit_load": "No s'ha pogut carregar el registre d'auditoria.",
   "app.error_auth_failed": "L'autenticació ha fallat",
@@ -636,6 +633,10 @@ export default {
   "session.redo_aria_label": "Refeix l'últim missatge revertit",
   "session.redo_label": "Refer",
   "session.redo_title": "Refeix l'últim missatge revertit",
+  "session.reverted_messages_hidden": "Hi ha {count} missatges anteriors ocults",
+  "session.restore": "Restaura",
+  "session.restoring": "Restaurant...",
+  "session.restore_failed": "No s'han pogut restaurar els missatges ocults. Torna-ho a provar.",
   "session.rename_description": "Actualitza el nom d'aquesta sessió.",
   "session.rename_label": "Nom de la sessió",
   "session.rename_placeholder": "Introdueix un nom nou",

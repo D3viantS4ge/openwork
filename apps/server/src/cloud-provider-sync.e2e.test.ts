@@ -92,6 +92,26 @@ function buildProvider(models: FakeModel[]): FakeProvider {
   };
 }
 
+// Declares credential env vars but carries no credential: materialization
+// must skip it — and must say so in status.skippedProviders instead of
+// dropping it silently.
+function buildProviderWithoutCredential(): FakeProvider {
+  return {
+    id: "lpr_nocred",
+    providerId: "anthropic",
+    name: "No Credential Provider",
+    source: "custom",
+    updatedAt: "2026-08-04T10:00:00.000Z",
+    providerConfig: {
+      env: ["NOCRED_PROVIDER_API_KEY"],
+      npm: "@ai-sdk/anthropic",
+    },
+    apiKey: "",
+    apiKeys: null,
+    models: [{ id: "nocred-model", name: "No Cred Model", config: {} }],
+  };
+}
+
 function serverConfig(root: string, engineBaseUrl: string): ServerConfig {
   return {
     host: "127.0.0.1",
@@ -228,6 +248,12 @@ describe("cloud provider sync gateway", () => {
       fetch(request) {
         const url = new URL(request.url);
         engineRequests.push(`${request.method} ${url.pathname}`);
+        // An idle engine: the reload guard's busy probe reads /session/status,
+        // and a catch-all {ok:true} body parses as a non-idle session, which
+        // would silently defer every reload in this test.
+        if (request.method === "GET" && url.pathname === "/session/status") {
+          return Response.json({});
+        }
         return Response.json({ ok: true });
       },
     });
@@ -239,6 +265,7 @@ describe("cloud provider sync gateway", () => {
         { id: "model-z", name: "Model Z", config: { reasoning: true } },
         { id: "model-a", name: "Model A", config: { family: "test" } },
       ]),
+      buildProviderWithoutCredential(),
     ];
     const denRequests: Array<{ path: string; authorization: string | null; orgId: string | null }> = [];
     const den = Bun.serve({
@@ -274,6 +301,12 @@ describe("cloud provider sync gateway", () => {
         marketplaces: { mkp_keep: { name: "Keep" } },
       },
     }));
+    // Simulate an upgrade/restart after an older process persisted the cloud
+    // credential. The next sync sees the same value, performs no upsert, and
+    // must still reclaim ownership so logout removes it.
+    await new EnvService({ path: process.env.OPENWORK_ENV_STORE }).upsertMany([
+      { key: "TEST_PROVIDER_API_KEY", value: "sk-test-provider" },
+    ]);
 
     const server = await startServer(config);
     stops.push(() => server.stop());
@@ -312,6 +345,15 @@ describe("cloud provider sync gateway", () => {
     });
     expect(typeof statusProvider.importedAt).toBe("number");
     const firstImportedAt = statusProvider.importedAt;
+    // The credential-less provider is skipped — loudly, with a reason.
+    expect(firstStatus.skippedProviders).toEqual([{
+      cloudProviderId: "lpr_nocred",
+      providerId: "lpr_nocred",
+      name: "No Credential Provider",
+      reason: "missing_credentials",
+    }]);
+    // The idle engine accepted the reload, so no reload is still owed.
+    expect(firstStatus.reloadPending).toBe(false);
 
     expect(denRequests.every((request) => request.authorization === "Bearer den-token")).toBe(true);
     expect(denRequests.every((request) => request.orgId === "org_test")).toBe(true);
@@ -344,6 +386,8 @@ describe("cloud provider sync gateway", () => {
     const updatedStatus = await responseRecord(updatedStatusResponse, "updated status");
     const updatedProviders = Array.isArray(updatedStatus.providers) ? updatedStatus.providers : [];
     expect(expectRecord(updatedProviders[0], "updated provider status").importedAt).toBe(firstImportedAt);
+    // The skipped provider left the Den grant list, so the skip entry clears.
+    expect(updatedStatus.skippedProviders).toEqual([]);
 
     denProviders = [];
     expect(await runSync(base, "provider-removed")).toEqual({ status: "applied" });
@@ -364,6 +408,8 @@ describe("cloud provider sync gateway", () => {
       hasSession: false,
       lastRun: null,
       providers: [],
+      reloadPending: false,
+      skippedProviders: [],
     });
     expect(engineRequests).toContain("DELETE /auth/lpr_test");
     expect(await runSync(base, "after-delete")).toEqual({ status: "no_session" });

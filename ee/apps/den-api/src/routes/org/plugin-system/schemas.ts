@@ -550,6 +550,26 @@ export const libraryItemSchema = z.discriminatedUnion("type", [
     connectedAt: nullableTimestampSchema,
     edges: z.array(effectiveAccessEdgeSchema),
   }),
+  z.object({
+    type: z.literal("program"),
+    id: configObjectIdSchema,
+    plugin: z.object({ id: pluginIdSchema, name: z.string().trim().min(1).max(255) }).nullable(),
+    name: z.string().trim().min(1).max(255),
+    description: nullableStringSchema,
+    role: accessRoleSchema,
+    edges: z.array(effectiveAccessEdgeSchema),
+    state: z.enum(["ready", "needs_signin", "needs_admin_setup"]),
+    resultState: z.enum(["never_run", "fresh", "stale", "needs_attention"]),
+    latestSuccessfulAt: nullableTimestampSchema,
+    viewState: z.enum(["default", "custom_active", "build_failed", "retired"]),
+    activeViewTitle: nullableStringSchema,
+    automationCount: z.number().int().nonnegative(),
+    source: z.object({
+      kind: z.enum(["created", "installed_template"]),
+      templateName: z.string().trim().min(1).max(255).optional(),
+      templateVersion: z.string().trim().min(1).max(100).optional(),
+    }),
+  }),
 ]).meta({ ref: "PluginArchLibraryItem" })
 
 export const meLibraryListResponseSchema = z.object({

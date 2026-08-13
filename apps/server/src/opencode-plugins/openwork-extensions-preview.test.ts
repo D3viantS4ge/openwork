@@ -217,6 +217,75 @@ function startFakeOpenWorkServer() {
   return { requests };
 }
 
+describe("OpenWorkExtensionsPreview MCP Apps result preservation", () => {
+  test("keeps standard MCP UI result fields in completed tool metadata", async () => {
+    const plugin = await OpenWorkExtensionsPreview();
+    const output: Record<string, unknown> = {
+      content: [{ type: "text", text: "Fallback" }],
+      structuredContent: { value: 42 },
+      _meta: { receiptId: "receipt_1" },
+    };
+
+    await plugin["tool.execute.after"]?.(
+      { tool: "fixture_render", sessionID: "ses_1", callID: "call_1", args: {} },
+      output,
+    );
+
+    expect(output.metadata).toEqual({
+      openworkMcpApp: {
+        content: [{ type: "text", text: "Fallback" }],
+        structuredContent: { value: 42 },
+        _meta: { receiptId: "receipt_1" },
+      },
+    });
+  });
+
+  test("preserves content-only MCP results so their tool definition can resolve a view", async () => {
+    const plugin = await OpenWorkExtensionsPreview();
+    const output: Record<string, unknown> = {
+      content: [{ type: "text", text: "Fallback only" }],
+    };
+
+    await plugin["tool.execute.after"]?.(
+      { tool: "fixture_render", sessionID: "ses_1", callID: "call_1", args: {} },
+      output,
+    );
+
+    expect(output.metadata).toEqual({
+      openworkMcpApp: {
+        content: [{ type: "text", text: "Fallback only" }],
+      },
+    });
+  });
+
+  test("leaves ordinary tool results untouched", async () => {
+    const plugin = await OpenWorkExtensionsPreview();
+    const output: Record<string, unknown> = { title: "Read", output: "plain", metadata: { retained: true } };
+
+    await plugin["tool.execute.after"]?.(
+      { tool: "read", sessionID: "ses_1", callID: "call_1", args: {} },
+      output,
+    );
+
+    expect(output).toEqual({ title: "Read", output: "plain", metadata: { retained: true } });
+  });
+
+  test("does not duplicate oversized MCP results into session metadata", async () => {
+    const plugin = await OpenWorkExtensionsPreview();
+    const output: Record<string, unknown> = {
+      content: [{ type: "text", text: "x".repeat(1024 * 1024) }],
+      metadata: { retained: true },
+    };
+
+    await plugin["tool.execute.after"]?.(
+      { tool: "fixture_render", sessionID: "ses_1", callID: "call_1", args: {} },
+      output,
+    );
+
+    expect(output.metadata).toEqual({ retained: true });
+  });
+});
+
 describe("OpenWorkExtensionsPreview session tools", () => {
   test("plugin entry exposes only the factory export for the OpenCode loader", () => {
     expect(Object.keys(OpenWorkExtensionsPreviewEntry)).toEqual(["OpenWorkExtensionsPreview"]);

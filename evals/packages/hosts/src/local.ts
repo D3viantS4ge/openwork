@@ -662,8 +662,18 @@ async function clearStaleSurfaces(rootDir: string, log: (message: string) => voi
       // segfaults instead of opening a window.
       if (insideContainerSandbox() && (env.DISPLAY ?? "").trim().length === 0) env.DISPLAY = ":99";
       const logPath = join(profileRoot, "electron.log");
-      log(`Starting local Electron surface ${name} (Vite :${port}, CDP :${cdpPort})...`);
-      const spawned = spawnDetached(pnpmCommand(), ["dev:electron"], { cwd: options.repoRoot, env, logPath });
+      const packagedBinary = process.env.OPENWORK_EVAL_ELECTRON_BINARY?.trim();
+      let spawned: SpawnedDetached;
+      if (packagedBinary) {
+        await access(packagedBinary, constants.F_OK).catch(() => {
+          throw new Error(`OPENWORK_EVAL_ELECTRON_BINARY does not exist: ${packagedBinary}`);
+        });
+        log(`Starting local Electron surface ${name} from packaged binary ${packagedBinary} (CDP :${cdpPort})...`);
+        spawned = spawnDetached(packagedBinary, [], { cwd: options.repoRoot, env, logPath });
+      } else {
+        log(`Starting local Electron surface ${name} (Vite :${port}, CDP :${cdpPort})...`);
+        spawned = spawnDetached(pnpmCommand(), ["dev:electron"], { cwd: options.repoRoot, env, logPath });
+      }
       const cdpUrl = `http://127.0.0.1:${cdpPort}`;
       try {
         await waitForCdpOrExit("Electron", cdpUrl, spawned, logPath, true);

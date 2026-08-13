@@ -26,6 +26,8 @@ export interface SeenFacts {
   why: string;
   model: string;
   cached: boolean;
+  deferred?: boolean;
+  pendingExpectations?: string[];
 }
 
 export interface VisionRequest {
@@ -36,6 +38,7 @@ export interface VisionRequest {
 
 export interface ValidateOptions {
   ask?: (req: VisionRequest) => Promise<string>;
+  bypassCache?: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -125,6 +128,9 @@ function providerJson(raw: string, provider: string): unknown {
 async function askOpenAi(req: VisionRequest, key: string): Promise<string> {
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
+    // Unbounded vision calls stalled runs for undici's full 300s header
+    // timeout; 120s comfortably covers slow multimodal responses.
+    signal: AbortSignal.timeout(120_000),
     headers: {
       authorization: `Bearer ${key}`,
       "content-type": "application/json",
@@ -157,6 +163,7 @@ async function askOpenAi(req: VisionRequest, key: string): Promise<string> {
 async function askAnthropic(req: VisionRequest, key: string): Promise<string> {
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
+    signal: AbortSignal.timeout(120_000),
     headers: {
       "anthropic-version": "2023-06-01",
       "content-type": "application/json",
@@ -193,7 +200,14 @@ function failureSummary(results: SeenResult[]): string {
     .join("; ")}`;
 }
 
-export async function validate(
+function visionModel(): string {
+  const openAiKey = process.env.OPENAI_API_KEY?.trim() ?? "";
+  const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim() ?? "";
+  return process.env.OPENWORK_EVAL_VISION_MODEL?.trim()
+    || (anthropicKey && !openAiKey ? ANTHROPIC_DEFAULT_MODEL : OPENAI_DEFAULT_MODEL);
+}
+
+export async function judgeVision(
   shot: Shot,
   expectations: string[],
   opts: ValidateOptions = {},
@@ -201,8 +215,7 @@ export async function validate(
   // Vision latency is the main per-frame cost; record it so results show it.
   const openAiKey = process.env.OPENAI_API_KEY?.trim() ?? "";
   const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim() ?? "";
-  const model = process.env.OPENWORK_EVAL_VISION_MODEL?.trim()
-    || (anthropicKey && !openAiKey ? ANTHROPIC_DEFAULT_MODEL : OPENAI_DEFAULT_MODEL);
+  const model = visionModel();
   let ask = opts.ask;
   if (!ask) {
     if (openAiKey) ask = (req) => askOpenAi(req, openAiKey);
@@ -219,14 +232,16 @@ export async function validate(
     .digest("hex");
   const cachePath = join(CACHE_DIR, `${key}.json`);
   let facts: SeenFacts | null = null;
-  try {
-    const cached = JSON.parse(await readFile(cachePath, "utf8"));
-    facts = parseCachedFacts(cached, expectations, model);
-  } catch (error) {
-    if (isRecord(error) && error.code === "ENOENT") {
-      // Cache miss: perform the two independent model requests below.
-    } else {
-      throw error;
+  if (!opts.bypassCache) {
+    try {
+      const cached = JSON.parse(await readFile(cachePath, "utf8"));
+      facts = parseCachedFacts(cached, expectations, model);
+    } catch (error) {
+      if (isRecord(error) && error.code === "ENOENT") {
+        // Cache miss: perform the two independent model requests below.
+      } else {
+        throw error;
+      }
     }
   }
   if (!facts) {
@@ -261,6 +276,31 @@ export async function validate(
     await mkdir(CACHE_DIR, { recursive: true });
     await writeFile(cachePath, `${JSON.stringify(facts, null, 2)}\n`, "utf8");
   }
+  return facts;
+}
+
+export async function validate(
+  shot: Shot,
+  expectations: string[],
+  opts: ValidateOptions = {},
+): Promise<SeenFacts> {
+  // A caller-provided ask is a deterministic witness, not an LLM call, so defer never applies to it.
+  if (!opts.ask && process.env.OPENWORK_EVAL_VISION?.trim() === "defer") {
+    const facts: SeenFacts = {
+      ok: true,
+      description: "",
+      results: [],
+      why: "vision judgment deferred",
+      model: visionModel(),
+      cached: false,
+      deferred: true,
+      pendingExpectations: expectations,
+    };
+    currentTape()?.claim(shot.hash, facts);
+    return facts;
+  }
+
+  const facts = await judgeVision(shot, expectations, opts);
   currentTape()?.claim(shot.hash, facts);
   return facts;
 }

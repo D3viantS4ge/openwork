@@ -55,7 +55,7 @@ import { fetchAgentContextDiagnosticsResponse } from "./agent-context-diagnostic
 import {
   createLinuxDesktopIntegration,
 } from "./linux-desktop-integration.mjs";
-import { createDesktopAutomationRunner } from "./automation-runner.mjs";
+import { createDesktopAutomationRunner, normalizeRunnerBaseUrl } from "./automation-runner.mjs";
 import {
   desktopActivationRequired,
   enterprisePreactivationCommandAllowed,
@@ -72,6 +72,7 @@ import {
   windowsIconFromNativeImage,
 } from "./brand-icon-windows.mjs";
 import { resetMacDockIcon } from "./brand-icon-darwin.mjs";
+import { createDesktopVaultKeyProvider } from "./secure-vault-key.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(__dirname, "../../..");
@@ -1187,8 +1188,24 @@ const runtimeManager = createRuntimeManager({
   app,
   desktopRoot: path.resolve(__dirname, ".."),
   listLocalWorkspacePaths: () => workspaceStore.listLocalWorkspacePaths(),
+  localManagedMcpVaultKey: createDesktopVaultKeyProvider({
+    filePath: path.join(app.getPath("userData"), "local-managed-mcp-vault-key.bin"),
+    loadSafeStorage: () => require("electron").safeStorage,
+  }),
 });
+const initialRunnerBootstrap = workspaceStore.readDesktopBootstrapConfigSync();
+const legacyRunnerBaseUrls = [
+  initialRunnerBootstrap.apiBaseUrl,
+  initialRunnerBootstrap.baseUrl,
+  initialRunnerBootstrap.baseUrl
+    ? `${String(initialRunnerBootstrap.baseUrl).replace(/\/+$/, "")}/api/den`
+    : null,
+  `${DEFAULT_DEN_BASE_URL}/api/den`,
+].map((value) => normalizeRunnerBaseUrl(value)).filter(Boolean);
 const desktopAutomationRunner = createDesktopAutomationRunner({
+  // v1 credentials predate token audiences. Keep them usable during the Den
+  // rollout only for endpoints trusted before the renderer starts issuing IPC.
+  legacyBaseUrls: legacyRunnerBaseUrls,
   getLocalRuntime: async () => {
     const server = await runtimeManager.openworkServerInfo();
     return { baseUrl: server.baseUrl, token: server.clientToken ?? server.ownerToken };
@@ -1257,6 +1274,9 @@ function assertOpenworkServerReady(info) {
 }
 
 async function bootRuntimeForSelectedWorkspace() {
+  if (typeof process.env.OPENWORK_EVAL_FATAL_DESKTOP_BOOTSTRAP_FAILURE === "string") {
+    throw new Error(process.env.OPENWORK_EVAL_FATAL_DESKTOP_BOOTSTRAP_FAILURE);
+  }
   const list = await workspaceStore.readWorkspaceState();
   const selectedId = list.selectedId || list.activeId || list.workspaces[0]?.id || "";
   const workspace = selectedId
@@ -2523,6 +2543,11 @@ const { ensureAutoUpdater } = registerUpdaterIpc({
   manifestChannel: DESKTOP_DISTRIBUTION.flavor === "public"
     ? "latest"
     : DESKTOP_DISTRIBUTION.flavor,
+  electronNet,
+  shell,
+  distribution: DESKTOP_DISTRIBUTION.flavor,
+  platform: process.platform,
+  arch: process.arch,
 });
 
 if (!app.requestSingleInstanceLock()) {
@@ -2578,7 +2603,6 @@ or use: pnpm dev:worktree`);
     }).catch((error) => {
       console.warn("[nuke] pending cleanup failed", error);
     });
-    await workspaceStore.importBundledDesktopBootstrapConfigIfPreferred();
     const bootstrapConfig = await workspaceStore.getDesktopBootstrapConfig();
     currentDisplayAppName = applyBrandAppName(
       DESKTOP_DISTRIBUTION.flavor === "enterprise"

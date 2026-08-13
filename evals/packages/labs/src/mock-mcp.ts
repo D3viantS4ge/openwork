@@ -37,6 +37,7 @@ export interface MockMcpHandle {
    * calls and returns before this run's calls ever arrive.
    */
   toolCalls(opts?: { name?: string; timeoutMs?: number; atLeast?: number; sinceIso?: string }): Promise<MockToolCall[]>;
+  handshakes(opts?: { timeoutMs?: number; atLeast?: number; sinceIso?: string }): Promise<MockAuthorizeRequest[]>;
   configureOAuthRedirectUris(redirectUris: readonly string[]): Promise<void>;
   resetOAuth(): Promise<void>;
   stop(): Promise<void>;
@@ -49,6 +50,7 @@ export interface StartMockMcpOptions {
   publicUrl?: string;
   profileId?: EnterpriseMcpProfileId;
   oauthClientSecret?: string;
+  allowUnauthenticatedMcp?: boolean;
 }
 
 export type EnterpriseMcpProfileId =
@@ -95,7 +97,7 @@ async function waitForHealth(url: string, output: () => string, child: ChildProc
       throw new Error(`Mock OAuth+MCP server exited before becoming healthy. Output: ${output().slice(-1_000)}`);
     }
     try {
-      const response = await fetch(`${url}/health`);
+      const response = await fetch(`${url}/health`, { signal: AbortSignal.timeout(10_000) });
       const body: unknown = await response.json().catch(() => null);
       if (response.ok && isRecord(body) && body.ok === true) {
         if (Object.hasOwn(body, "autoApprove") && body.autoApprove === false) {
@@ -120,7 +122,7 @@ async function waitForEnterpriseHealth(url: string, output: () => string, child:
       throw new Error(`Enterprise MCP mock exited before becoming healthy. Output: ${output().slice(-1_000)}`);
     }
     try {
-      const response = await fetch(`${url}/health`);
+      const response = await fetch(`${url}/health`, { signal: AbortSignal.timeout(10_000) });
       const body: unknown = await response.json().catch(() => null);
       if (response.ok && isRecord(body) && body.status === "ok" && typeof body.mcpUrl === "string") {
         return body.mcpUrl;
@@ -224,6 +226,10 @@ async function startEnterpriseProfileMock(options: StartMockMcpOptions): Promise
       if ((opts.atLeast ?? 0) > 0) await sleep(opts.timeoutMs ?? 120_000);
       return [];
     },
+    async handshakes(opts = {}) {
+      if ((opts.atLeast ?? 0) > 0) await sleep(opts.timeoutMs ?? 120_000);
+      return [];
+    },
     async authorizeRequestSince(iso) {
       throw new Error(`Enterprise profile request logs do not retain OAuth query parameters after ${iso}.`);
     },
@@ -259,6 +265,7 @@ export async function startMockMcp(options: StartMockMcpOptions = {}): Promise<M
         PORT: String(port),
         ISSUER: url,
         AUTO_APPROVE: "1",
+        ...(options.allowUnauthenticatedMcp ? { MOCK_ALLOW_UNAUTHENTICATED_MCP: "1" } : {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -273,7 +280,7 @@ export async function startMockMcp(options: StartMockMcpOptions = {}): Promise<M
   await waitForHealth(url, () => output, child);
 
   const requests = async (): Promise<MockAuthorizeRequest[]> => {
-    const response = await fetch(`${url}/requests`);
+    const response = await fetch(`${url}/requests`, { signal: AbortSignal.timeout(15_000) });
     const body: unknown = await response.json().catch(() => null);
     if (!response.ok) throw new Error(`Mock request log failed: HTTP ${response.status} ${JSON.stringify(body).slice(0, 500)}`);
     return parseRequests(body);
@@ -285,7 +292,7 @@ export async function startMockMcp(options: StartMockMcpOptions = {}): Promise<M
   };
 
   const rawEntries = async (): Promise<Record<string, unknown>[]> => {
-    const response = await fetch(`${url}/requests`);
+    const response = await fetch(`${url}/requests`, { signal: AbortSignal.timeout(15_000) });
     const body: unknown = await response.json().catch(() => null);
     if (!response.ok) throw new Error(`Mock request log failed: HTTP ${response.status}`);
     return isRecord(body) && Array.isArray(body.requests) ? body.requests.filter(isRecord) : [];
@@ -311,6 +318,17 @@ export async function startMockMcp(options: StartMockMcpOptions = {}): Promise<M
     return calls;
   };
 
+  const readHandshakes = async (sinceIso?: string): Promise<MockAuthorizeRequest[]> => {
+    const handshakes: MockAuthorizeRequest[] = [];
+    for (const entry of await rawEntries()) {
+      if (!Array.isArray(entry.rpcMethods) || !entry.rpcMethods.includes("initialize")) continue;
+      const request = parseRequest(entry);
+      if (!request || (sinceIso && request.at < sinceIso)) continue;
+      handshakes.push(request);
+    }
+    return handshakes;
+  };
+
   return {
     url,
     mcpUrl: `${url}/mcp`,
@@ -324,9 +342,26 @@ export async function startMockMcp(options: StartMockMcpOptions = {}): Promise<M
       let calls = await readToolCalls(opts.name, opts.sinceIso);
       while (calls.length < wanted && Date.now() < deadline) {
         await sleep(1_000);
-        calls = await readToolCalls(opts.name, opts.sinceIso);
+        // A slow or aborted log read is a retryable poll attempt, not the
+        // verdict; only the deadline decides.
+        calls = await readToolCalls(opts.name, opts.sinceIso).catch(() => calls);
       }
       return calls;
+    },
+    async handshakes(opts = {}) {
+      const wanted = opts.atLeast ?? 0;
+      if (wanted <= 0) return readHandshakes(opts.sinceIso);
+      const deadline = Date.now() + (opts.timeoutMs ?? 120_000);
+      let handshakes: MockAuthorizeRequest[] = [];
+      while (handshakes.length < wanted && Date.now() < deadline) {
+        try {
+          handshakes = await readHandshakes(opts.sinceIso);
+        } catch {
+          // A bounded request-log read can fail transiently while a remote mock recovers.
+        }
+        if (handshakes.length < wanted) await sleep(1_000);
+      }
+      return handshakes;
     },
     async authorizeRequestSince(iso, opts = {}) {
       const deadline = Date.now() + (opts.timeoutMs ?? 60_000);

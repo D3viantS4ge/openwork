@@ -19,6 +19,7 @@ export interface BootedMock {
 export interface MockBoot {
   boot(place: Place): Promise<BootedMock>;
   daytonaPort?: number;
+  allowUnauthenticatedMcp?: boolean;
   connect?(publicUrl: string): Promise<BootedMock>;
 }
 
@@ -52,6 +53,7 @@ export function mcpMock(options: StartMockMcpOptions = {}): MockBoot {
   if (options.profileId) return { boot };
   return {
     daytonaPort: options.port ?? 3979,
+    ...(options.allowUnauthenticatedMcp ? { allowUnauthenticatedMcp: true } : {}),
     async connect(publicUrl) {
       const handle = await startMockMcp({ ...options, publicUrl });
       return {

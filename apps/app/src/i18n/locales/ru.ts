@@ -1,12 +1,9 @@
-import { automationsEnglish } from "./automations";
-
 /**
  * Russian translations
  * Product terms like OpenWork, OpenCode, OpenPackage, Skills, Plugins, Commands, Sessions, and MCP stay as project terminology where needed.
  */
 
 export default {
-  ...automationsEnglish,
   "app.compact_command_desc": "Сведите этот сеанс в компактный вид, чтобы уменьшить размер контекста.",
   "app.error_audit_load": "Не удалось загрузить журнал аудита.",
   "app.error_auth_failed": "Ошибка аутентификации",
@@ -548,6 +545,10 @@ export default {
   "session.redo_aria_label": "Повторить последнее отмененное сообщение",
   "session.redo_label": "Повторить",
   "session.redo_title": "Повторить последнее отмененное сообщение",
+  "session.reverted_messages_hidden": "Скрыто предыдущих сообщений: {count}",
+  "session.restore": "Восстановить",
+  "session.restoring": "Восстановление...",
+  "session.restore_failed": "Не удалось восстановить скрытые сообщения. Попробуйте еще раз.",
   "session.rename_description": "Обновите имя для этого сеанса.",
   "session.rename_label": "Имя сеанса",
   "session.rename_placeholder": "Введите новое имя",

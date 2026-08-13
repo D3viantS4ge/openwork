@@ -76,7 +76,9 @@ async function canConnect(port: number, host: string): Promise<boolean> {
       socket.destroy();
       resolve(open);
     };
-    socket.setTimeout(750);
+    // 750ms missed Docker Desktop's lazy port-proxy under load and skipped
+    // specs that should have run; 2.5s keeps the probe honest without stalling.
+    socket.setTimeout(2_500);
     socket.once("connect", () => done(true));
     socket.once("error", () => done(false));
     socket.once("timeout", () => done(false));
@@ -84,7 +86,21 @@ async function canConnect(port: number, host: string): Promise<boolean> {
 }
 
 export async function localMysqlIsRunning(): Promise<boolean> {
-  return canConnect(3306, "127.0.0.1");
+  // Probe the same MySQL the run will actually use: OPENWORK_EVAL_MYSQL_URL
+  // overrides the default, so the probe must honor it too.
+  const url = new URL(process.env.OPENWORK_EVAL_MYSQL_URL?.trim() || DEFAULT_MYSQL_URL);
+  const port = url.port ? Number(url.port) : 3306;
+  return canConnect(port, url.hostname || "127.0.0.1");
+}
+
+/**
+ * den-api's dev script defaults DATABASE_REDIS_URL to redis://127.0.0.1:6379
+ * (root package.json, `${DATABASE_REDIS_URL:-...}`), and since #3679 its cached
+ * auth reads retry against that endpoint. An unreachable Redis therefore stalls
+ * sign-in instead of failing, so local lanes gate on it the way they gate MySQL.
+ */
+export async function localRedisIsRunning(): Promise<boolean> {
+  return canConnect(6379, "127.0.0.1");
 }
 
 class LocalPlace implements Place {

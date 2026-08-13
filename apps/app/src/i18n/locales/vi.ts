@@ -1,12 +1,9 @@
-import { automationsEnglish } from "./automations";
-
 /**
  * Tiếng Việt translations
  * Thuật ngữ chuyên môn KHÔNG dịch: Skills, Plugins, Commands, Sessions, OpenCode, OpenPackage, OpenWork, MCPs, OAuth, MCP
  */
 
 export default {
-  ...automationsEnglish,
   "app.compact_command_desc": "Tóm tắt phiên này để giảm kích thước ngữ cảnh.",
   "app.error_audit_load": "Tải nhật ký kiểm toán thất bại.",
   "app.error_auth_failed": "Xác thực thất bại",
@@ -629,6 +626,10 @@ export default {
   "session.redo_aria_label": "Làm lại tin nhắn đã hoàn tác",
   "session.redo_label": "Làm lại",
   "session.redo_title": "Làm lại tin nhắn đã hoàn tác",
+  "session.reverted_messages_hidden": "{count} tin nhắn trước đó đang bị ẩn",
+  "session.restore": "Khôi phục",
+  "session.restoring": "Đang khôi phục...",
+  "session.restore_failed": "Không thể khôi phục các tin nhắn bị ẩn. Hãy thử lại.",
   "session.rename_description": "Cập nhật tên cho phiên này.",
   "session.rename_label": "Tên phiên",
   "session.rename_placeholder": "Nhập tên mới",

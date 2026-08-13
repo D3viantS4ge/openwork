@@ -8,6 +8,7 @@ export default defineConfig({
     "openwork-context": "src/openwork-context.ts",
     "openwork-provider": "src/openwork-provider.ts",
     "automations": "src/automations.ts",
+    "dynamic-artifacts": "src/dynamic-artifacts.ts",
     "den/desktop-app-restrictions": "src/den/desktop-app-restrictions.ts",
     "den/desktop-policies": "src/den/desktop-policies.ts",
     "den/connect-diagnostics": "src/den/connect-diagnostics.ts",

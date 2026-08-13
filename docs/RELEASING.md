@@ -69,7 +69,62 @@ tag/dev divergence; the release waits on review latency.
 - **A tagged version turned out to be defective before publish**: leave the
   release as a draft or delete it (`gh release delete vX.Y.Z`), fix forward,
   and cut the next patch. If the bad version reached npm, deprecate it:
-  `npm deprecate openwork-server@X.Y.Z "<reason — use X.Y.Z+1>"`.
+  `npm deprecate openwork-server@X.Y.Z "<reason — use X.Y.Z+1>"`. If the
+  release was published, follow
+  [Rolling back a published release](#rolling-back-a-published-release).
+
+## Rolling back a published release
+
+Use this flow when a bad version is **published** and marked Latest.
+
+### 1. Stop the bleed
+
+Dry-run first, then execute:
+
+```bash
+pnpm release:rollback
+pnpm release:rollback --bad vX.Y.Z --execute
+```
+
+Always pin `--bad` when executing: after a successful rollback the *good*
+release is Latest, so a bare re-run would select it as bad.
+
+By default, the script selects the current Latest release as bad and the
+newest lower published stable release as last good. It re-points Latest,
+demotes the bad release to prerelease, and prepends a warning to its notes.
+Use `--bad vX.Y.Z --to vX.Y.Z` to override selection. This protects only
+clients that have not updated yet.
+
+### 2. Reissue for updated clients
+
+Updaters refuse downgrades. Cut the next patch **from the last-good tag**, not
+from `dev`, which still contains the bad code:
+
+```bash
+git worktree add <tmp> <to-tag>
+cd <tmp>
+pnpm release:prepare  # must bump to a version higher than the bad release
+pnpm release:ship
+```
+
+Use the tag-first path (admins only). Review and merge the backfill PR per the
+existing flow. The org install door pin (`ee/apps/den-api` generated
+`PUBLISHED_DESKTOP_VERSIONS`) moves only with this reissue.
+
+### 3. Deprecate npm
+
+```bash
+npm deprecate openwork-server@<bad-version> "rolled back — use <next>"
+```
+
+| Client state | Recovery |
+| --- | --- |
+| Not yet updated | Fixed by step 1 |
+| Already updated | Fixed only by step 2 |
+
+Revert the offending PR on `dev` through the normal reviewed-PR flow (or the
+revert fast lane, when available). That cleanup is not in the critical path
+of user recovery.
 
 ## What blocks publishing (and what doesn't)
 

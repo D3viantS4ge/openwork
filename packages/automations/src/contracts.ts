@@ -11,7 +11,8 @@ function canonical(value: unknown): string {
 
 /** Portable stable digest; persistence may additionally use a cryptographic digest. */
 export function automationRevisionDigest(
-  revision: Pick<AutomationRevision, "instructions" | "schedule" | "model" | "maximumRuntimeMs">,
+  revision: Pick<AutomationRevision, "instructions" | "schedule" | "model" | "maximumRuntimeMs">
+    & Partial<Pick<AutomationRevision, "action" | "executionTarget">>,
 ): string {
   const input = canonical(revision)
   let left = 0x811c9dc5

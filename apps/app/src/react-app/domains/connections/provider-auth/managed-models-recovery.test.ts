@@ -8,6 +8,7 @@ declare const expect: (value: unknown) => {
 import { readFileSync } from "node:fs";
 
 import {
+  isManagedModelAvailabilityPending,
   isOrganizationModelsEmpty,
   refreshOrganizationModels,
   shouldAutoOpenUnavailableModelPicker,
@@ -39,6 +40,42 @@ describe("managed model sync ordering", () => {
       workspaceId: "workspace-1",
       activeOrgId: "org-1",
       cloudProviderSyncReady: true,
+    })).toBe(false);
+  });
+
+  test("keeps a selected cloud model loading through provider sync and workspace reload", () => {
+    expect(isManagedModelAvailabilityPending({
+      signedIn: true,
+      selectedModelUsesCloudProvider: true,
+      cloudProviderSyncReady: false,
+      openWorkModelsSyncing: false,
+    })).toBe(true);
+    expect(isManagedModelAvailabilityPending({
+      signedIn: true,
+      selectedModelUsesCloudProvider: true,
+      cloudProviderSyncReady: true,
+      openWorkModelsSyncing: true,
+    })).toBe(true);
+    expect(isManagedModelAvailabilityPending({
+      signedIn: true,
+      selectedModelUsesCloudProvider: true,
+      cloudProviderSyncReady: true,
+      openWorkModelsSyncing: false,
+    })).toBe(false);
+  });
+
+  test("does not hide a genuinely unavailable local or signed-out model behind loading", () => {
+    expect(isManagedModelAvailabilityPending({
+      signedIn: true,
+      selectedModelUsesCloudProvider: false,
+      cloudProviderSyncReady: false,
+      openWorkModelsSyncing: true,
+    })).toBe(false);
+    expect(isManagedModelAvailabilityPending({
+      signedIn: false,
+      selectedModelUsesCloudProvider: true,
+      cloudProviderSyncReady: false,
+      openWorkModelsSyncing: true,
     })).toBe(false);
   });
 });

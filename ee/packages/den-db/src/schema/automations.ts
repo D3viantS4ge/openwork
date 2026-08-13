@@ -1,13 +1,20 @@
 import { relations, sql } from "drizzle-orm"
 import { bigint, index, int, json, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core"
 import type {
+  AutomationAction,
   AutomationError,
   AutomationNeedsAttentionReason,
   AutomationRunEventType,
   AutomationSchedule,
   AutomationUsage,
 } from "@openwork/types/automations"
-import { compatJsonColumn, denTypeIdColumn, encryptedMediumTextColumn, timestamps } from "../columns"
+import { compatJsonColumn, denTypeIdColumn, encryptedColumn, encryptedMediumTextColumn, timestamps } from "../columns"
+
+const encryptedJsonColumn = <TData>(name: string) => encryptedColumn<TData>(name, {
+  dataType: "mediumtext",
+  serialize: JSON.stringify,
+  deserialize: JSON.parse,
+})
 
 const automationStates = ["active", "inactive", "needs_attention", "archived"] as const
 const runTriggers = ["scheduled", "recovery", "manual"] as const
@@ -28,6 +35,8 @@ export const AutomationTable = mysqlTable(
     next_due_at: timestamp("next_due_at", { fsp: 3 }),
     latest_run_at: timestamp("latest_run_at", { fsp: 3 }),
     needs_attention_reason: compatJsonColumn<AutomationNeedsAttentionReason | null>("needs_attention_reason"),
+    latest_successful_run_id: denTypeIdColumn("automationRun", "latest_successful_run_id"),
+    latest_successful_result: encryptedJsonColumn<unknown>("latest_successful_result"),
     archived_at: timestamp("archived_at", { fsp: 3 }),
     ...timestamps,
   },
@@ -50,14 +59,14 @@ export const AutomationRevisionTable = mysqlTable(
     provider_id: varchar("provider_id", { length: 160 }).notNull(),
     model_id: varchar("model_id", { length: 240 }).notNull(),
     model_variant: varchar("model_variant", { length: 60 }),
-    execution_target: mysqlEnum("execution_target", ["desktop"]).notNull().default("desktop"),
+    action: encryptedJsonColumn<AutomationAction>("action"),
+    execution_target: mysqlEnum("execution_target", ["desktop", "cloud"]).notNull().default("desktop"),
     maximum_runtime_ms: int("maximum_runtime_ms").notNull(),
     digest: varchar("digest", { length: 128 }).notNull(),
     created_at: timestamp("created_at", { fsp: 3 }).notNull().default(sql`CURRENT_TIMESTAMP(3)`),
   },
   (table) => [
     uniqueIndex("automation_revision_version").on(table.automation_id, table.version),
-    uniqueIndex("automation_revision_digest").on(table.automation_id, table.digest),
   ],
 )
 
@@ -90,7 +99,7 @@ export const AutomationRunTable = mysqlTable(
     scheduled_for: timestamp("scheduled_for", { fsp: 3 }),
     idempotency_key: varchar("idempotency_key", { length: 512 }).notNull(),
     status: mysqlEnum("status", runStatuses).notNull().default("queued"),
-    execution_target: mysqlEnum("execution_target", ["desktop"]).notNull().default("desktop"),
+    execution_target: mysqlEnum("execution_target", ["desktop", "cloud"]).notNull().default("desktop"),
     claim_deadline_at: timestamp("claim_deadline_at", { fsp: 3 }),
     lease_owner: varchar("lease_owner", { length: 240 }),
     lease_expires_at: timestamp("lease_expires_at", { fsp: 3 }),
@@ -108,6 +117,8 @@ export const AutomationRunTable = mysqlTable(
     finished_at: timestamp("finished_at", { fsp: 3 }),
     error: compatJsonColumn<AutomationError | null>("error"),
     result_summary: text("result_summary"),
+    codemode_receipt_id: denTypeIdColumn("codemodeRun", "codemode_receipt_id"),
+    validated_result: encryptedJsonColumn<unknown>("validated_result"),
     usage: compatJsonColumn<AutomationUsage>("usage").notNull(),
     cancel_requested_at: timestamp("cancel_requested_at", { fsp: 3 }),
     mcp_token_hash: varchar("mcp_token_hash", { length: 128 }),

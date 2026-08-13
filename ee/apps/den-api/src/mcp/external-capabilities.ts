@@ -41,6 +41,12 @@ import {
 } from "./external-mcp-tool-arguments.js"
 import { compareCapabilityMatches, tokenize } from "./search.js"
 import type { CapabilityMatch } from "./search.js"
+import {
+  CODEMODE_EXTERNAL_MCP_CONNECTION_LIMIT,
+  codemodeScriptPath,
+  resolveCodemodeConnectionNamespaceContext,
+  type CodemodeConnectionNamespaceContext,
+} from "./codemode-namespaces.js"
 
 /**
  * Merges org-level External MCP Connections (capability-sources/) into the
@@ -61,7 +67,7 @@ import type { CapabilityMatch } from "./search.js"
  */
 
 const EXTERNAL_CAPABILITY_PREFIX = "mcp:"
-export const EXTERNAL_MCP_SEARCH_CONNECTION_LIMIT = 16
+export const EXTERNAL_MCP_SEARCH_CONNECTION_LIMIT = CODEMODE_EXTERNAL_MCP_CONNECTION_LIMIT
 export const EXTERNAL_MCP_SEARCH_CONCURRENCY = 4
 export const EXTERNAL_MCP_SEARCH_MATCH_LIMIT = 20
 
@@ -629,6 +635,7 @@ async function probeExternalMcpConnection(input: {
   redirectUriBase: string
   limit: number
   deadline: ExternalMcpLifecycleDeadline
+  scriptNamespace?: string
 }): Promise<ExternalCapabilityMatch[]> {
   const matches: ExternalCapabilityMatch[] = []
   const add = (match: ExternalCapabilityMatch) => {
@@ -765,6 +772,7 @@ async function probeExternalMcpConnection(input: {
       argumentsSchema: tool.inputSchema,
       schemaDigest: externalMcpToolSchemaDigest(tool.inputSchema),
       invocation: { argumentsField: "body" },
+      ...(input.scriptNamespace ? { scriptPath: codemodeScriptPath(input.scriptNamespace, tool.name) } : {}),
     })
   }
   return matches
@@ -782,6 +790,8 @@ export async function searchExternalCapabilities(input: {
   query: string
   redirectUriBase: string
   limit?: number
+  includeScriptPaths?: boolean
+  namespaceContext?: CodemodeConnectionNamespaceContext
   reportCoverage?: (coverage: ExternalMcpSearchCoverage) => void
 }): Promise<ExternalCapabilityMatch[]> {
   if (!input.member) return []
@@ -791,11 +801,18 @@ export async function searchExternalCapabilities(input: {
   if (!Number.isFinite(requestedLimit) || requestedLimit <= 0) return []
   const limit = Math.min(Math.max(1, Math.trunc(requestedLimit)), EXTERNAL_MCP_SEARCH_MATCH_LIMIT)
   const deadline = createExternalMcpLifecycleDeadline()
-  const connections = await listUsableExternalMcpConnections({
+  const namespaceContext = input.includeScriptPaths
+    ? input.namespaceContext ?? await resolveCodemodeConnectionNamespaceContext({
+      organizationId: input.organizationId,
+      member: input.member,
+    })
+    : input.namespaceContext
+  const connections = namespaceContext?.externalMcpConnections ?? await listUsableExternalMcpConnections({
     organizationId: normalizeDenTypeId("organization", input.organizationId),
     orgMembershipId: input.member.orgMembershipId,
     teamIds: input.member.teamIds,
   })
+  const scriptNamespaces = input.includeScriptPaths ? namespaceContext?.namespaces.externalMcp : undefined
   const selectedConnections = selectExternalMcpSearchConnections(connections, queryTokens)
   input.reportCoverage?.({
     eligibleConnections: connections.length,
@@ -813,6 +830,7 @@ export async function searchExternalCapabilities(input: {
       redirectUriBase: input.redirectUriBase,
       limit,
       deadline: sharedDeadline,
+      scriptNamespace: scriptNamespaces?.get(connection.id),
     }),
   })
 }

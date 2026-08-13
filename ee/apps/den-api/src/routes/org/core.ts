@@ -9,6 +9,7 @@ import { auth } from "../../auth.js"
 import { verifyBotProtection } from "../../bot-protection.js"
 import { validateBrandIconUrl } from "../../brand-icon-validation.js"
 import { organizationCloudEnabled } from "../../capability-sources/cloud-rollout.js"
+import { codemodeScriptsEnabled } from "../../capability-sources/codemode-rollout.js"
 import { memberFacingMcpConnectionsEnabled } from "../../capability-sources/external-mcp-rollout.js"
 import { organizationInstallLinksEnabled } from "../../capability-sources/install-links-rollout.js"
 import { db } from "../../db.js"
@@ -701,6 +702,7 @@ export function registerOrgCoreRoutes<T extends { Variables: OrgRouteVariables }
           mcpConnections: memberFacingMcpConnectionsEnabled(payload.organization.metadata, {
             gatingEnabled: env.mcpConnectionsGatingEnabled,
           }),
+          codemodeScripts: codemodeScriptsEnabled(payload.organization.metadata),
           installLinks: organizationInstallLinksEnabled(payload.organization.metadata, {
             gatingEnabled: env.installLinksGatingEnabled,
           }),

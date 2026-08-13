@@ -4,6 +4,8 @@ import { delegatedRoute } from "../../middleware/index.js"
 import { registerOrgApiKeyRoutes } from "./api-keys.js"
 import { registerOrgBillingRoutes } from "./billing.js"
 import { registerOrgBrandAssetRoutes } from "./brand-assets.js"
+import { registerOrgCodemodeRunRoutes } from "./codemode-runs.js"
+import { registerOrgCodemodeScriptRoutes } from "./codemode-scripts.js"
 import { LEGACY_ORG_PROXY_HEADER } from "../../middleware/user-organizations.js"
 import type { OrgRouteVariables } from "./shared.js"
 import { registerOrgCoreRoutes } from "./core.js"
@@ -59,6 +61,8 @@ export function registerOrgRoutes<T extends { Variables: OrgRouteVariables & Req
   registerOrgApiKeyRoutes(app)
   registerOrgBillingRoutes(app)
   registerOrgBrandAssetRoutes(app)
+  registerOrgCodemodeRunRoutes(app)
+  registerOrgCodemodeScriptRoutes(app)
   registerOrgDesktopPolicyRoutes(app)
   registerOrgEgressDiagnosticRoutes(app)
   registerOrgInferenceRoutes(app)

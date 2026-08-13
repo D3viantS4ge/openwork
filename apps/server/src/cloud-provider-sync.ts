@@ -46,14 +46,50 @@ export type CloudProviderSyncStatusProvider = {
   importedAt: number;
 };
 
+/**
+ * A Den-granted provider the sync pass could NOT materialize. Skips used to be
+ * silent (the provider simply never appeared in `providers`); every skip now
+ * names itself with a machine-readable reason so a dropped provider is
+ * diagnosable from `GET /cloud-provider-sync/status` alone.
+ */
+export type CloudProviderSyncSkippedProvider = {
+  cloudProviderId: string;
+  providerId: string;
+  name: string;
+  /** Why materialization skipped this provider (e.g. declared env vars but no credential to fill them). */
+  reason: "missing_credentials";
+};
+
+export type CloudProviderSyncRunDetail = {
+  fingerprintChanged: boolean;
+  providerStateChanged: boolean;
+  envUpserts: number;
+  envDeletes: number;
+  cleanupChanged: boolean;
+  cleanupRuntimeChanged: boolean;
+  fileChanged: boolean;
+  reloadDeferred: boolean;
+};
+
 export type CloudProviderSyncStatus = {
   hasSession: boolean;
   lastRun: {
     at: string;
     status: "applied" | "noop" | "failed";
     message?: string;
+    detail?: CloudProviderSyncRunDetail;
   } | null;
   providers: CloudProviderSyncStatusProvider[];
+  /**
+   * True while a managed engine reload is still owed (deferred behind live
+   * sessions or failed and awaiting retry). A provider listed in `providers`
+   * with `reloadPending: true` is materialized on disk but not yet served by
+   * the engine — the "applied but engine empty" gap is visible, not silent.
+   * Additive: old readers ignore it.
+   */
+  reloadPending: boolean;
+  /** Providers granted by Den but skipped by materialization, each with a reason. Additive. */
+  skippedProviders: CloudProviderSyncSkippedProvider[];
 };
 
 type DenProviderModel = {
@@ -93,6 +129,7 @@ type PreparedMaterialization = {
   fingerprint: string;
   providers: MaterializedProvider[];
   envEntries: EnvEntry[];
+  skipped: CloudProviderSyncSkippedProvider[];
 };
 
 type CloudProviderSyncLogger = {
@@ -104,6 +141,13 @@ export type CloudProviderSyncOptions = {
   config: ServerConfig;
   env: EnvService;
   reloadEngine: () => Promise<void>;
+  /**
+   * Reports whether the managed engine currently has non-idle sessions.
+   * When it returns true a pending engine reload is deferred to a later
+   * pass instead of disposing a live instance ("no auto-reload while
+   * sessions are running"). Absent means "unknown" and never blocks.
+   */
+  engineBusy?: () => Promise<boolean>;
   fetchImpl?: typeof globalThis.fetch;
   logger?: CloudProviderSyncLogger;
   intervalMs?: number;
@@ -394,10 +438,23 @@ function buildProviderConfig(provider: DenProviderConnection): JsonRecord {
 
 function prepareMaterialization(providers: DenProviderConnection[]): PreparedMaterialization {
   const materialized: MaterializedProvider[] = [];
+  const skipped: CloudProviderSyncSkippedProvider[] = [];
   for (const provider of providers) {
     const envEntries = providerEnvEntries(provider);
     const envNames = readProviderEnvNames(provider.providerConfig);
-    if (envNames.length > 0 && !envEntries.some((entry) => envNames.includes(entry.key))) continue;
+    if (envNames.length > 0 && !envEntries.some((entry) => envNames.includes(entry.key))) {
+      // The provider declares credential env vars but the connect payload
+      // yielded no value for any of them. Materializing it would produce a
+      // provider whose every request fails with a missing API key, so it is
+      // skipped — loudly, so status readers can see why it never appeared.
+      skipped.push({
+        cloudProviderId: provider.id,
+        providerId: runtimeProviderId(provider),
+        name: provider.name,
+        reason: "missing_credentials",
+      });
+      continue;
+    }
     materialized.push({
       provider,
       runtimeProviderId: runtimeProviderId(provider),
@@ -427,6 +484,7 @@ function prepareMaterialization(providers: DenProviderConnection[]): PreparedMat
     fingerprint: `owp:v1:${hashString(stableJson(fingerprintPayload))}`,
     providers: materialized,
     envEntries,
+    skipped,
   };
 }
 
@@ -464,16 +522,23 @@ function configuredIntervalMs(): number {
   return Number.isFinite(configured) && configured > 0 ? configured : defaultIntervalMs;
 }
 
+function configuredReloadRetryMs(): number {
+  const configured = Number(process.env.OPENWORK_ENGINE_RELOAD_RETRY_MS ?? "");
+  return Number.isFinite(configured) && configured > 0 ? configured : 15_000;
+}
+
 export class CloudProviderSync {
   private readonly config: ServerConfig;
   private readonly env: EnvService;
   private readonly reloadEngine: () => Promise<void>;
+  private readonly engineBusy?: () => Promise<boolean>;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly logger?: CloudProviderSyncLogger;
   private readonly intervalMs: number;
   private session: CloudProviderDenSession | null = null;
   private lastRun: CloudProviderSyncStatus["lastRun"] = null;
   private providers: CloudProviderSyncStatusProvider[] = [];
+  private skippedProviders: CloudProviderSyncSkippedProvider[] = [];
   private fingerprint: string | null = null;
   private ownedEnvKeys = new Set<string>();
   private managedProviderIds = new Set<string>();
@@ -481,14 +546,18 @@ export class CloudProviderSync {
   private reloadPending = false;
   private queue: Promise<void> = Promise.resolve();
   private interval: ReturnType<typeof setInterval> | null = null;
+  private pendingReloadRetry: ReturnType<typeof setTimeout> | null = null;
+  private readonly reloadRetryMs: number;
 
   constructor(options: CloudProviderSyncOptions) {
     this.config = options.config;
     this.env = options.env;
     this.reloadEngine = options.reloadEngine;
+    this.engineBusy = options.engineBusy;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.logger = options.logger;
     this.intervalMs = options.intervalMs ?? configuredIntervalMs();
+    this.reloadRetryMs = configuredReloadRetryMs();
   }
 
   setSession(session: CloudProviderDenSession): void {
@@ -510,6 +579,7 @@ export class CloudProviderSync {
       } finally {
         this.lastRun = null;
         this.providers = [];
+        this.skippedProviders = [];
         this.fingerprint = null;
         this.ownedEnvKeys.clear();
         this.managedProviderIds.clear();
@@ -528,11 +598,20 @@ export class CloudProviderSync {
       hasSession: this.session !== null,
       lastRun: this.lastRun ? { ...this.lastRun } : null,
       providers: this.providers.map((provider) => ({ ...provider, modelIds: [...provider.modelIds] })),
+      reloadPending: this.reloadPending,
+      skippedProviders: this.skippedProviders.map((provider) => ({ ...provider })),
     };
   }
 
   stop(): void {
     this.stopInterval();
+    this.stopReloadRetry();
+  }
+
+  /** External runtime-config writers park their engine reload here when the engine is busy. */
+  markReloadPending(): void {
+    this.reloadPending = true;
+    this.scheduleReloadRetry();
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -557,16 +636,93 @@ export class CloudProviderSync {
     this.interval = null;
   }
 
+  /**
+   * A deferred reload must not wait for the next user gesture or the 5-minute
+   * interval — and a reload parked by markReloadPending() may have no Den
+   * session at all, so no sync pass would ever retry it. Poll the (local,
+   * cheap) engine busy probe and land the reload moments after the last
+   * session idles. Serialized on the same queue as sync passes.
+   */
+  private scheduleReloadRetry(): void {
+    if (this.pendingReloadRetry) return;
+    const timer = setTimeout(() => {
+      this.pendingReloadRetry = null;
+      if (!this.reloadPending) return;
+      void this.enqueue(async () => {
+        if (!this.reloadPending) return;
+        if (await this.reloadDeferredByActivity()) {
+          this.scheduleReloadRetry();
+          return;
+        }
+        try {
+          await this.reloadEngine();
+          this.reloadPending = false;
+          // A landed retry settles a previously failed run: without this the
+          // status would stay "failed" forever even though the engine now
+          // serves every synced provider.
+          if (this.session && this.lastRun?.status === "failed") {
+            this.lastRun = {
+              at: new Date().toISOString(),
+              status: "applied",
+              message: "deferred engine reload landed",
+            };
+          }
+        } catch (error) {
+          // Never silent: a signed-in desktop whose engine keeps rejecting
+          // reloads must say so in status instead of reporting the last
+          // pass's stale outcome while models never arrive.
+          if (this.session) {
+            const message = error instanceof Error ? error.message : "cloud_provider_engine_reload_failed";
+            this.lastRun = { at: new Date().toISOString(), status: "failed", message };
+            this.logger?.warn("cloud provider engine reload retry failed", { message });
+          }
+          this.scheduleReloadRetry();
+        }
+      });
+    }, this.reloadRetryMs);
+    timer.unref();
+    this.pendingReloadRetry = timer;
+  }
+
+  private stopReloadRetry(): void {
+    if (this.pendingReloadRetry) clearTimeout(this.pendingReloadRetry);
+    this.pendingReloadRetry = null;
+  }
+
+  /**
+   * A pending reload never disposes a live engine: sessions (including
+   * subagent children) would abort mid-turn. Unknown activity never blocks —
+   * a dead engine surfaces through the dispose call itself.
+   */
+  private async reloadDeferredByActivity(): Promise<boolean> {
+    if (!this.engineBusy) return false;
+    try {
+      return await this.engineBusy();
+    } catch {
+      return false;
+    }
+  }
+
   private async runPass(reason?: string): Promise<CloudProviderSyncRunResult> {
     const session = this.session;
     if (!session) return { status: "no_session" };
     try {
       const prepared = prepareMaterialization(await fetchProviders(this.fetchImpl, session));
-      const changed = await this.apply(prepared);
+      const { changed, detail, reloadError } = await this.apply(prepared);
+      // The materialization itself succeeded (config + env writes landed), so
+      // record it even when the engine reload failed: hiding the providers
+      // made a reload-only failure indistinguishable from "nothing synced".
       this.updateProviderStatus(prepared);
+      this.skippedProviders = prepared.skipped;
       this.fingerprint = prepared.fingerprint;
+      if (reloadError) {
+        const message = reloadError instanceof Error ? reloadError.message : "cloud_provider_engine_reload_failed";
+        this.lastRun = { at: new Date().toISOString(), status: "failed", message, detail };
+        this.logger?.warn("cloud provider sync failed", { reason, message });
+        return { status: "failed", message };
+      }
       const status = changed ? "applied" : "noop";
-      this.lastRun = { at: new Date().toISOString(), status };
+      this.lastRun = { at: new Date().toISOString(), status, detail };
       return { status };
     } catch (error) {
       const message = error instanceof Error ? error.message : "cloud_provider_sync_failed";
@@ -576,7 +732,9 @@ export class CloudProviderSync {
     }
   }
 
-  private async apply(prepared: PreparedMaterialization): Promise<boolean> {
+  private async apply(
+    prepared: PreparedMaterialization,
+  ): Promise<{ changed: boolean; detail: CloudProviderSyncRunDetail; reloadError?: unknown }> {
     const desiredProviders = desiredProviderMap(prepared);
     const globalRuntime = await readGlobalRuntimeOpencodeConfig(this.config);
     const currentManagedProviders = managedProviderMap(runtimeProviderMap(globalRuntime));
@@ -599,9 +757,14 @@ export class CloudProviderSync {
     const envUpserts = prepared.envEntries.filter((entry) => storedEnv.get(entry.key) !== entry.value);
     if (envUpserts.length > 0) {
       await this.env.upsertMany(envUpserts);
-      for (const entry of envUpserts) this.ownedEnvKeys.add(entry.key);
     }
     const desiredEnvKeys = new Set(prepared.envEntries.map((entry) => entry.key));
+    // Ownership follows the active cloud materialization, not whether this
+    // process happened to write the value. After an app/server restart the
+    // persisted credential can already equal Den's value, so envUpserts is
+    // empty. Reclaim every desired key or the next logout will leave that
+    // cloud credential behind permanently.
+    for (const key of desiredEnvKeys) this.ownedEnvKeys.add(key);
     const envDeletes = [...this.ownedEnvKeys].filter((key) => !desiredEnvKeys.has(key));
     for (const key of envDeletes) {
       await this.env.delete(key);
@@ -613,17 +776,36 @@ export class CloudProviderSync {
     const runtimeFileChanged = engineWorkspace
       ? (await writeOpenworkRuntimeConfigFile(this.config, engineWorkspace.id)).changed
       : false;
+    // Credentials reach a live engine through PUT /auth/{providerID} below, so
+    // a key rotation never needs a reload. Provider *config* (models, npm,
+    // options.baseURL) has no live path: the engine reads it from
+    // OPENCODE_CONFIG when it builds an instance, and the only write endpoint
+    // that accepts it, PATCH /config, performs the same instance dispose as
+    // POST /instance/dispose (verified against opencode 1.18.15 — both drop an
+    // open /event stream, GET /config and PUT /auth do not). So a config delta
+    // still reloads. Without a rollover-capable engine pool it is deferred
+    // while sessions are live; with one, reloadEngine flips generations.
     this.reloadPending = this.reloadPending
       || providerStateChanged
       || workspaceCleanup.runtimeChanged
       || runtimeFileChanged;
     let reloadError: unknown;
+    let reloadDeferred = false;
     if (engineWorkspace && this.reloadPending) {
-      try {
-        await this.reloadEngine();
-        this.reloadPending = false;
-      } catch (error) {
-        reloadError = error;
+      if (await this.reloadDeferredByActivity()) {
+        reloadDeferred = true;
+        this.scheduleReloadRetry();
+      } else {
+        try {
+          await this.reloadEngine();
+          this.reloadPending = false;
+        } catch (error) {
+          reloadError = error;
+          // Self-heal like the busy-deferral path: without this, a failed
+          // reload waited for the next external trigger (user gesture or the
+          // 5-minute interval) while the status kept promising the providers.
+          this.scheduleReloadRetry();
+        }
       }
     }
     await syncManagedProviderAuth({
@@ -632,15 +814,25 @@ export class CloudProviderSync {
       fetchImpl: this.fetchImpl,
       logger: this.logger,
     });
-    if (reloadError) throw reloadError;
 
     this.managedProviderIds = new Set(Object.keys(desiredProviders));
-    return this.fingerprint !== prepared.fingerprint
+    const detail: CloudProviderSyncRunDetail = {
+      fingerprintChanged: this.fingerprint !== prepared.fingerprint,
+      providerStateChanged,
+      envUpserts: envUpserts.length,
+      envDeletes: envDeletes.length,
+      cleanupChanged: workspaceCleanup.changed,
+      cleanupRuntimeChanged: workspaceCleanup.runtimeChanged,
+      fileChanged: runtimeFileChanged,
+      reloadDeferred,
+    };
+    const changed = detail.fingerprintChanged
       || providerStateChanged
       || envUpserts.length > 0
       || envDeletes.length > 0
       || workspaceCleanup.changed
       || runtimeFileChanged;
+    return { changed, detail, reloadError };
   }
 
   private async cleanupWorkspaceTakeovers(): Promise<{ changed: boolean; runtimeChanged: boolean }> {
@@ -716,12 +908,16 @@ export class CloudProviderSync {
       this.reloadPending = this.reloadPending || providerChanged || fileResult.changed;
     }
     let reloadError: unknown;
-    if (this.reloadPending) {
+    if (this.reloadPending && (await this.reloadDeferredByActivity())) {
+      this.scheduleReloadRetry();
+    } else if (this.reloadPending) {
       try {
         await this.reloadEngine();
         this.reloadPending = false;
       } catch (error) {
         reloadError = error;
+        // Sign-out cleanup must still reach the engine once it recovers.
+        this.scheduleReloadRetry();
       }
     }
     await syncManagedProviderAuth({

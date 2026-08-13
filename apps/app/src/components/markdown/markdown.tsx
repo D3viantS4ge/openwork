@@ -1,6 +1,5 @@
 /** @jsxImportSource react */
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { motion } from "motion/react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   Dialog,
@@ -20,6 +19,7 @@ import {
   syncMarkdownImagePreviews,
 } from "./markdown-primitive";
 import { LinkActionMenu } from "./link-action-menu";
+import { useSelectionStableValue } from "./selection-stability";
 
 export { renderHighlightedMarkdownHtml, renderMarkdownHtml } from "./markdown-primitive";
 
@@ -88,7 +88,7 @@ type MarkdownBlockInnerProps = {
   streaming?: boolean;
   highlightQuery?: string;
 } & Omit<
-  React.ComponentProps<typeof motion.div>,
+  React.ComponentProps<"div">,
   "ref" | "className" | "children" | "dangerouslySetInnerHTML"
 >;
 
@@ -162,34 +162,13 @@ function MarkdownBlockInner({
     };
   }, [streaming, text]);
 
-  const html = !streaming && highlightedHtml?.text === text ? highlightedHtml.html : syncHtml;
+  const candidateHtml = !streaming && highlightedHtml?.text === text ? highlightedHtml.html : syncHtml;
+  const html = useSelectionStableValue(rootRef, candidateHtml);
+  const stableInnerHtml = useMemo(() => ({ __html: html }), [html]);
 
-  // In the browser, write the rendered HTML into the DOM only when the html
-  // string itself changes. motion.div re-sets dangerouslySetInnerHTML on
-  // unrelated re-renders (e.g. open-target context updates), replacing every
-  // node and collapsing any text selection inside the message. Writing
-  // through a ref makes re-renders with unchanged html a DOM no-op, so a
-  // selection survives unrelated shell re-renders. Static/server rendering
-  // (renderToStaticMarkup) has no layout effects, so it keeps
-  // dangerouslySetInnerHTML to include the content in the markup.
-  const isServerRender = typeof window === "undefined";
-  const appliedHtmlRef = useRef<string | null>(null);
-
-  useLayoutEffect(() => {
-    if (isServerRender) return;
-    const root = rootRef.current;
-    if (!root) return;
-    if (appliedHtmlRef.current === html) return;
-    root.innerHTML = html;
-    appliedHtmlRef.current = html;
-  }, [html, isServerRender]);
-
-  // Re-apply search highlights after EVERY render (no dependency array on
-  // purpose): the layout effect above re-writes innerHTML whenever `html`
-  // changes (streaming tokens, code-highlight resolution), wiping the
-  // <mark> nodes. Re-applying keeps marks consistent even though neither
-  // `html` nor `highlightQuery` changed. With no active query this is a
-  // single querySelector fast path.
+  // Keep the innerHTML prop referentially stable too: a fresh wrapper object
+  // can make an unrelated React render replace selected text nodes even when
+  // the HTML string itself is unchanged.
   useEffect(() => {
     const root = rootRef.current;
 
@@ -204,7 +183,7 @@ function MarkdownBlockInner({
 
       applyTextHighlights(root, highlightQuery ?? "");
     });
-  });
+  }, [highlightQuery, html]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -292,10 +271,10 @@ function MarkdownBlockInner({
 
   return (
     <>
-      <motion.div
+      <div
         ref={rootRef}
-        className={cn("markdown-content max-w-none text-foreground", className)}
-        {...(isServerRender ? { dangerouslySetInnerHTML: { __html: html } } : {})}
+        className={cn("markdown-content max-w-none select-text text-foreground", className)}
+        dangerouslySetInnerHTML={stableInnerHtml}
         {...props}
       />
       {linkMenu && onOpenTarget ? (

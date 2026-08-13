@@ -30,6 +30,21 @@ pnpm --dir evals install
 pnpm evals:spec                    # app-less PR project
 ```
 
+### CLI
+
+Run the stack lane with `pnpm evals [spec-names...]`. Naming a spec
+auto-satisfies the opt-in flags declared in its source, but value-bearing
+environment variables such as `OPENWORK_EVAL_MODEL` are never auto-set. Vision
+judging is deferred by default; add `--with-llm-vision` to judge inline. Use
+`--daytona` for Daytona resources, `--den <url>` to reuse Den, or
+`--publish --pr <number>` to judge and publish existing evidence.
+
+| Exit | Named spec | Bare sweep | Publish |
+| --- | --- | --- | --- |
+| `0` | Passed | Passed, or incomplete with expected skips | Published |
+| `1` | Failed | Failed | Failed claims published, or publish failed |
+| `2` | Incomplete because it skipped | Not used | Claims pending judgment |
+
 Run one app-driving spec through the stack project:
 
 ```bash
@@ -94,11 +109,11 @@ skips is not proof.
 Publish an already completed tape with the `publish-evidence` skill:
 
 ```bash
-pnpm fraimz:publish -- --pr <number> [--roll <dir|name>]
+pnpm evals --publish --pr <number> [--roll <dir|name>]
 ```
 
-`fraimz:publish` is retained as an implementation-compatibility command name;
-it publishes a testkit tape and never reruns tests. Its optional `--roll`
+`evals --publish` judges and publishes a testkit tape without rerunning tests.
+Its optional `--roll`
 argument selects a specific existing tape at publish time; it is not a test
 author roll handle. Custom screenshots and recordings are supplementary and
 never determine the pass/fail verdict.
@@ -166,9 +181,9 @@ Only when a user explicitly requests an existing legacy flow, load the
 `run-evals` or `fraimz` compatibility skill and run that unchanged flow:
 
 ```bash
-pnpm evals --list
-pnpm evals --flow <existing-id> --cdp-url <electron-cdp-url>
-pnpm fraimz --flow <existing-id> --cdp-url <electron-cdp-url>
+pnpm evals:legacy --list
+pnpm evals:legacy --flow <existing-id> --cdp-url <electron-cdp-url>
+pnpm evals:legacy:demo --flow <existing-id> --cdp-url <electron-cdp-url>
 ```
 
 If the existing flow is broken or obsolete, report that limitation rather than

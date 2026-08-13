@@ -19,6 +19,7 @@ import { executeGithubConnectorSyncEvent } from "../routes/org/plugin-system/sto
 
 const logger = appLogger.child({ component: "github_sync_worker" })
 const MAX_BACKOFF_MS = 15 * 60_000
+const ACTIVE_GITHUB_SYNC_EVENT_STATUSES = ["queued", "running"] as const
 // This bounds one process; multi-replica dedup/leadership is deliberately deferred to #3568.
 const githubReconcileLastProbedAtMs = new Map<string, number>()
 
@@ -69,6 +70,22 @@ function changedRows(result: unknown): boolean {
   return false
 }
 
+async function connectorTargetIdsWithStatuses(
+  connectorTargetIds: Array<NonNullable<(typeof ConnectorSyncEventTable.$inferSelect)["connectorTargetId"]>>,
+  statuses: readonly (typeof ConnectorSyncEventTable.$inferSelect)["status"][],
+) {
+  if (connectorTargetIds.length === 0) return new Set<string>()
+  const rows = await db
+    .select({ connectorTargetId: ConnectorSyncEventTable.connectorTargetId })
+    .from(ConnectorSyncEventTable)
+    .where(and(
+      inArray(ConnectorSyncEventTable.connectorTargetId, connectorTargetIds),
+      inArray(ConnectorSyncEventTable.status, statuses),
+    ))
+    .groupBy(ConnectorSyncEventTable.connectorTargetId)
+  return new Set(rows.flatMap((row) => row.connectorTargetId ? [row.connectorTargetId] : []))
+}
+
 export function computeGithubSyncBackoffMs(
   attemptCount: number,
   baseMs = env.githubSync.retryBaseMs,
@@ -103,19 +120,12 @@ export async function processDueGithubSyncEvents(now = new Date()) {
     ))
     .orderBy(asc(ConnectorSyncEventTable.startedAt), asc(ConnectorSyncEventTable.id))
 
+  const eventTargetIds = [...new Set(events.flatMap((event) => event.connectorTargetId ? [event.connectorTargetId] : []))]
+  const runningTargetIds = await connectorTargetIdsWithStatuses(eventTargetIds, ["running"])
+
   let claimed = 0
   for (const event of events) {
-    if (event.connectorTargetId) {
-      const runningEvents = await db
-        .select({ id: ConnectorSyncEventTable.id })
-        .from(ConnectorSyncEventTable)
-        .where(and(
-          eq(ConnectorSyncEventTable.connectorTargetId, event.connectorTargetId),
-          eq(ConnectorSyncEventTable.status, "running"),
-        ))
-        .limit(1)
-      if (runningEvents[0]) continue
-    }
+    if (event.connectorTargetId && runningTargetIds.has(event.connectorTargetId)) continue
 
     const claimResult: unknown = await db
       .update(ConnectorSyncEventTable)
@@ -126,6 +136,7 @@ export async function processDueGithubSyncEvents(now = new Date()) {
       ))
     if (!changedRows(claimResult)) continue
     claimed += 1
+    if (event.connectorTargetId) runningTargetIds.add(event.connectorTargetId)
 
     try {
       await executeGithubConnectorSyncEvent({ connectorSyncEventId: event.id })
@@ -226,20 +237,11 @@ export async function reconcileGithubConnectorTargets() {
     ))
     .orderBy(asc(ConnectorTargetTable.createdAt), asc(ConnectorTargetTable.id))
 
-  const candidateTargets: typeof targets = []
-  for (const row of targets) {
-    const activeEvents = await db
-      .select({ id: ConnectorSyncEventTable.id })
-      .from(ConnectorSyncEventTable)
-      .where(and(
-        eq(ConnectorSyncEventTable.connectorTargetId, row.target.id),
-        inArray(ConnectorSyncEventTable.status, ["queued", "running"]),
-      ))
-      .limit(1)
-    if (activeEvents[0]) continue
-
-    candidateTargets.push(row)
-  }
+  const activeTargetIds = await connectorTargetIdsWithStatuses(
+    targets.map((row) => row.target.id),
+    ACTIVE_GITHUB_SYNC_EVENT_STATUSES,
+  )
+  const candidateTargets = targets.filter((row) => !activeTargetIds.has(row.target.id))
 
   const now = new Date()
   const selectedTargetIds = selectGithubReconcileCandidates({

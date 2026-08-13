@@ -1,7 +1,7 @@
 {
   "name": "@openwork/app",
   "private": true,
-  "version": "0.18.18",
+  "version": "0.18.23",
   "type": "module",
   "scripts": {
     "test": "bun test --isolate tests/",
@@ -49,6 +49,8 @@
     "@fontsource-variable/ibm-plex-sans": "^5.2.8",
     "@heroicons/react": "^2.2.0",
     "@lexical/react": "^0.35.0",
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@opencode-ai/sdk": "^1.17.11",
     "@openwork/install-config": "workspace:*",
     "@openwork/types": "workspace:*",

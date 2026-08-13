@@ -16,6 +16,11 @@ export type AutomationModelOption = {
   accessKind: "free" | "openwork_managed" | "authorized_custom"
 }
 
+export type ResolvedProposalModel = {
+  model: AutomationModel
+  resolution: "exact" | "mapped" | "default" | "fallback"
+}
+
 const freeStarterModel: AutomationModelOption = {
   ...AUTOMATION_FREE_MODEL,
   accessKind: "free",
@@ -48,12 +53,18 @@ function authorizedProviderModels(provider: DenOrgLlmProvider): AutomationModelO
  * the submitted value normalized to the same IDs the server revalidates:
  * `opencode`, `openwork`, or the concrete `lpr_*` provider record.
  */
-export function automationModelOptions(providers: readonly DenOrgLlmProvider[]): AutomationModelOption[] {
+export function automationModelOptions(
+  providers: readonly DenOrgLlmProvider[],
+  options: { includeFreeStarter?: boolean } = {},
+): AutomationModelOption[] {
   const managed = providers.flatMap((provider) => provider.source === "openwork"
     ? openWorkManagedModels(provider)
     : authorizedProviderModels(provider))
 
-  return [freeStarterModel, ...managed].sort((left, right) => {
+  return [
+    ...(options.includeFreeStarter === false ? [] : [freeStarterModel]),
+    ...managed,
+  ].sort((left, right) => {
     const kindOrder = ["free", "openwork_managed", "authorized_custom"]
     return kindOrder.indexOf(left.accessKind) - kindOrder.indexOf(right.accessKind)
       || left.providerName.localeCompare(right.providerName)
@@ -75,6 +86,39 @@ export function findAutomationModelOption(
 ) {
   return options.find((option) =>
     option.providerId === model.providerId && option.modelId === model.modelId) ?? null
+}
+
+export function resolveProposalModel(
+  proposed: AutomationModel | undefined,
+  providers: readonly DenOrgLlmProvider[],
+): ResolvedProposalModel {
+  const freeModel: AutomationModel = {
+    providerId: AUTOMATION_FREE_MODEL.providerId,
+    modelId: AUTOMATION_FREE_MODEL.modelId,
+    variant: null,
+  }
+  if (!proposed) return { model: freeModel, resolution: "default" }
+
+  if (findAutomationModelOption(automationModelOptions(providers), proposed)) {
+    return { model: proposed, resolution: "exact" }
+  }
+
+  const provider = providers.find((candidate) =>
+    candidate.source !== "openwork"
+    && candidate.providerId === proposed.providerId
+    && candidate.models.some((model) => model.id === proposed.modelId))
+  if (provider) {
+    return {
+      model: {
+        providerId: provider.id,
+        modelId: proposed.modelId,
+        variant: proposed.variant ?? null,
+      },
+      resolution: "mapped",
+    }
+  }
+
+  return { model: freeModel, resolution: "fallback" }
 }
 
 /**

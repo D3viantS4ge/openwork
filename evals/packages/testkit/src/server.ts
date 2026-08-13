@@ -7,7 +7,9 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { allocateFreePorts } from "@openwork/cdp";
 import {
+  defaultDaytonaExec,
   deleteSandboxes,
+  execInSandbox,
   freePort,
   killLocalPid,
   provisionDenSandbox,
@@ -18,7 +20,7 @@ import { createConnection } from "mysql2/promise";
 import type { ChildProcess } from "node:child_process";
 import type { DenRef, DenSession } from "@openwork/behaviors";
 import type { DbHandle, Place } from "./place.ts";
-import { ephemeralDatabaseName, localMysqlIsRunning } from "./place.ts";
+import { ephemeralDatabaseName, localMysqlIsRunning, localRedisIsRunning } from "./place.ts";
 import type { BootedMock, MockBoot, MockHandle } from "./mock.ts";
 import { SkipError } from "./needs.ts";
 
@@ -46,6 +48,13 @@ export interface ServerOptions {
   org?: OrgShape;
   reuse?: DenRef;
   reuseMembers?: Record<string, PersonShape>;
+  /**
+   * Extra origins Den should trust, on top of its own API and web hosts. A
+   * loopback identity provider needs this: Den refuses to register an SSO
+   * provider whose endpoints are not publicly routable unless the origin is
+   * trusted, so a spec that stands one up has to name it here.
+   */
+  trustedOrigins?: readonly string[];
 }
 
 export interface Den extends AsyncDisposable {
@@ -55,6 +64,14 @@ export interface Den extends AsyncDisposable {
   mocks: Record<string, MockHandle>;
   database?: DbHandle;
   ports?: { api: number; web: number };
+  /**
+   * Raw den-api HTTP log text (JSON lines carrying http_route/timestamp).
+   * Daytona lane: reads /tmp/den-api.log inside the server sandbox; local
+   * lane: reads the spawned den-api service log. Attached Dens
+   * (OPENWORK_EVAL_DEN_API_URL / reuse) throw — their den-api log lives with
+   * whoever runs that server. Parsing belongs to the caller.
+   */
+  apiLog(): Promise<string>;
 }
 
 interface SpawnedService {
@@ -365,7 +382,11 @@ async function bootDaytonaMocks(
     if (!definition.daytonaPort || !definition.connect) {
       throw new Error(`mock ${name} cannot boot on Daytona: its MockBoot has no sandbox adapter`);
     }
-    const remote = await startMockOnSandbox({ sandbox, port: definition.daytonaPort });
+    const remote = await startMockOnSandbox({
+      sandbox,
+      port: definition.daytonaPort,
+      allowUnauthenticatedMcp: definition.allowUnauthenticatedMcp,
+    });
     const booted: BootedMock = await definition.connect(remote.url);
     handles[name] = booted.handle;
     Object.assign(env, booted.env({ name, url: cleanUrl(remote.url), mcpUrl: `${cleanUrl(remote.url)}/mcp` }));
@@ -435,6 +456,11 @@ export async function server(options: ServerOptions): Promise<Den> {
         admin: organization.admin,
         members: { ...organization.members, ...reusedMembers },
         mocks: bootedMocks.handles,
+        async apiLog(): Promise<string> {
+          throw new Error(
+            "den.apiLog() is not available for attached Dens (OPENWORK_EVAL_DEN_API_URL / reuse): the den-api log lives with the process that started that server.",
+          );
+        },
         async [Symbol.asyncDispose](): Promise<void> {
           if (disposed) return;
           disposed = true;
@@ -481,6 +507,16 @@ export async function server(options: ServerOptions): Promise<Den> {
         admin: organization.admin,
         members: organization.members,
         mocks: bootedMocks.handles,
+        async apiLog(): Promise<string> {
+          // den-api on the server sandbox logs to /tmp/den-api.log
+          // (.devcontainer/start-daytona-server.sh:158; the provisioning
+          // script's own debug hint tails the same file).
+          const result = await execInSandbox(defaultDaytonaExec, provisioned.sandbox, "cat /tmp/den-api.log", {
+            timeoutMs: 120_000,
+            context: `den-api log read for ${provisioned.sandbox}`,
+          });
+          return result.stdout;
+        },
         async [Symbol.asyncDispose](): Promise<void> {
           if (disposed) return;
           disposed = true;
@@ -507,6 +543,9 @@ export async function server(options: ServerOptions): Promise<Den> {
   if (!await localMysqlIsRunning()) {
     throw new Error("Local Den requires MySQL on 127.0.0.1:3306. Run: pnpm dev:den:mysql");
   }
+  if (!await localRedisIsRunning()) {
+    throw new Error("Local Den requires Redis on 127.0.0.1:6379. Run: redis-server --port 6379 --daemonize yes --save '' --appendonly no");
+  }
 
   const bootedMocks = await bootLocalMocks(options.place, options.mocks ?? {});
   const services: SpawnedService[] = [];
@@ -516,13 +555,15 @@ export async function server(options: ServerOptions): Promise<Den> {
     await runDbPush(database.url);
     const [apiPort, webPort] = await allocateFreePorts(2);
     if (apiPort === undefined || webPort === undefined) throw new Error("Could not allocate Den API/Web ports.");
-    const origins = trustedOrigins(apiPort, webPort).join(",");
+    const origins = [...trustedOrigins(apiPort, webPort), ...(options.trustedOrigins ?? [])].join(",");
     const ref: DenRef = {
       apiUrl: `http://127.0.0.1:${apiPort}`,
       webUrl: `http://127.0.0.1:${webPort}`,
     };
     const logsDir = join(REPO_ROOT, "evals", "results", ".testkit", database.name);
     await mkdir(logsDir, { recursive: true });
+    const orgShape = options.org ?? defaultLocalOrg(runId);
+    const bootstrapAdmin = personDefaults("admin", orgShape.admin, runId);
     const commonEnv: NodeJS.ProcessEnv = {
       ...process.env,
       ...bootedMocks.env,
@@ -540,6 +581,9 @@ export async function server(options: ServerOptions): Promise<Den> {
       DEN_PASSWORD_BREACH_SCREENING_ENABLED: "false",
       OPENWORK_DEV_MODE: "1",
       PROVISIONER_MODE: "stub",
+      // The locally booted Den seeds this admin into the platform-admin
+      // allowlist so specs can exercise /v1/admin/* capability toggles.
+      DEN_BOOTSTRAP_ADMIN_EMAILS: bootstrapAdmin.email,
     };
     const api = spawnService("den-api", "dev:den:api", apiPort, { ...commonEnv, DEN_BIND_HOST: "127.0.0.1" }, join(logsDir, "api.log"));
     services.push(api);
@@ -556,7 +600,7 @@ export async function server(options: ServerOptions): Promise<Den> {
     await waitForAuthProbe(ref, api);
     const organization = await provisionOrganization(
       ref,
-      options.org ?? defaultLocalOrg(runId),
+      orgShape,
       runId,
       { databaseUrl: database.url, createOrg: true },
     );
@@ -568,6 +612,9 @@ export async function server(options: ServerOptions): Promise<Den> {
       mocks: bootedMocks.handles,
       database,
       ports: { api: apiPort, web: webPort },
+      async apiLog(): Promise<string> {
+        return readFile(api.logPath, "utf8");
+      },
       async [Symbol.asyncDispose](): Promise<void> {
         if (disposed) return;
         disposed = true;

@@ -57,11 +57,12 @@ export type PreferencesViewProps = {
   onDesktopNotificationsChange: (value: DesktopNotificationPreference) => void;
   notificationSounds: NotificationSoundPreferences;
   onNotificationSoundsChange: (value: NotificationSoundPreferences) => void;
+  continuousEngineAvailable: boolean;
+  continuousEngineEnabled: boolean;
+  continuousEngineBusy: boolean;
+  onToggleContinuousEngine: () => void;
   memoryEnabled: boolean;
   onToggleMemory: () => void;
-  showAutomations: boolean;
-  automationsEnabled: boolean;
-  onToggleAutomations: () => void;
 };
 
 function desktopNotificationPreferenceLabel(value: DesktopNotificationPreference) {
@@ -329,6 +330,30 @@ export function PreferencesView(props: PreferencesViewProps) {
 
       <DesktopIntegrationSection />
 
+      {props.continuousEngineAvailable ? (
+        <LayoutSection>
+          <LayoutSectionHeader>
+            <LayoutSectionTitle>{t("settings.engine_rollover_title")}</LayoutSectionTitle>
+            <LayoutSectionDescription>{t("settings.engine_rollover_section_desc")}</LayoutSectionDescription>
+          </LayoutSectionHeader>
+
+          <LayoutSectionItem>
+            <LayoutSectionItemHeader>
+              <LayoutSectionItemTitle>{t("settings.engine_rollover_toggle")}</LayoutSectionItemTitle>
+              <LayoutSectionItemDescription>{t("settings.engine_rollover_toggle_desc")}</LayoutSectionItemDescription>
+              <LayoutSectionItemHeaderActions>
+                <Switch
+                  aria-label={t("settings.engine_rollover_toggle")}
+                  checked={props.continuousEngineEnabled}
+                  disabled={props.busy || props.continuousEngineBusy}
+                  onCheckedChange={props.onToggleContinuousEngine}
+                />
+              </LayoutSectionItemHeaderActions>
+            </LayoutSectionItemHeader>
+          </LayoutSectionItem>
+        </LayoutSection>
+      ) : null}
+
       <LayoutSection>
         <LayoutSectionHeader>
           <LayoutSectionTitle>{t("settings.privacy_title")}</LayoutSectionTitle>
@@ -373,29 +398,6 @@ export function PreferencesView(props: PreferencesViewProps) {
         </LayoutSectionItem>
       </LayoutSection>
 
-      {props.showAutomations ? (
-        <LayoutSection>
-          <LayoutSectionHeader>
-            <LayoutSectionTitle>{t("automations.preferences_title")}</LayoutSectionTitle>
-            <LayoutSectionDescription>{t("automations.preferences_section_desc")}</LayoutSectionDescription>
-          </LayoutSectionHeader>
-
-          <LayoutSectionItem>
-            <LayoutSectionItemHeader>
-              <LayoutSectionItemTitle>{t("automations.preferences_toggle")}</LayoutSectionItemTitle>
-              <LayoutSectionItemDescription>{t("automations.preferences_toggle_desc")}</LayoutSectionItemDescription>
-              <LayoutSectionItemHeaderActions>
-                <Switch
-                  aria-label={t("automations.preferences_toggle")}
-                  checked={props.automationsEnabled}
-                  disabled={props.busy}
-                  onCheckedChange={props.onToggleAutomations}
-                />
-              </LayoutSectionItemHeaderActions>
-            </LayoutSectionItemHeader>
-          </LayoutSectionItem>
-        </LayoutSection>
-      ) : null}
     </LayoutStack>
   );
 }

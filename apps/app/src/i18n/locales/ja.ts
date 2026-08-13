@@ -1,11 +1,8 @@
-import { automationsEnglish } from "./automations";
-
 /**
  * Japanese translations (日本語)
  */
 
 export default {
-  ...automationsEnglish,
   "app.compact_command_desc": "このセッションを要約してコンテキストサイズを削減します。",
   "app.error_audit_load": "監査ログの読み込みに失敗しました。",
   "app.error_auth_failed": "認証に失敗しました",
@@ -628,6 +625,10 @@ export default {
   "session.redo_aria_label": "最後に取り消したメッセージをやり直す",
   "session.redo_label": "やり直し",
   "session.redo_title": "最後に取り消したメッセージをやり直す",
+  "session.reverted_messages_hidden": "以前のメッセージ{count}件が非表示です",
+  "session.restore": "復元",
+  "session.restoring": "復元中...",
+  "session.restore_failed": "非表示のメッセージを復元できませんでした。もう一度お試しください。",
   "session.rename_description": "このセッションの名前を更新します。",
   "session.rename_label": "セッション名",
   "session.rename_placeholder": "新しい名前を入力",

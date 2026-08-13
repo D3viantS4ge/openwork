@@ -3,6 +3,8 @@ import { describeRoute, type DescribeRouteOptions } from "hono-openapi"
 import { z } from "zod"
 import { streamSSE } from "hono/streaming"
 import {
+  AUTOMATION_MODEL_ATTENTION_CAPABILITY,
+  AUTOMATION_MODEL_ATTENTION_CAPABILITY_HEADER,
   automationDesktopRunnerAssignmentSchema,
   automationDesktopRunnerRegistrationSchema,
   automationDesktopRunnerResultSchema,
@@ -17,6 +19,7 @@ import {
   automationRunnerTokenResponseSchema,
   automationRunnerWorkResponseSchema,
   createAutomationSchema,
+  createCloudAutomationSchema,
   updateAutomationSchema,
 } from "@openwork/types/automations"
 import {
@@ -28,7 +31,8 @@ import {
 } from "../../middleware/index.js"
 import { invalidRequestSchema, jsonResponse, notFoundSchema, unauthorizedSchema } from "../../openapi.js"
 import { automationService, type AutomationService } from "../../automations/service.js"
-import { automationRunnerAuth } from "../../automations/runner-auth.js"
+import { automationRunnerAudienceFromRequest, automationRunnerAuth } from "../../automations/runner-auth.js"
+import { env } from "../../env.js"
 import {
   RUNNER_KEEPALIVE_INTERVAL_MS,
   RUNNER_NOTIFICATION_POLL_MIN_MS,
@@ -45,7 +49,6 @@ const paginationSchema = z.object({
 const runListSchema = z.object({ items: z.array(automationRunSchema), nextCursor: z.string().nullable() })
 const runResponseSchema = z.object({ run: automationRunSchema })
 const runnerClaimResponseSchema = z.object({ assignment: automationDesktopRunnerAssignmentSchema.nullable() })
-
 type McpDescribeRouteOptions = DescribeRouteOptions & { "x-mcp": true }
 const describeMcpRoute = (options: McpDescribeRouteOptions) => describeRoute(options)
 // Runner-credential routes must never surface as MCP tools; an MCP caller with
@@ -55,14 +58,40 @@ const describeNonMcpRoute = (options: NonMcpDescribeRouteOptions) => describeRou
 
 type RouteVariables = Partial<OrganizationContextVariables>
 
-function scope(c: { get(name: "organizationContext"): OrganizationContextVariables["organizationContext"] }) {
+function scope(c: {
+  get(name: "organizationContext"): OrganizationContextVariables["organizationContext"]
+  req: { header(name: string): string | undefined }
+}) {
   const context = c.get("organizationContext")
-  return { organizationId: context.organization.id, ownerMemberId: context.currentMember.id }
+  return {
+    organizationId: context.organization.id,
+    ownerMemberId: context.currentMember.id,
+    modelAttentionCapable: c.req.header(AUTOMATION_MODEL_ATTENTION_CAPABILITY_HEADER)
+      === AUTOMATION_MODEL_ATTENTION_CAPABILITY,
+  }
 }
 
 function failure(error: unknown): { status: 400 | 403 | 404 | 409; body: { error: string; message?: string } } | null {
   if (!(error instanceof Error)) return null
   if (error.message === "automation_not_found") return { status: 404, body: { error: "automation_not_found" } }
+  if (error.message === "automation_action_target_mismatch") {
+    return { status: 400, body: { error: "automation_action_target_mismatch", message: "Desktop creates local Automations; Web creates OpenWork Cloud Automations." } }
+  }
+  if (error.message === "automation_saved_script_input_invalid") {
+    return { status: 400, body: { error: "automation_saved_script_input_invalid", message: "The existing Automation input does not match the selected Script version. Correct the input before creating the revision." } }
+  }
+  if (["automation_saved_script_version_not_found", "automation_saved_script_version_invalid"].includes(error.message)) {
+    return { status: 400, body: { error: error.message, message: "The selected Script version is unavailable." } }
+  }
+  if (error.message === "automation_saved_script_forbidden") {
+    return { status: 403, body: { error: error.message, message: "The Automation owner does not have access to this saved Script." } }
+  }
+  if (error.message === "automation_owner_inactive") {
+    return { status: 409, body: { error: error.message, message: "The Automation owner is no longer an active organization member." } }
+  }
+  if (error.message === "automation_cloud_worker_required") {
+    return { status: 409, body: { error: error.message, message: "Set up OpenWork Cloud before creating a Cloud Automation." } }
+  }
   if (["owner_membership_lost", "model_access_lost", "provider_unavailable"].includes(error.name)) {
     return { status: 409, body: { error: error.name, message: error.message } }
   }
@@ -70,8 +99,9 @@ function failure(error: unknown): { status: 400 | 403 | 404 | 409; body: { error
 }
 
 const routeDescription = [
-  "Den schedules Automations and keeps durable run history; execution is dispatched to the owner's connected desktop app.",
-  "If no desktop runner is connected when an occurrence is due, that occurrence is recorded as missed.",
+  "Den schedules Automations and keeps durable run history.",
+  "Automations created by Desktop run on the owner's connected desktop; Automations created by Web run in OpenWork Cloud.",
+  "If no desktop runner is connected when a desktop occurrence is due, that occurrence is recorded as missed.",
   "Creation makes an Automation active immediately and uses the owner's current OpenWork Connect integrations.",
   "Deactivation stops future runs but does not cancel a run already in progress.",
 ].join(" ")
@@ -95,7 +125,17 @@ export function registerAutomationRoutes<T extends { Variables: RouteVariables }
     async (c) => {
       const registration = c.req.valid("json")
       await service.registerDesktopRunner(scope(c), registration)
-      return c.json(automationRunnerAuth.issue({ ...scope(c), runnerId: registration.runnerId }))
+      return c.json(automationRunnerAuth.issue(
+        {
+          organizationId: scope(c).organizationId,
+          ownerMemberId: scope(c).ownerMemberId,
+          runnerId: registration.runnerId,
+          capabilities: registration.capabilities,
+        },
+        automationRunnerAudienceFromRequest(c.req.raw, {
+          trustedOrigins: env.publicProxyTrustedOrigins,
+        }),
+      ))
     },
   )
 
@@ -136,7 +176,10 @@ export function registerAutomationRoutes<T extends { Variables: RouteVariables }
           await stream.writeSSE({ id: payload.cursor, event: payload.type, data: JSON.stringify(payload) })
         }
         if (notifications.length === 0 && Date.now() - lastKeepaliveAt >= RUNNER_KEEPALIVE_INTERVAL_MS) {
-          await service.touchDesktopRunner(identity)
+          // The open SSE stream is the live presence signal. Persisting that
+          // signal every 15 seconds turns every idle runner into a perpetual
+          // database writer; durable runner metadata is refreshed when the
+          // runner registers or actually asks for work instead.
           await stream.writeSSE({ event: "keepalive", data: "{}" })
           lastKeepaliveAt = Date.now()
         }
@@ -241,17 +284,43 @@ export function registerAutomationRoutes<T extends { Variables: RouteVariables }
 
   app.post(
     "/v1/automations",
-    describeMcpRoute({
-      tags: ["Automations"], operationId: "createAutomation", "x-mcp": true,
-      summary: "Create an active Automation",
-      description: `${routeDescription} There is no draft, review, or permission-grant step.`,
+    describeNonMcpRoute({
+      tags: ["Automations"], operationId: "createAutomation", "x-mcp": false,
+      summary: "Create an active Automation from an app surface",
+      description: `${routeDescription} This compatibility route serves first-party Desktop clients. Agents must use createCloudAutomation so they cannot accidentally create Desktop placement.`,
       responses: {
         201: jsonResponse("Active Automation created.", automationDetailSchema),
         400: jsonResponse("Invalid request.", invalidRequestSchema),
         401: jsonResponse("Sign-in required.", unauthorizedSchema),
+        409: jsonResponse("Cloud runtime or model access is unavailable.", invalidRequestSchema),
       },
     }),
     orgMemberRoute(), jsonValidator(createAutomationSchema),
+    async (c) => {
+      try {
+        return c.json(await service.create(scope(c), c.req.valid("json")), 201)
+      } catch (error) {
+        const mapped = failure(error)
+        if (mapped) return c.json(mapped.body, mapped.status)
+        throw error
+      }
+    },
+  )
+
+  app.post(
+    "/v1/cloud-automations",
+    describeMcpRoute({
+      tags: ["Automations"], operationId: "createCloudAutomation", "x-mcp": true,
+      summary: "Create an active OpenWork Cloud Automation",
+      description: `${routeDescription} This is the Web and Cloud Chat creation surface. Placement is fixed to OpenWork Cloud and the Automation can wake a stopped Cloud container without a desktop. Create only when the person explicitly asks to create or schedule it; there is no draft step.`,
+      responses: {
+        201: jsonResponse("Active Cloud Automation created.", automationDetailSchema),
+        400: jsonResponse("Invalid request.", invalidRequestSchema),
+        401: jsonResponse("Sign-in required.", unauthorizedSchema),
+        409: jsonResponse("Cloud runtime or model access is unavailable.", invalidRequestSchema),
+      },
+    }),
+    orgMemberRoute(), jsonValidator(createCloudAutomationSchema),
     async (c) => {
       try {
         return c.json(await service.create(scope(c), c.req.valid("json")), 201)
@@ -335,12 +404,11 @@ export function registerAutomationRoutes<T extends { Variables: RouteVariables }
     }),
     orgMemberRoute(), paramValidator(idParamsSchema),
     async (c) => {
-      const owner = scope(c)
-      if (!(await service.hasOnlineDesktopRunner(owner))) {
-        return c.json({ error: "runner_unavailable", message: "No desktop runner is online" }, 409)
-      }
       try {
-        const run = await service.runNow(owner, c.req.valid("param").id)
+        // Runner presence is advisory and must not require a database
+        // heartbeat. The durable claim deadline records an unclaimed desktop
+        // run as missed through the same path used by scheduled occurrences.
+        const run = await service.runNow(scope(c), c.req.valid("param").id)
         return run ? c.json({ run }, 202) : c.json({ error: "automation_not_found" }, 404)
       } catch (error) {
         const mapped = failure(error)

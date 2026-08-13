@@ -21,6 +21,7 @@ const SAFE_INCLUDED_TAGS = new Set([
   "GitHub",
   "Capability Sources",
   "Automations",
+  "Codemode Runs",
 ])
 
 const BLOCKED_OPERATION_IDS = new Set([

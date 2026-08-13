@@ -1,9 +1,11 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, spyOn, test } from "bun:test";
 
 import { startEmbeddedServer, type EmbeddedServerHandle, type EmbeddedServerOptions } from "./embedded.js";
+import { readEngineRegistry } from "./engine-registry.js";
 import * as managedOpencodeModule from "./managed-opencode.js";
 import { writeOpenworkRuntimeConfigFile } from "./openwork-runtime-config.js";
 import { writeRuntimeOpencodeConfig } from "./runtime-opencode-config-store.js";
@@ -19,6 +21,7 @@ const ENV_NAMES: string[] = [
   "HOME",
   "OPENWORK_DEV_MODE",
   "OPENWORK_RUNTIME_DB",
+  "OPENWORK_ENCRYPTION_KEY",
   "OPENWORK_OPENCODE_BASE_URL",
   "OPENWORK_LIFECYCLE_LOG",
   "OPENCODE_MODELS_URL",
@@ -49,6 +52,8 @@ async function writeFakeOpencodeBin(root: string): Promise<string> {
     "const requestedPort = Number(process.argv[portIndex + 1] ?? 0);",
     "const logPath = process.env.OPENWORK_LIFECYCLE_LOG;",
     "const append = (line) => { if (logPath) appendFileSync(logPath, `${line}\\n`); };",
+    "append(`vault-key:${process.env.OPENWORK_ENCRYPTION_KEY ? 'present' : 'absent'}`);",
+    "append(`server-url:${process.env.OPENWORK_SERVER_URL ?? ''}`);",
     "const server = Bun.serve({",
     "  hostname: '127.0.0.1',",
     "  port: requestedPort,",
@@ -189,6 +194,63 @@ async function logLines(path: string): Promise<string[]> {
 }
 
 describe("embedded server lifecycle", () => {
+  test.serial("spawns the engine against the actually bound server port and records it in the registry", async () => {
+    const fixture = await createFixture();
+    // Occupy a port so serve-node's EADDRINUSE fallback rebinds to an
+    // OS-assigned one: the engine env must follow the bound port, not the
+    // requested one.
+    const blocker = net.createServer();
+    const blockedPort = await new Promise<number>((resolve, reject) => {
+      blocker.once("error", reject);
+      blocker.listen(0, HOST, () => {
+        const address = blocker.address();
+        if (address && typeof address === "object") resolve(address.port);
+        else reject(new Error("Failed to bind blocker"));
+      });
+    });
+    try {
+      await mkdir(join(fixture.root, "bound-port-workspace"), { recursive: true });
+      const handle = await startEmbeddedServer({
+        ...managedOptions(fixture, "bound-port"),
+        port: blockedPort,
+      });
+      fixture.handles.push(handle);
+
+      expect(handle.port).not.toBe(blockedPort);
+      expect(handle.config.port).toBe(handle.port);
+      expect(await logLines(fixture.logPath)).toContain(`server-url:http://${HOST}:${handle.port}`);
+
+      const entries = await readEngineRegistry(handle.config);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.role).toBe("primary");
+      expect(entries[0]?.pid).toBe(handle.managedOpencode?.pid ?? -1);
+      expect(entries[0]?.ownerPid).toBe(process.pid);
+
+      await handle.stop();
+      expect(await readEngineRegistry(handle.config)).toEqual([]);
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+      await fixture.restore();
+    }
+  });
+
+  test.serial("does not expose the vault encryption key to managed OpenCode", async () => {
+    const fixture = await createFixture();
+    process.env.OPENWORK_ENCRYPTION_KEY = "server-only-vault-key";
+    let managed: Awaited<ReturnType<typeof managedOpencodeModule.createManagedOpencodeServer>> | null = null;
+    try {
+      managed = await managedOpencodeModule.createManagedOpencodeServer({
+        bin: fixture.opencodeBin,
+        cwd: fixture.root,
+        env: { OPENWORK_LIFECYCLE_LOG: fixture.logPath },
+      });
+      expect(await logLines(fixture.logPath)).toContain("vault-key:absent");
+    } finally {
+      await managed?.close();
+      await fixture.restore();
+    }
+  });
+
   test.serial("managed OpenCode readiness failure closes the spawned child", async () => {
     const fixture = await createFixture();
     try {
@@ -305,32 +367,71 @@ describe("embedded server lifecycle", () => {
     }
   });
 
-  test.serial("startup failure after subscription registration unwinds acquired resources", async () => {
+  test.serial("HTTP startup failure aborts before any engine is spawned", async () => {
     const fixture = await createFixture();
     const startupError = new Error("forced HTTP startup failure");
-    let failedConfig: ServerConfig | null = null;
-    const startSpy = spyOn(serverModule, "startServer").mockImplementation(async (config) => {
-      failedConfig = config;
+    const startSpy = spyOn(serverModule, "startServer").mockImplementation(async () => {
       throw startupError;
     });
-    const clearTrustedSpy = spyOn(serverModule, "clearTrustedOpencodeProcess");
+    const managedSpy = spyOn(managedOpencodeModule, "createManagedOpencodeServer");
 
     try {
       const options = managedOptions(fixture, "startup-failure");
       await mkdir(options.opencodeCwd ?? "", { recursive: true });
       await expect(startEmbeddedServer(options)).rejects.toBe(startupError);
-      if (!failedConfig) throw new Error("Expected startup to reach the HTTP server");
+
+      // The HTTP server binds before the engine spawns, so a bind failure
+      // must leave no engine child (and nothing to SIGTERM).
+      expect(managedSpy).not.toHaveBeenCalled();
+      expect((await logLines(fixture.logPath)).filter((line) => line === "SIGTERM")).toHaveLength(0);
+    } finally {
+      managedSpy.mockRestore();
+      startSpy.mockRestore();
+      await fixture.restore();
+    }
+  });
+
+  test.serial("engine spawn failure after HTTP start releases the server and subscription", async () => {
+    const fixture = await createFixture();
+    const spawnError = new Error("forced engine spawn failure");
+    let failedConfig: ServerConfig | null = null;
+    let httpStopCalls = 0;
+    const originalStartServer = serverModule.startServer;
+    const startSpy = spyOn(serverModule, "startServer").mockImplementation(async (config) => {
+      failedConfig = config;
+      const server = await originalStartServer(config);
+      return {
+        ...server,
+        async stop() {
+          httpStopCalls += 1;
+          await server.stop();
+        },
+      };
+    });
+    const managedSpy = spyOn(managedOpencodeModule, "createManagedOpencodeServer").mockImplementation(async () => {
+      throw spawnError;
+    });
+    const clearTrustedSpy = spyOn(serverModule, "clearTrustedOpencodeProcess");
+
+    try {
+      const options = managedOptions(fixture, "spawn-failure");
+      await mkdir(options.opencodeCwd ?? "", { recursive: true });
+      await expect(startEmbeddedServer(options)).rejects.toBe(spawnError);
+      if (!failedConfig) throw new Error("Expected startup to bind the HTTP server");
 
       const config = failedConfig;
       const id = workspaceId(config);
-      await mutateWorkspace(config, id, "after-startup-failure");
+      await mutateWorkspace(config, id, "after-spawn-failure");
       const barrier = await writeOpenworkRuntimeConfigFile(config, id);
 
       expect(barrier.changed).toBe(true);
-      expect(clearTrustedSpy).toHaveBeenCalledTimes(1);
-      expect((await logLines(fixture.logPath)).filter((line) => line === "SIGTERM")).toHaveLength(1);
+      expect(httpStopCalls).toBe(1);
+      // Nothing was registered, so nothing gets cleared.
+      expect(clearTrustedSpy).not.toHaveBeenCalled();
+      expect(await readEngineRegistry(config)).toEqual([]);
     } finally {
       clearTrustedSpy.mockRestore();
+      managedSpy.mockRestore();
       startSpy.mockRestore();
       await fixture.restore();
     }

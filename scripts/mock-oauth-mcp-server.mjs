@@ -450,6 +450,10 @@ function mcpResult(message) {
               properties: { text: { type: "string" } },
               required: ["text"],
             },
+            annotations: {
+              readOnlyHint: true,
+              destructiveHint: false,
+            },
           },
           {
             name: "mock_batch",

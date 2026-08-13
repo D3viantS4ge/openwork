@@ -64,8 +64,10 @@ test("tape writes claimed frames, fact frames, failed frames, and unclaimed take
       passedFrames: 2,
       failedFrames: 1,
       unvalidatedFrames: 1,
+      pendingFrames: 0,
       passedExpectations: 2,
       failedExpectations: 1,
+      pendingJudgments: 0,
     });
     assert.ok(Array.isArray(roll.frames));
     assert.deepEqual(
@@ -113,8 +115,10 @@ test("tape accepts unchanged retakes and only lets one claim use their pixel has
       passedFrames: 1,
       failedFrames: 0,
       unvalidatedFrames: 1,
+      pendingFrames: 0,
       passedExpectations: 1,
       failedExpectations: 0,
+      pendingJudgments: 0,
     });
     assert.ok(Array.isArray(roll.frames));
     const claimed = roll.frames[0];
@@ -161,8 +165,10 @@ test("screenshot automatically records a take in the ambient tape", async () => 
       passedFrames: 0,
       failedFrames: 0,
       unvalidatedFrames: 1,
+      pendingFrames: 0,
       passedExpectations: 0,
       failedExpectations: 0,
+      pendingJudgments: 0,
     });
   } finally {
     await rm(dir, { recursive: true, force: true });

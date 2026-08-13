@@ -159,6 +159,27 @@ export function cloudWorkspaceStatusHasReadyContent(variant: CloudWorkspacePillV
   return variant === "ready" || variant === "stale";
 }
 
+/**
+ * Gateway boot is owned by the workspace takeover. Showing the generic overlay
+ * at the same time stacks two wait indicators on first load.
+ */
+export function shouldSuppressBootOverlayForGateway(input: {
+  gatewayMode: boolean;
+  signedIn: boolean;
+  variant: CloudWorkspacePillVariant;
+}): boolean {
+  return input.gatewayMode && input.signedIn && !cloudWorkspaceStatusHasReadyContent(input.variant);
+}
+
+export function shouldShowCloudWorkspaceStatusPill(input: {
+  variant: CloudWorkspacePillVariant;
+  hasInstance: boolean;
+  requestFailed: boolean;
+}): boolean {
+  if (!input.hasInstance && !input.requestFailed) return false;
+  return input.variant === "waking" || input.variant === "provisioning" || input.variant === "failed";
+}
+
 export function mapCloudWorkspaceMainContentDecision(input: {
   status: CloudWorkspacePillVariant;
   hasWorkspaces: boolean;

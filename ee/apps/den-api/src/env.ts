@@ -17,6 +17,8 @@ const EnvSchema = z.object({
   DB_MODE: z.enum(["mysql", "planetscale"]).optional(),
   BETTER_AUTH_SECRET: z.string().min(32),
   BETTER_AUTH_URL: z.string().min(1),
+  DATABASE_REDIS_URL: z.string().optional(),
+  DATABASE_REDIS_ALLOW_INSECURE_INTERNAL: z.string().optional(),
   DEN_MCP_RESOURCE_URL: z.string().optional(),
   DEN_MCP_ADDITIONAL_RESOURCES: z.string().optional(),
   DEN_BETTER_AUTH_TRUSTED_ORIGINS: z.string().optional(),
@@ -126,6 +128,7 @@ const EnvSchema = z.object({
   DEN_CONNECT_LINK_PRIVATE_KEY: z.string().optional(),
   DEN_CONNECT_LINK_KEY_ID: z.string().max(64).optional(),
   DEN_MCP_CONNECTIONS_GATING_ENABLED: z.string().optional(),
+  DEN_GENERATED_ARTIFACT_VIEWS_ENABLED: z.string().optional(),
   SCIM_MAINTENANCE_INTERVAL_MS: z.string().optional(),
   POLAR_FEATURE_GATE_ENABLED: z.string().optional(),
   POLAR_API_BASE: z.string().optional(),
@@ -284,6 +287,39 @@ function normalizeOrigin(origin: string) {
   return value.replace(/\/+$/, "")
 }
 
+function isLocalRedisHost(hostname: string) {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1"
+}
+
+function parseBooleanFlag(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase()
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on"
+}
+
+function normalizeRedisUrl(value: string | undefined, allowInsecureInternal: boolean) {
+  const configured = optionalString(value)
+  if (!configured) {
+    return undefined
+  }
+
+  let url: URL
+  try {
+    url = new URL(configured)
+  } catch {
+    throw new Error("DATABASE_REDIS_URL must be an absolute redis:// or rediss:// URL.")
+  }
+
+  if (url.protocol !== "redis:" && url.protocol !== "rediss:") {
+    throw new Error("DATABASE_REDIS_URL must use redis:// or rediss://.")
+  }
+
+  if (url.protocol === "redis:" && !isLocalRedisHost(url.hostname) && !allowInsecureInternal) {
+    throw new Error("DATABASE_REDIS_URL must use rediss:// for non-local Redis endpoints unless DATABASE_REDIS_ALLOW_INSECURE_INTERNAL=1 is set for a trusted private network.")
+  }
+
+  return url.toString()
+}
+
 function normalizeDiagnosticsOrigin(value: string | undefined, allowInsecureHttp: boolean) {
   const configured = optionalString(value) ?? DEFAULT_DEN_DIAGNOSTICS_ORIGIN
 
@@ -392,6 +428,12 @@ const connectLink = connectLinkMode === "signed" && connectLinkPrivateKeyPem && 
 const mcpConnectionsGatingEnabled =
   (parsed.DEN_MCP_CONNECTIONS_GATING_ENABLED ?? "false").toLowerCase() === "true"
 
+// Generated custom views require the matching desktop MCP Apps host release.
+// Keep the Den capability fail-closed so a Den deployment cannot advertise
+// bridge-dependent resources to older published desktop builds.
+const generatedArtifactViewsEnabled =
+  (parsed.DEN_GENERATED_ARTIFACT_VIEWS_ENABLED ?? "false").trim().toLowerCase() === "true"
+
 const devMode = (parsed.OPENWORK_DEV_MODE ?? "0").trim() === "1"
 const botIdProtectionEnabled = (parsed.DEN_BOTID_PROTECTION_ENABLED ?? "0").trim() === "1"
 const diagnosticsOrigin = normalizeDiagnosticsOrigin(parsed.DEN_DIAGNOSTICS_ORIGIN, devMode)
@@ -406,6 +448,15 @@ const publicUrlTrustedOrigins = Array.from(new Set([
   ...corsOrigins,
   ...betterAuthTrustedOrigins,
 ])).filter((origin) => origin !== "*")
+// Den Web serves this API under /api/den on the better-auth origin, so a
+// request forwarded from that origin is first-party by construction. Hosted
+// deployments proxy browser and desktop calls server-side and never need that
+// origin in CORS_ORIGINS, so deriving public routes from the CORS allowlist
+// alone silently drops the one origin clients actually call.
+const publicProxyTrustedOrigins = Array.from(new Set([
+  normalizeOrigin(parsed.BETTER_AUTH_URL),
+  ...publicUrlTrustedOrigins,
+]))
 const orgMode = parseDenOrgMode(parsed.DEN_ORG_MODE)
 // SSRF guard for External MCP Connection URLs: on hosted (multi-tenant)
 // deployments, Den must not fetch private/reserved addresses on behalf of
@@ -414,6 +465,7 @@ const orgMode = parseDenOrgMode(parsed.DEN_ORG_MODE)
 // (OPENWORK_DEV_MODE=1) is exempt automatically so evals against a local
 // stand-in server keep working.
 const allowPrivateMcpUrls = devMode || (parsed.DEN_ALLOW_PRIVATE_MCP_URLS ?? "0").trim() === "1"
+const allowInsecureInternalRedis = parseBooleanFlag(parsed.DATABASE_REDIS_ALLOW_INSECURE_INTERNAL)
 const requireEmailVerification = parsed.DEN_REQUIRE_EMAIL_VERIFICATION === undefined
   ? orgMode === "multi_org" && !devMode
   : parsed.DEN_REQUIRE_EMAIL_VERIFICATION.trim().toLowerCase() !== "false"
@@ -441,6 +493,13 @@ export const env = {
   planetscale: planetscaleCredentials,
   betterAuthSecret: parsed.BETTER_AUTH_SECRET,
   betterAuthUrl: normalizeOrigin(parsed.BETTER_AUTH_URL),
+  // SECURITY: `redis://` carries cached auth-session material in plaintext.
+  // Non-local redis:// is rejected by default. Hosted platforms such as Render
+  // may provide a private, non-public internal Redis URL without TLS; operators
+  // must explicitly opt in with DATABASE_REDIS_ALLOW_INSECURE_INTERNAL=1 after
+  // confirming the endpoint is only reachable inside a trusted private network.
+  databaseRedisUrl: normalizeRedisUrl(parsed.DATABASE_REDIS_URL, allowInsecureInternalRedis),
+  databaseRedisAllowInsecureInternal: allowInsecureInternalRedis,
   mcpResourceUrl: mcpResourceUrl
     ? normalizeOrigin(mcpResourceUrl)
     : devMode
@@ -465,6 +524,7 @@ export const env = {
   installLinksGatingEnabled,
   connectLink,
   mcpConnectionsGatingEnabled,
+  generatedArtifactViewsEnabled,
   scimMaintenanceIntervalMs: Number(parsed.SCIM_MAINTENANCE_INTERVAL_MS ?? "300000"),
   requireEmailVerification,
   passwordBreachScreeningEnabled,
@@ -531,6 +591,7 @@ export const env = {
     renderGitCommit: parsed.RENDER_GIT_COMMIT,
   }),
   publicUrlTrustedOrigins,
+  publicProxyTrustedOrigins,
   installerArtifactsDir: optionalString(parsed.OPENWORK_INSTALLER_ARTIFACTS_DIR),
   // Standard desktop release assets: the release tag to download from,
   // defaulting to the pinned app release this den-api build shipped with.

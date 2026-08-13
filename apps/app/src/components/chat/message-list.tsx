@@ -419,9 +419,8 @@ type AssistantMessageProps = {
 }
 
 const AssistantMessage = React.memo(
-  ({ message, hideReasoning }: AssistantMessageProps) => {
+  ({ message, isStreaming, hideReasoning }: AssistantMessageProps) => {
     const { showThinking, highlightQuery } = useMessageList()
-    const messageText = React.useMemo(() => getMessagesText([message]), [message])
     const assistantRenderGroups = React.useMemo(
       () => {
         const groups = getAssistantRenderGroups(message.parts, showThinking)
@@ -429,11 +428,6 @@ const AssistantMessage = React.memo(
       },
       [hideReasoning, message.parts, showThinking]
     )
-    const copyRenderedText = React.useCallback(() => {
-      const selection = window.getSelection()?.toString() ?? ""
-      const text = selection.trim() ? selection : messageText
-      if (text) void navigator.clipboard.writeText(text)
-    }, [messageText])
 
     return (
       <Message
@@ -441,77 +435,55 @@ const AssistantMessage = React.memo(
         data-message-id={message.id}
         data-message-role={message.role}
       >
-        <ContextMenu>
-          <ContextMenuTrigger
-            className="!select-text"
-            render={
-              <div
-                className="group flex w-full flex-col gap-0 space-y-2 !select-text"
-                style={{ userSelect: "text" }}
-              >
-                {assistantRenderGroups.map((group, index) => {
-                  if (group.kind === "text") {
-                    return (
-                      <MessageContent
-                        key={`text-${index}`}
-                        className="text-foreground prose w-full min-w-0 flex-1 rounded-lg bg-transparent p-0 !select-text"
-                        style={{ userSelect: "text" }}
-                        markdown
-                        highlightQuery={highlightQuery}
-                      >
-                        {group.text}
-                      </MessageContent>
-                    )
-                  }
-
-                  if (group.kind === "reasoning") {
-                    return (
-                      <ReasoningBlock
-                        key={`reasoning-${index}`}
-                        text={group.text}
-                        isStreaming={group.isStreaming}
-                      />
-                    )
-                  }
-
-                  if (group.kind === "file") {
-                    return (
-                      <div key={`file-${index}`} className="w-fit max-w-full">
-                        <FileMessage part={group.part} tone="assistant" />
-                      </div>
-                    )
-                  }
-
-                  if (group.kind === "tool-aggregate") {
-                    return (
-                      <div key={`tool-aggregate-${index}`} className="w-full">
-                        <ToolAggregateGroup parts={group.parts} />
-                      </div>
-                    )
-                  }
-
-                  return (
-                    <div key={`tool-${index}`} className="w-full">
-                      <ToolMessage part={group.part} />
-                    </div>
-                  )
-                })}
-              </div>
+        <div className="group flex w-full flex-col gap-0 space-y-2">
+          {assistantRenderGroups.map((group, index) => {
+            if (group.kind === "text") {
+              return (
+                <MessageContent
+                  key={`text-${index}`}
+                  className="text-foreground prose w-full min-w-0 flex-1 rounded-lg bg-transparent p-0"
+                  markdown
+                  isStreaming={isStreaming}
+                  highlightQuery={highlightQuery}
+                >
+                  {group.text}
+                </MessageContent>
+              )
             }
-          />
-          <ContextMenuContent className="w-56">
-            <ContextMenuItem onClick={copyRenderedText}>
-              <Copy className="size-4" />
-              Copy
-            </ContextMenuItem>
-            {messageText ? (
-              <ContextMenuItem onClick={() => void navigator.clipboard.writeText(messageText)}>
-                <Copy className="size-4" />
-                Copy as Markdown
-              </ContextMenuItem>
-            ) : null}
-          </ContextMenuContent>
-        </ContextMenu>
+
+            if (group.kind === "reasoning") {
+              return (
+                <ReasoningBlock
+                  key={`reasoning-${index}`}
+                  text={group.text}
+                  isStreaming={group.isStreaming}
+                />
+              )
+            }
+
+            if (group.kind === "file") {
+              return (
+                <div key={`file-${index}`} className="w-fit max-w-full">
+                  <FileMessage part={group.part} tone="assistant" />
+                </div>
+              )
+            }
+
+            if (group.kind === "tool-aggregate") {
+              return (
+                <div key={`tool-aggregate-${index}`} className="w-full">
+                  <ToolAggregateGroup parts={group.parts} />
+                </div>
+              )
+            }
+
+            return (
+              <div key={`tool-${index}`} className="w-full">
+                <ToolMessage part={group.part} />
+              </div>
+            )
+          })}
+        </div>
       </Message>
     )
   }
@@ -688,7 +660,7 @@ const UserMessage = React.memo(
                 {!isStreaming && (
                   <MessageActions
                     className={cn(
-                      "flex items-center gap-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+                      "flex items-center gap-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 max-lg:opacity-100 pointer-coarse:opacity-100"
                     )}
                   >
                     <MessageTimestamp message={message} className="mr-1.5" />
@@ -1133,7 +1105,7 @@ function MessageGroup({
         includeTargetFallbacks={false}
       />
       {lastTextMessage && !isStreaming && (
-        <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-2 px-2 opacity-0 transition-opacity duration-150 group-hover/message-group:opacity-100 md:px-8">
+        <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-2 px-2 opacity-0 transition-opacity duration-150 group-hover/message-group:opacity-100 max-lg:opacity-100 pointer-coarse:opacity-100 md:px-8">
           <MessageActions className="flex gap-0">
             <CopyMessageButton messages={renderableItems.map((item) => item.message)} />
             {lastRealItem ? (

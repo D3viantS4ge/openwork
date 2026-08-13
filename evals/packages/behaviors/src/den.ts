@@ -27,6 +27,7 @@ export interface ProvisionedOrg {
 }
 
 const REPO_ROOT = fileURLToPath(new URL("../../../..", import.meta.url));
+// Two 300s header stalls were observed on fresh-sandbox first contact.
 const DEFAULT_DEN_FETCH_TIMEOUT_MS = 30_000;
 
 function trimTrailingSlashes(value: string): string {

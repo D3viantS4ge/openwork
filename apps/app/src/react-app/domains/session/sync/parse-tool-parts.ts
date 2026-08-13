@@ -1,7 +1,8 @@
-import type { DynamicToolUIPart, TextUIPart } from "ai";
+import type { DynamicToolUIPart, JSONValue, ProviderMetadata, TextUIPart } from "ai";
 import type { ToolPart } from "@opencode-ai/sdk/v2/client";
 
 import { safeStringify } from "@/app/utils";
+import { normalizeErrorText } from "@/lib/error-text";
 
 export const STRUCTURED_OUTPUT_TOOL = "StructuredOutput";
 
@@ -9,6 +10,32 @@ export const STRUCTURED_OUTPUT_TOOL = "StructuredOutput";
 export type OpenworkDynamicToolUIPart = DynamicToolUIPart & {
   metadata?: Record<string, unknown>;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isJsonValue(value: unknown, depth = 0): value is JSONValue {
+  if (depth > 32) return false;
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return true;
+  if (Array.isArray(value)) return value.length <= 4_096 && value.every((entry) => isJsonValue(entry, depth + 1));
+  if (!isRecord(value)) return false;
+  const entries = Object.values(value);
+  return entries.length <= 4_096 && entries.every((entry) => isJsonValue(entry, depth + 1));
+}
+
+function toolCallProviderMetadata(part: ToolPart): ProviderMetadata {
+  const stateMetadata = "metadata" in part.state && isRecord(part.state.metadata) ? part.state.metadata : {};
+  const mcpResult = isJsonValue(stateMetadata.openworkMcpResult)
+    ? stateMetadata.openworkMcpResult
+    : isJsonValue(stateMetadata.openworkMcpApp)
+      ? stateMetadata.openworkMcpApp
+      : null;
+  return {
+    opencode: { partId: part.id },
+    ...(mcpResult ? { openwork: { mcpResult } } : {}),
+  };
+}
 
 function shouldDeferInProgressTool(part: ToolPart) {
   if (part.state.status === "completed" || part.state.status === "error") {
@@ -49,9 +76,9 @@ export function parseDynamicToolUIPart(part: ToolPart): OpenworkDynamicToolUIPar
       toolCallId: part.callID,
       state: "output-error",
       input: part.state.input,
-      errorText: part.state.error,
+      errorText: normalizeErrorText(part.state.error).display,
       metadata: part.state.metadata,
-      callProviderMetadata: { opencode: { partId: part.id } },
+      callProviderMetadata: toolCallProviderMetadata(part),
     };
   }
 
@@ -64,7 +91,7 @@ export function parseDynamicToolUIPart(part: ToolPart): OpenworkDynamicToolUIPar
       input: part.state.input,
       output: part.state.output,
       metadata: part.state.metadata,
-      callProviderMetadata: { opencode: { partId: part.id } },
+      callProviderMetadata: toolCallProviderMetadata(part),
     };
   }
 
@@ -81,6 +108,6 @@ export function parseDynamicToolUIPart(part: ToolPart): OpenworkDynamicToolUIPar
     state: "input-streaming",
     input: part.state.input,
     metadata: "metadata" in part.state ? part.state.metadata : undefined,
-    callProviderMetadata: { opencode: { partId: part.id } },
+    callProviderMetadata: toolCallProviderMetadata(part),
   };
 }

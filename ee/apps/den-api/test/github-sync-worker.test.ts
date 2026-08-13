@@ -1,4 +1,6 @@
 import { beforeAll, expect, test } from "bun:test"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 
 function seedRequiredEnv() {
   process.env.DATABASE_URL = process.env.DATABASE_URL ?? "mysql://root:password@127.0.0.1:3306/openwork_test"
@@ -89,4 +91,21 @@ test("GitHub reconcile selection excludes probes newer than the minimum age and 
       { createdAtMs: 30, targetId: "never-probed" },
     ],
   })).toEqual(["never-probed", "at-boundary"])
+})
+
+test("GitHub sync batches active-target lookups instead of querying once per event or target", () => {
+  const source = readFileSync(join(import.meta.dir, "../src/workers/github-sync.ts"), "utf8")
+  const dueEvents = source.slice(
+    source.indexOf("export async function processDueGithubSyncEvents"),
+    source.indexOf("function githubTargetConfig"),
+  )
+  const reconciliation = source.slice(
+    source.indexOf("export async function reconcileGithubConnectorTargets"),
+    source.indexOf("let workerTickRunning"),
+  )
+
+  expect(dueEvents).toContain("await connectorTargetIdsWithStatuses(eventTargetIds, [\"running\"])")
+  expect(dueEvents).not.toContain("const runningEvents = await db")
+  expect(reconciliation).toContain("targets.map((row) => row.target.id)")
+  expect(reconciliation).not.toContain("const activeEvents = await db")
 })

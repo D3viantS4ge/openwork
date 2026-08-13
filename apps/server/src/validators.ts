@@ -3,6 +3,7 @@ import { ApiError } from "./errors.js";
 const SKILL_NAME_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const COMMAND_NAME_REGEX = /^[A-Za-z0-9_-]+$/;
 const MCP_NAME_REGEX = /^[A-Za-z0-9_-]+$/;
+const RESERVED_USER_MCP_NAMES = new Set(["openwork-cloud"]);
 
 export function validateSkillName(name: string): void {
   if (!name || name.length < 1 || name.length > 64 || !SKILL_NAME_REGEX.test(name)) {
@@ -36,6 +37,13 @@ export function validateCommandName(name: string): void {
 export function validateMcpName(name: string): void {
   if (!name || name.startsWith("-") || !MCP_NAME_REGEX.test(name)) {
     throw new ApiError(400, "invalid_mcp_name", "MCP name must be alphanumeric and not start with -");
+  }
+}
+
+export function validateUserMcpName(name: string): void {
+  validateMcpName(name);
+  if (RESERVED_USER_MCP_NAMES.has(name.toLowerCase())) {
+    throw new ApiError(409, "reserved_mcp_name", `${name} is reserved for OpenWork Connect`);
   }
 }
 

@@ -6,6 +6,13 @@ import {
   type DenDesktopHandoffExchange,
 } from "./den";
 import { dispatchDenSessionUpdated } from "./den-session-events";
+import {
+  clearDesktopSignInIntent,
+  clearOrgSelectionPending,
+  hasActiveDesktopSignInIntent,
+  markOrgSelectionPending,
+  resolveHandoffOrgPlan,
+} from "./den-sign-in-intent";
 
 type DenClient = ReturnType<typeof createDenClient>;
 export const DEN_HANDOFF_AUTO_CONTINUE_KEY = "openwork.den.handoffAutoContinueAt";
@@ -23,6 +30,14 @@ export type ExchangeHandoffOptions = {
   client?: DenClient;
   /** Optional active org to select on sign-in (bootstrap prepares this). */
   activeOrg?: HandoffActiveOrg | null;
+  /**
+   * How this sign-in started. Desktop-initiated flows (in-app sign-in
+   * buttons, pasted one-time codes) defer the organization choice to the org
+   * onboarding step instead of adopting the exchange-reported org. When
+   * omitted, the short-lived desktop sign-in intent marker decides;
+   * automation surfaces pass `false` to keep committing directly.
+   */
+  desktopInitiated?: boolean;
   /** Message used when the exchange fails without a specific Error message. */
   fallbackErrorMessage?: string;
 };
@@ -58,19 +73,45 @@ export async function exchangeHandoffAndSignIn(
         window.sessionStorage.setItem(DEN_HANDOFF_AUTO_CONTINUE_KEY, String(Date.now()));
       } catch {}
     }
-    // Prefer the caller-provided org (install-link bootstrap), then the org the
-    // server resolved for this session. When neither is known, keep whatever is
-    // already stored: overwriting with null strands fresh profiles without an
-    // organization, which disables Connect and skips org onboarding.
-    const activeOrg = options.activeOrg ?? exchange.organization ?? null;
-    const storedSettings = readDenSettings();
-    writeDenSettings({
-      baseUrl: options.baseUrl,
-      authToken: exchange.token,
-      activeOrgId: activeOrg ? activeOrg.id : storedSettings.activeOrgId,
-      activeOrgSlug: activeOrg ? activeOrg.slug ?? null : storedSettings.activeOrgSlug,
-      activeOrgName: activeOrg ? activeOrg.name ?? null : storedSettings.activeOrgName,
+    const desktopInitiated = options.desktopInitiated ?? hasActiveDesktopSignInIntent();
+    clearDesktopSignInIntent();
+    const plan = resolveHandoffOrgPlan({
+      explicitActiveOrg: options.activeOrg ?? null,
+      exchangeOrganization: exchange.organization ?? null,
+      desktopInitiated,
     });
+    const storedSettings = readDenSettings();
+    if (plan.kind === "await-user-selection") {
+      // Desktop-initiated sign-in: hold the org choice for the onboarding
+      // step. The exchange-reported org is only the chooser's default;
+      // single-org accounts still auto-select there without a visible stop.
+      markOrgSelectionPending(plan.suggestion);
+      writeDenSettings(
+        {
+          baseUrl: options.baseUrl,
+          authToken: exchange.token,
+          activeOrgId: null,
+          activeOrgSlug: null,
+          activeOrgName: null,
+        },
+        { intentionalActiveOrgClear: true },
+      );
+    } else {
+      // Prefer the caller-provided org (install-link bootstrap), then the org
+      // the server resolved for this session. When neither is known, keep
+      // whatever is already stored: overwriting with null strands fresh
+      // profiles without an organization, which disables Connect and skips
+      // org onboarding.
+      clearOrgSelectionPending();
+      const activeOrg = plan.organization;
+      writeDenSettings({
+        baseUrl: options.baseUrl,
+        authToken: exchange.token,
+        activeOrgId: activeOrg ? activeOrg.id : storedSettings.activeOrgId,
+        activeOrgSlug: activeOrg ? activeOrg.slug ?? null : storedSettings.activeOrgSlug,
+        activeOrgName: activeOrg ? activeOrg.name ?? null : storedSettings.activeOrgName,
+      });
+    }
     if (exchange.organization) {
       seedDenDesktopConfigConnectPolicy({
         organizationId: exchange.organization.id,

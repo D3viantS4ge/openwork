@@ -23,6 +23,7 @@ import {
   DEN_SESSION_UPDATE_AGE_IN_SECONDS,
 } from "./session-lifetime.js";
 import { DEN_ACCOUNT_CONFIG } from "./account-linking-policy.js";
+import { cache } from "./cache.js";
 import { SCIM_TOKEN_STORAGE_STRATEGY } from "./scim-token-storage.js";
 import { syncDenSignupContact } from "./loops.js";
 import { sendEmail } from "./utils/email/send-email.js";
@@ -329,6 +330,34 @@ function readStringProperty(value: unknown, propertyName: string) {
   return typeof property === "string" && property.trim() ? property.trim() : null;
 }
 
+function readRequestQueryParam(request: Request | undefined, propertyName: string) {
+  if (!request) {
+    return null;
+  }
+
+  const value = new URL(request.url).searchParams.get(propertyName)?.trim() ?? "";
+  return value || null;
+}
+
+async function hasPendingInvitationForEmail(input: { invitationIdOrToken: string | null; email: string | null }) {
+  if (!input.invitationIdOrToken || !input.email) {
+    return false;
+  }
+
+  const [invitation] = await db
+    .select({ inviteToken: schema.InvitationTable.inviteToken })
+    .from(schema.InvitationTable)
+    .where(and(
+      sql`(${schema.InvitationTable.id} = ${input.invitationIdOrToken} or ${schema.InvitationTable.inviteToken} = ${input.invitationIdOrToken})`,
+      eq(schema.InvitationTable.status, "pending"),
+      gt(schema.InvitationTable.expiresAt, new Date()),
+      sql`lower(${schema.InvitationTable.email}) = ${input.email.trim().toLowerCase()}`,
+    ))
+    .limit(1);
+
+  return Boolean(invitation);
+}
+
 function normalizeRawRoleValue(roleValue: string) {
   return splitOrganizationRoles(roleValue)
     .map((role) => normalizeOrganizationRoleName(role))
@@ -548,6 +577,15 @@ export const auth = betterAuth({
     freshAge: 15 * 60,
   },
   databaseHooks: {
+    user: {
+      update: {
+        after: async (user) => {
+          if (typeof user.id === "string") {
+            await cache.auth.deleteSessionsForUser(normalizeDenTypeId("user", user.id));
+          }
+        },
+      },
+    },
     member: {
       delete: {
         before: async (member: AuthMemberHookRow) => {
@@ -592,6 +630,20 @@ export const auth = betterAuth({
           };
         },
       },
+      update: {
+        after: async (session) => {
+          if (typeof session.token === "string") {
+            await cache.auth.deleteSession(session.token);
+          }
+        },
+      },
+      delete: {
+        after: async (session) => {
+          if (typeof session.token === "string") {
+            await cache.auth.deleteSession(session.token);
+          }
+        },
+      },
     },
   },
   hooks: {
@@ -631,7 +683,8 @@ export const auth = betterAuth({
 
         if (ctx.path === "/organization/leave") {
           const organizationId = readStringProperty(ctx.body, "organizationId");
-          const session = await ctx.context.getSession(ctx).catch(() => null);
+          const token = await ctx.getSignedCookie(ctx.context.authCookies.sessionToken.name, ctx.context.secret).catch(() => null);
+          const session = typeof token === "string" ? await cache.auth.session(token) : null;
           if (organizationId && session?.user.id) {
             const member = await getOrganizationMemberRole({
               organizationId,
@@ -646,7 +699,8 @@ export const auth = betterAuth({
         }
 
         if (ctx.path === "/organization/add-member") {
-          const session = await ctx.context.getSession(ctx).catch(() => null);
+          const token = await ctx.getSignedCookie(ctx.context.authCookies.sessionToken.name, ctx.context.secret).catch(() => null);
+          const session = typeof token === "string" ? await cache.auth.session(token) : null;
           const organizationId = readStringProperty(ctx.body, "organizationId")
             ?? (typeof session?.session.activeOrganizationId === "string" ? session.session.activeOrganizationId : null);
           if (organizationId && session?.user.id) {
@@ -668,7 +722,8 @@ export const auth = betterAuth({
         }
 
         if (ctx.path === "/organization/invite-member") {
-          const session = await ctx.context.getSession(ctx).catch(() => null);
+          const token = await ctx.getSignedCookie(ctx.context.authCookies.sessionToken.name, ctx.context.secret).catch(() => null);
+          const session = typeof token === "string" ? await cache.auth.session(token) : null;
           const organizationId = readStringProperty(ctx.body, "organizationId")
             ?? (typeof session?.session.activeOrganizationId === "string" ? session.session.activeOrganizationId : null);
           if (organizationId && session?.user.id) {
@@ -696,7 +751,11 @@ export const auth = betterAuth({
 
       const email = getAuthBodyEmail(ctx.body);
       if (ctx.path === "/sign-up/email") {
-        const violation = await getSingleOrgEmailSignupPolicyViolation(email);
+        const invitationAllowsSignup = await hasPendingInvitationForEmail({
+          invitationIdOrToken: readRequestQueryParam(ctx.request, "invite") ?? readStringProperty(ctx.query, "invite") ?? readStringProperty(ctx.body, "invite"),
+          email,
+        });
+        const violation = invitationAllowsSignup ? null : await getSingleOrgEmailSignupPolicyViolation(email);
         if (violation) {
           throw new APIError("FORBIDDEN", { message: violation.message });
         }
@@ -742,6 +801,7 @@ export const auth = betterAuth({
       }
 
       await ctx.context.internalAdapter.deleteSession(newSession.session.token);
+      await cache.auth.deleteSession(newSession.session.token);
       deleteSessionCookie(ctx);
       throw ctx.redirect(getEnterpriseAuthRedirectUrl({
         signInPath: requirement.signInPath,

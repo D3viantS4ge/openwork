@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { exchangeHandoffAndSignIn } from "../src/app/lib/den-handoff";
+import {
+  hasActiveDesktopSignInIntent,
+  markDesktopSignInInitiated,
+  markOrgSelectionPending,
+  readOrgSelectionPending,
+} from "../src/app/lib/den-sign-in-intent";
 
 const originalWindow = globalThis.window;
 const originalFetch = globalThis.fetch;
@@ -120,5 +126,86 @@ describe("exchangeHandoffAndSignIn", () => {
     expect(result.exchange.connectEnabled).toBeNull();
     expect(window.localStorage.getItem("openwork.den.desktopConfig:https://den.test::org_stored"))
       .toBeNull();
+  });
+
+  test("a desktop-initiated sign-in defers the org choice to the chooser", async () => {
+    stubWindow();
+    stubExchangeResponse({
+      token: "tok_handoff",
+      user: exchangeUser,
+      organization: { id: "org_default", slug: "default-org", name: "Default Org" },
+    });
+
+    const result = await exchangeHandoffAndSignIn("grant_test", {
+      baseUrl: "https://den.test",
+      desktopInitiated: true,
+    });
+
+    expect(result.ok).toBe(true);
+    // Token persists, but no organization is committed…
+    expect(window.localStorage.getItem("openwork.den.authToken")).toBe("tok_handoff");
+    expect(window.localStorage.getItem("openwork.den.activeOrgId")).toBeNull();
+    // …and the chooser sees the pending state with the exchange org suggested.
+    expect(readOrgSelectionPending()).toEqual({
+      pending: true,
+      suggestion: { id: "org_default", slug: "default-org", name: "Default Org" },
+    });
+  });
+
+  test("the desktop sign-in intent marker classifies an unlabeled handoff", async () => {
+    stubWindow();
+    markDesktopSignInInitiated();
+    stubExchangeResponse({
+      token: "tok_handoff",
+      user: exchangeUser,
+      organization: { id: "org_default", slug: "default-org", name: "Default Org" },
+    });
+
+    const result = await exchangeHandoffAndSignIn("grant_test", { baseUrl: "https://den.test" });
+
+    expect(result.ok).toBe(true);
+    expect(window.localStorage.getItem("openwork.den.activeOrgId")).toBeNull();
+    expect(readOrgSelectionPending().pending).toBe(true);
+    // The marker is consumed: a later remote handoff is not reclassified.
+    expect(hasActiveDesktopSignInIntent()).toBe(false);
+  });
+
+  test("an explicitly scoped org connects straight through even when desktop-initiated", async () => {
+    stubWindow();
+    markDesktopSignInInitiated();
+    stubExchangeResponse({
+      token: "tok_handoff",
+      user: exchangeUser,
+      organization: { id: "org_exchange", slug: "exchange-org", name: "Exchange Org" },
+    });
+
+    const result = await exchangeHandoffAndSignIn("grant_test", {
+      baseUrl: "https://den.test",
+      activeOrg: { id: "org_invite", slug: "invite-org", name: "Invite Org" },
+      desktopInitiated: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(window.localStorage.getItem("openwork.den.activeOrgId")).toBe("org_invite");
+    expect(readOrgSelectionPending().pending).toBe(false);
+  });
+
+  test("a remote handoff clears stale pending state and commits its organization", async () => {
+    stubWindow();
+    markOrgSelectionPending({ id: "org_stale", slug: null, name: null });
+    stubExchangeResponse({
+      token: "tok_handoff",
+      user: exchangeUser,
+      organization: { id: "org_remote", slug: "remote-org", name: "Remote Org" },
+    });
+
+    const result = await exchangeHandoffAndSignIn("grant_test", {
+      baseUrl: "https://den.test",
+      desktopInitiated: false,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(window.localStorage.getItem("openwork.den.activeOrgId")).toBe("org_remote");
+    expect(readOrgSelectionPending()).toEqual({ pending: false, suggestion: null });
   });
 });

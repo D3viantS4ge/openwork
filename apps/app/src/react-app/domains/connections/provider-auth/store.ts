@@ -36,9 +36,11 @@ import {
 } from "../../../../app/utils/providers";
 import { getReactQueryClient } from "../../../infra/query-client";
 import {
+  clearProviderListQueries,
   ensureProviderListQuery,
   getConnectedProviderItems,
 } from "../../../infra/provider-list-query";
+import type { OpenworkCloudProviderSyncSkippedProvider } from "../../../../app/lib/openwork-server";
 import type { OpenworkServerStoreSnapshot } from "../openwork-server-store";
 
 /**
@@ -56,6 +58,7 @@ export type ProviderAuthOpenworkServer = {
   };
 };
 import {
+  denSettingsChangedEvent,
   denSessionUpdatedEvent,
   type DenSessionUpdatedDetail,
 } from "../../../../app/lib/den-session-events";
@@ -91,6 +94,7 @@ import {
   readStoredDefaultModel,
   writeStoredDefaultModel,
 } from "../../../kernel/model-config";
+import { DEFAULT_MODEL } from "../../../../app/constants";
 
 type ProviderReturnFocusTarget = "none" | "composer";
 type CloudProviderSyncReason =
@@ -181,6 +185,18 @@ export type ProviderOAuthStartResult = {
   authorization: ProviderAuthAuthorization;
 };
 
+/**
+ * Server-side sync facts the Cloud Providers settings rows derive from when
+ * the local server owns provider sync: whether an engine reload is still owed
+ * (materialized providers are not served yet) and which Den-granted providers
+ * the server skipped, keyed by cloudProviderId. Null while the legacy
+ * renderer-side import path owns the state (remote/hostless workspaces).
+ */
+export type CloudProviderServerSyncState = {
+  reloadPending: boolean;
+  skippedProviders: Record<string, OpenworkCloudProviderSyncSkippedProvider>;
+};
+
 export type ProviderAuthStoreSnapshot = {
   providerAuthModalOpen: boolean;
   providerAuthBusy: boolean;
@@ -191,6 +207,7 @@ export type ProviderAuthStoreSnapshot = {
   providerAuthProviders: ProviderAuthProvider[];
   cloudOrgProviders: DenOrgLlmProvider[];
   importedCloudProviders: Record<string, CloudImportedProvider>;
+  cloudProviderServerSync: CloudProviderServerSyncState | null;
   lastSyncError: Record<string, CloudProviderSyncError>;
 };
 
@@ -224,6 +241,7 @@ type MutableState = {
   providerAuthReturnFocusTarget: ProviderReturnFocusTarget;
   cloudOrgProviders: DenOrgLlmProvider[];
   importedCloudProviders: Record<string, CloudImportedProvider>;
+  cloudProviderServerSync: CloudProviderServerSyncState | null;
   lastSyncError: Record<string, CloudProviderSyncError>;
 };
 
@@ -262,12 +280,14 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
     providerAuthReturnFocusTarget: "none",
     cloudOrgProviders: [],
     importedCloudProviders: {},
+    cloudProviderServerSync: null,
     lastSyncError: {},
   };
 
   let cloudOrgProvidersLoadKey = "";
   let cloudOrgProvidersInFlightKey = "";
   let cloudOrgProvidersInFlight: Promise<DenOrgLlmProvider[]> | null = null;
+  let cloudOrgProvidersGeneration = 0;
   let cloudProviderSyncTail: Promise<void> = Promise.resolve();
   let cloudProviderSyncContextKey = "";
   let lastDenSessionPushKey = "";
@@ -394,6 +414,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
       providerAuthProviders: getProviderAuthProviders(),
       cloudOrgProviders: state.cloudOrgProviders,
       importedCloudProviders: state.importedCloudProviders,
+      cloudProviderServerSync: state.cloudProviderServerSync,
       lastSyncError: state.lastSyncError,
     };
   };
@@ -512,7 +533,21 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
         const status = await openworkClient.getCloudProviderSyncStatus();
         const next = Object.fromEntries(status.providers.map((provider) => [provider.cloudProviderId, provider]));
         setStateField("importedCloudProviders", next);
+        // Carry the server's truth alongside the records: rows must not show
+        // "Connected" while an engine reload is still owed, and skipped
+        // providers must name themselves instead of staying "Syncing".
+        setStateField("cloudProviderServerSync", {
+          reloadPending: status.reloadPending,
+          skippedProviders: Object.fromEntries(
+            status.skippedProviders.map((provider) => [provider.cloudProviderId, provider]),
+          ),
+        });
         return next;
+      }
+      // Legacy renderer-side import path (remote/hostless workspaces): the
+      // server sync facts do not apply here.
+      if (state.cloudProviderServerSync !== null) {
+        setStateField("cloudProviderServerSync", null);
       }
       const config = await readWorkspaceOpenworkConfigRecord();
       const cloudImports = readWorkspaceCloudImports(config);
@@ -985,6 +1020,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
     }
 
     if (!token || !orgId) {
+      cloudOrgProvidersGeneration += 1;
       setStateField("cloudOrgProviders", []);
       cloudOrgProvidersLoadKey = loadKey;
       return [];
@@ -994,20 +1030,35 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
       baseUrl: settings.baseUrl,
       token,
     });
+    const generation = ++cloudOrgProvidersGeneration;
     const request = client
       .listOrgLlmProviders(orgId)
       .then((providers) => {
+        if (
+          generation !== cloudOrgProvidersGeneration ||
+          getCloudOrgProvidersKey() !== loadKey
+        ) {
+          return state.cloudOrgProviders;
+        }
         setStateField("cloudOrgProviders", providers);
         cloudOrgProvidersLoadKey = loadKey;
         return providers;
       })
       .catch((error) => {
-        setStateField("cloudOrgProviders", []);
-        cloudOrgProvidersLoadKey = "";
+        if (
+          generation === cloudOrgProvidersGeneration &&
+          getCloudOrgProvidersKey() === loadKey
+        ) {
+          setStateField("cloudOrgProviders", []);
+          cloudOrgProvidersLoadKey = "";
+        }
         throw error;
       })
       .finally(() => {
-        if (cloudOrgProvidersInFlightKey === loadKey) {
+        if (
+          generation === cloudOrgProvidersGeneration &&
+          cloudOrgProvidersInFlightKey === loadKey
+        ) {
           cloudOrgProvidersInFlight = null;
           cloudOrgProvidersInFlightKey = "";
         }
@@ -1777,6 +1828,19 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
     );
   };
 
+  const publishSettingsCloudProviderSyncError = (
+    reason: CloudProviderSyncReason,
+    message: string,
+  ) => {
+    if (reason !== "settings_cloud_opened") return;
+    // A sync that loses its session while logout is clearing account state is
+    // cancellation, not a user-actionable provider failure.
+    setStateField(
+      "providerAuthError",
+      hasCloudProviderSyncPrerequisites() ? message : null,
+    );
+  };
+
   const preselectEntitledOrgDefaultModel = (
     providerList: ProviderListResponse | null | undefined,
   ) => {
@@ -1949,6 +2013,12 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
   }
 
   async function runCloudProviderSync(reason: CloudProviderSyncReason) {
+    if (!hasCloudProviderSyncPrerequisites()) {
+      if (reason === "settings_cloud_opened") {
+        setStateField("providerAuthError", null);
+      }
+      return;
+    }
     if (getOpenworkGatewayOrigin()) {
       if (!loggedGatewayCloudProviderSyncSkip) {
         loggedGatewayCloudProviderSyncSkip = true;
@@ -1968,14 +2038,18 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
           await pushDenSession(true);
           result = await openworkClient.runCloudProviderSyncNow(reason);
         }
+        // Re-derive the imported records (and reloadPending/skips) from the
+        // server's status after EVERY server-handled pass. Without this the
+        // Cloud Providers rows kept whatever the one-shot start() read found
+        // (usually nothing) and sat on "Syncing" forever even though the
+        // server had long since applied the sync (#3671, UI layer).
+        await refreshImportedCloudProviders();
         if (result.status === "failed" || result.status === "no_session") {
           const message = logCloudProviderSyncError(
             reason,
             new Error(result.message ?? "Cloud provider sync failed."),
           );
-          if (reason === "settings_cloud_opened") {
-            setStateField("providerAuthError", message);
-          }
+          publishSettingsCloudProviderSyncError(reason, message);
           return;
         }
         // The server may already be synchronized while this route still holds
@@ -1986,9 +2060,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
         return { outcome: "handled_server_side" };
       } catch (error) {
         const message = logCloudProviderSyncError(reason, error);
-        if (reason === "settings_cloud_opened") {
-          setStateField("providerAuthError", message);
-        }
+        publishSettingsCloudProviderSyncError(reason, message);
         return;
       }
     }
@@ -2003,9 +2075,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
       )
       .catch((error) => {
         const message = logCloudProviderSyncError(reason, error);
-        if (reason === "settings_cloud_opened") {
-          setStateField("providerAuthError", message);
-        }
+        publishSettingsCloudProviderSyncError(reason, message);
       });
 
     cloudProviderSyncTail = request;
@@ -2179,6 +2249,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
     lastWorkspaceKey = currentWorkspaceKey();
     if (typeof window !== "undefined") {
       const handleDenSessionUpdate = (event: Event) => {
+        cloudOrgProvidersGeneration += 1;
         cloudOrgProvidersLoadKey = "";
         cloudOrgProvidersInFlightKey = "";
         cloudOrgProvidersInFlight = null;
@@ -2189,13 +2260,52 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
             ...current,
             cloudOrgProviders: [],
             providerAuthMethods: {},
+            providerAuthError: null,
+            cloudProviderServerSync: null,
             lastSyncError: {},
           }));
+          void refreshCloudOrgProviders({ force: true }).catch(() => undefined);
           void pushDenSession().then(() => runCloudProviderSync("sign_in"));
         } else {
+          const logoutProviderIds = detail?.status === "signed_out"
+            ? [...new Set(options.providerConnectedIds())].filter(
+              (providerId) => providerId.trim().toLowerCase() !== DESKTOP_RESTRICTION_OPENCODE_PROVIDER_ID,
+            )
+            : [];
+          // Account-scoped catalog state must disappear synchronously. Config
+          // and credential cleanup continues below without leaving stale
+          // models visible while those best-effort operations finish.
+          clearProviderListQueries(getReactQueryClient());
+          for (const providerId of logoutProviderIds) {
+            removeProviderFromState(providerId);
+          }
+          if (
+            logoutProviderIds.some(
+              (providerId) => providerId === readStoredDefaultModel().providerID,
+            )
+          ) {
+            writeStoredDefaultModel(DEFAULT_MODEL);
+          }
+          mutateState((current) => ({
+            ...current,
+            cloudOrgProviders: [],
+            providerAuthMethods: {},
+            providerAuthError: null,
+            cloudProviderServerSync: null,
+            lastSyncError: {},
+          }));
           if (serverHandlesProviderSync()) {
             lastDenSessionPushKey = "";
-            void options.openworkServer.getSnapshot().openworkServerClient?.deleteDenSession().catch(() => undefined);
+            void (async () => {
+              await options.openworkServer.getSnapshot().openworkServerClient?.deleteDenSession().catch(() => undefined);
+              // The server removes cloud-owned environment entries from disk,
+              // but a running OpenCode child retains its spawn environment.
+              // Explicit desktop sign-out must replace that process so an
+              // account-scoped provider cannot remain connected in the UI.
+              if (detail?.status === "signed_out" && isDesktopRuntime()) {
+                await engineRestart({}).catch(() => undefined);
+              }
+            })();
           }
           // Sign-out or error: remove all cloud-imported providers from the workspace
           // Capture the full import records BEFORE clearing state
@@ -2205,6 +2315,15 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
           // Best-effort cleanup: remove each cloud provider from opencode.jsonc
           // BEFORE clearing state so removeCloudProviderInternal can find the records
           void (async () => {
+            for (const providerId of logoutProviderIds) {
+              try {
+                await removeProviderAuthCredentials(providerId);
+              } catch {
+                // Providers backed exclusively by the environment have no
+                // stored credential to remove. Their environment remains
+                // operator-owned and is not mutated by account logout.
+              }
+            }
             for (const cloudId of importedIds) {
               try {
                 await removeCloudProviderInternal(cloudId, { silent: true });
@@ -2235,7 +2354,9 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
               ...current,
               cloudOrgProviders: [],
               providerAuthMethods: {},
+              providerAuthError: null,
               importedCloudProviders: {},
+              cloudProviderServerSync: null,
               lastSyncError: {},
             }));
             refreshSnapshot();
@@ -2247,13 +2368,29 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
         denSessionUpdatedEvent,
         handleDenSessionUpdate as EventListener,
       );
+      const handleDenSettingsChange = () => {
+        void refreshCloudOrgProviders({ force: true }).catch(() => undefined);
+      };
+      window.addEventListener(
+        denSettingsChangedEvent,
+        handleDenSettingsChange,
+      );
       denSessionCleanup = () => {
         window.removeEventListener(
           denSessionUpdatedEvent,
           handleDenSessionUpdate as EventListener,
         );
+        window.removeEventListener(
+          denSettingsChangedEvent,
+          handleDenSettingsChange,
+        );
       };
     }
+    // The member's assigned model catalog is organization-scoped, not
+    // workspace-scoped. Hydrate it independently so the model picker works on
+    // first launch before a workspace exists (workspace sync still handles
+    // credential materialization once a workspace is selected).
+    void refreshCloudOrgProviders().catch(() => undefined);
     void refreshImportedCloudProviders().then((imported) => {
       // Startup cleanup: if no auth token, remove any cloud providers that
       // were left behind. Handles orphans from a previous sign-out that
@@ -2283,6 +2420,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
           mutateState((current) => ({
             ...current,
             importedCloudProviders: {},
+            cloudProviderServerSync: null,
           }));
           refreshSnapshot();
           emitChange();

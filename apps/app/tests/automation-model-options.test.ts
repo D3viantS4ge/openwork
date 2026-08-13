@@ -4,6 +4,7 @@ import {
   automationModelOptions,
   automationPickerOptions,
   describeAutomationModel,
+  resolveProposalModel,
 } from "../src/react-app/domains/automations/automation-model-options"
 
 function provider(input: Partial<DenOrgLlmProvider> & Pick<DenOrgLlmProvider, "id" | "name" | "source">): DenOrgLlmProvider {
@@ -27,6 +28,10 @@ describe("Automation model options", () => {
       modelName: "Big Pickle",
       accessKind: "free",
     }])
+  })
+
+  test("removes the free starter model when desktop policy disables OpenCode Zen", () => {
+    expect(automationModelOptions([], { includeFreeStarter: false })).toEqual([])
   })
 
   test("expands the member's managed OpenWork aliases even when Den stores no model rows", () => {
@@ -110,5 +115,75 @@ describe("Automation model options", () => {
     // still lists — just without reasoning levels.
     expect(free?.isFree).toBe(true)
     expect(free?.behaviorOptions).toEqual([])
+  })
+})
+
+describe("Automation proposal model resolution", () => {
+  const customProvider = provider({
+    id: "lpr_abc",
+    providerId: "deepseek",
+    source: "custom",
+    name: "DeepSeek",
+    models: [{ id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", config: {}, createdAt: null }],
+  })
+
+  test("defaults an omitted model to the free starter model", () => {
+    expect(resolveProposalModel(undefined, [])).toEqual({
+      model: { providerId: "opencode", modelId: "big-pickle", variant: null },
+      resolution: "default",
+    })
+  })
+
+  test("preserves exact custom, free, and managed model identities", () => {
+    const custom = { providerId: "lpr_abc", modelId: "deepseek-v4-flash", variant: "high" }
+    expect(resolveProposalModel(custom, [customProvider])).toEqual({ model: custom, resolution: "exact" })
+
+    const free = { providerId: "opencode", modelId: "big-pickle", variant: "low" }
+    expect(resolveProposalModel(free, [])).toEqual({ model: free, resolution: "exact" })
+
+    const managedProvider = provider({ id: "lpr_managed", source: "openwork", name: "OpenWork Models" })
+    const managedOption = automationModelOptions([managedProvider]).find((option) => option.accessKind === "openwork_managed")
+    expect(managedOption).toBeDefined()
+    if (!managedOption) throw new Error("Expected an enabled OpenWork managed model")
+    const managed = { providerId: managedOption.providerId, modelId: managedOption.modelId, variant: "high" }
+    expect(resolveProposalModel(managed, [managedProvider])).toEqual({ model: managed, resolution: "exact" })
+  })
+
+  test("maps an upstream provider key to the first matching concrete Den provider", () => {
+    const first = provider({ ...customProvider, id: "lpr_first" })
+    const second = provider({ ...customProvider, id: "lpr_second" })
+    expect(resolveProposalModel(
+      { providerId: "deepseek", modelId: "deepseek-v4-flash", variant: "high" },
+      [first, second],
+    )).toEqual({
+      model: { providerId: "lpr_first", modelId: "deepseek-v4-flash", variant: "high" },
+      resolution: "mapped",
+    })
+  })
+
+  test("does not map through OpenWork provider records", () => {
+    const managed = provider({
+      ...customProvider,
+      id: "lpr_managed",
+      source: "openwork",
+    })
+    expect(resolveProposalModel(
+      { providerId: "deepseek", modelId: "deepseek-v4-flash" },
+      [managed],
+    )).toEqual({
+      model: { providerId: "opencode", modelId: "big-pickle", variant: null },
+      resolution: "fallback",
+    })
+  })
+
+  test("falls back when the provider or model is unavailable", () => {
+    const fallback = {
+      model: { providerId: "opencode", modelId: "big-pickle", variant: null },
+      resolution: "fallback",
+    }
+    expect(resolveProposalModel({ providerId: "unknown", modelId: "missing", variant: "high" }, [customProvider]))
+      .toEqual(fallback)
+    expect(resolveProposalModel({ providerId: "deepseek", modelId: "missing", variant: "high" }, [customProvider]))
+      .toEqual(fallback)
   })
 })

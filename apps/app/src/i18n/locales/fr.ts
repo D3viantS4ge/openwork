@@ -1,12 +1,9 @@
-import { automationsEnglish } from "./automations";
-
 /**
  * French translations (Français)
  * Professional terms (Skills, Plugins, Commands, Sessions, OpenCode, OpenPackage, OpenWork) are NOT translated
  */
 
 export default {
-  ...automationsEnglish,
   "app.compact_command_desc": "Résumez cette session pour réduire la taille du contexte.",
   "app.error_audit_load": "Échec du chargement du journal d'audit.",
   "app.error_auth_failed": "Échec de l'authentification",
@@ -636,6 +633,10 @@ export default {
   "session.redo_aria_label": "Rétablir le dernier message annulé",
   "session.redo_label": "Rétablir",
   "session.redo_title": "Rétablir le dernier message annulé",
+  "session.reverted_messages_hidden": "{count} messages précédents sont masqués",
+  "session.restore": "Restaurer",
+  "session.restoring": "Restauration...",
+  "session.restore_failed": "Impossible de restaurer les messages masqués. Réessayez.",
   "session.rename_description": "Mettez à jour le nom de cette session.",
   "session.rename_label": "Nom de la session",
   "session.rename_placeholder": "Entrez un nouveau nom",

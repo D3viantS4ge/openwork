@@ -45,6 +45,7 @@ function authorityStore(overrides: Partial<AutomationModelAuthorityStore> = {}):
     async findProvider() { return customProvider },
     async findModel() { return customModel },
     async canAccessProvider() { return true },
+    async allowsZenModel() { return true },
     ...overrides,
   }
 }
@@ -83,6 +84,20 @@ describe("Automation normalized model authority", () => {
       providerId: "opencode",
       modelId: "not-a-free-model",
     }, store)).toMatchObject({ ok: false, code: "model_access_lost" })
+  })
+
+  test("rejects the legacy free starter model when desktop policy disables OpenCode Zen", async () => {
+    const result = await resolveAutomationModelAccessWithStore({
+      ...base,
+      providerId: "opencode",
+      modelId: "big-pickle",
+    }, authorityStore({ async allowsZenModel() { return false } }))
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "model_access_lost",
+      message: expect.stringContaining("Choose a supported model"),
+    })
   })
 
   test("resolves enabled OpenWork aliases through the owner's managed provider", async () => {

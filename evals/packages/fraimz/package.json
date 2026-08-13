@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "fraimz-judge": "./bin/judge.mjs"
+  },
   "exports": {
     ".": {
       "types": "./src/compat.ts",

@@ -1,5 +1,6 @@
 import {
   AUTOMATION_DEFAULT_MAXIMUM_RUNTIME_MS,
+  AUTOMATION_FREE_MODEL,
   AUTOMATION_MAXIMUM_ATTEMPTS,
   automationOccurrenceIdentity,
   automationRevisionDigest,
@@ -12,6 +13,8 @@ import type {
 } from "@openwork/automations"
 import type {
   Automation,
+  AutomationAction,
+  AutomationError,
   AutomationRevision,
   AutomationRun,
   AutomationRunEvent,
@@ -30,6 +33,7 @@ import {
 import { createDenTypeId, normalizeDenTypeId } from "@openwork-ee/utils/typeid"
 import { db } from "../db.js"
 import { automationUpdateChangedRows } from "./update-result.js"
+import { cloudArtifactStateUpdate } from "./cloud-artifact-state.js"
 
 type AutomationRow = typeof AutomationTable.$inferSelect
 type RevisionRow = typeof AutomationRevisionTable.$inferSelect
@@ -58,6 +62,8 @@ function mapAutomation(row: AutomationRow): Automation {
     currentRevisionId: row.current_revision_id,
     nextDueAt: ms(row.next_due_at),
     latestRunAt: ms(row.latest_run_at),
+    latestSuccessfulRunId: row.latest_successful_run_id,
+    latestSuccessfulResult: row.latest_successful_result,
     needsAttentionReason: row.needs_attention_reason ?? null,
     createdAt: row.created_at.getTime(),
     updatedAt: row.updated_at.getTime(),
@@ -66,6 +72,11 @@ function mapAutomation(row: AutomationRow): Automation {
 }
 
 function mapRevision(row: RevisionRow): AutomationRevision {
+  const action: AutomationAction = row.action ?? {
+    kind: "agent",
+    instructions: row.instructions,
+    model: { providerId: row.provider_id, modelId: row.model_id, variant: row.model_variant ?? null },
+  }
   return {
     id: row.id,
     automationId: row.automation_id,
@@ -73,6 +84,7 @@ function mapRevision(row: RevisionRow): AutomationRevision {
     instructions: row.instructions,
     schedule: row.schedule_config,
     model: { providerId: row.provider_id, modelId: row.model_id, variant: row.model_variant ?? null },
+    action,
     executionTarget: row.execution_target,
     maximumRuntimeMs: row.maximum_runtime_ms,
     digest: row.digest,
@@ -81,6 +93,11 @@ function mapRevision(row: RevisionRow): AutomationRevision {
 }
 
 function mapRun(row: RunRow): AutomationRun {
+  const receipt = row.execution_target === "cloud" && typeof row.engine_receipt === "object" && row.engine_receipt !== null
+    ? row.engine_receipt as Record<string, unknown>
+    : null
+  const nativeThreadId = typeof receipt?.nativeThreadId === "string" ? receipt.nativeThreadId : null
+  const workspaceId = typeof receipt?.workspaceId === "string" ? receipt.workspaceId : null
   return {
     id: row.id,
     automationId: row.automation_id,
@@ -97,10 +114,12 @@ function mapRun(row: RunRow): AutomationRun {
     executionThread: row.engine_kind ? {
       id: row.cloud_thread_id,
       threadKind: "automation",
-      executionLocation: "desktop",
+      executionLocation: row.execution_target,
       automationId: row.automation_id,
       automationRunId: row.id,
       engineKind: row.engine_kind,
+      ...(nativeThreadId ? { nativeThreadId } : {}),
+      ...(workspaceId ? { workspaceId } : {}),
     } : null,
     providerId: row.provider_id,
     modelId: row.model_id,
@@ -109,9 +128,35 @@ function mapRun(row: RunRow): AutomationRun {
     finishedAt: ms(row.finished_at),
     error: row.error ?? null,
     resultSummary: row.result_summary,
+    codemodeReceiptId: row.codemode_receipt_id,
+    validatedResult: row.validated_result,
     usage: row.usage,
     createdAt: row.created_at.getTime(),
     updatedAt: row.updated_at.getTime(),
+  }
+}
+
+function normalizedDefinition(definition: Parameters<AutomationRepository["create"]>[0]["definition"]) {
+  if ("action" in definition) {
+    const model = definition.action.kind === "agent"
+      ? definition.action.model
+      : { providerId: AUTOMATION_FREE_MODEL.providerId, modelId: AUTOMATION_FREE_MODEL.modelId, variant: null }
+    return {
+      name: definition.name,
+      schedule: definition.schedule,
+      action: definition.action,
+      executionTarget: definition.executionTarget,
+      instructions: definition.action.kind === "agent" ? definition.action.instructions : "Execute the pinned saved Code Mode script.",
+      model,
+    }
+  }
+  return {
+    name: definition.name,
+    schedule: definition.schedule,
+    action: { kind: "agent", instructions: definition.instructions, model: definition.model } satisfies AutomationAction,
+    executionTarget: "desktop" as const,
+    instructions: definition.instructions,
+    model: definition.model,
   }
 }
 
@@ -139,31 +184,42 @@ async function itemFromRows(automation: AutomationRow, revision: RevisionRow): P
 }
 
 export class DenAutomationRepository implements AutomationRepository {
+  async listQueuedCloud(input: { limit: number }): Promise<string[]> {
+    const rows = await db.select({ id: AutomationRunTable.id }).from(AutomationRunTable).where(and(
+      eq(AutomationRunTable.status, "queued"),
+      eq(AutomationRunTable.execution_target, "cloud"),
+    )).orderBy(asc(AutomationRunTable.created_at), asc(AutomationRunTable.id)).limit(input.limit)
+    return rows.map((row) => row.id)
+  }
   async create(input: Parameters<AutomationRepository["create"]>[0]): Promise<AutomationListItem> {
+    const definition = normalizedDefinition(input.definition)
     const now = new Date(input.now)
     const newAutomationId = createDenTypeId("automation")
     const newRevisionId = createDenTypeId("automationRevision")
     const maximumRuntimeMs = AUTOMATION_DEFAULT_MAXIMUM_RUNTIME_MS
     const digest = automationRevisionDigest({
-      instructions: input.definition.instructions,
-      schedule: input.definition.schedule,
-      model: input.definition.model,
+      instructions: definition.instructions,
+      schedule: definition.schedule,
+      model: definition.model,
+      action: definition.action,
+      executionTarget: definition.executionTarget,
       maximumRuntimeMs,
     })
-    const nextDueAt = nextAutomationOccurrence(input.definition.schedule, input.now)
+    const nextDueAt = nextAutomationOccurrence(definition.schedule, input.now)
     await db.transaction(async (tx) => {
       await tx.insert(AutomationRevisionTable).values({
         id: newRevisionId,
         automation_id: newAutomationId,
         version: 1,
-        instructions: input.definition.instructions,
-        schedule_kind: input.definition.schedule.kind,
-        schedule_config: input.definition.schedule,
-        timezone: input.definition.schedule.timezone,
-        provider_id: input.definition.model.providerId,
-        model_id: input.definition.model.modelId,
-        model_variant: input.definition.model.variant ?? null,
-        execution_target: "desktop",
+        instructions: definition.instructions,
+        schedule_kind: definition.schedule.kind,
+        schedule_config: definition.schedule,
+        timezone: definition.schedule.timezone,
+        provider_id: definition.model.providerId,
+        model_id: definition.model.modelId,
+        model_variant: definition.model.variant ?? null,
+        action: definition.action,
+        execution_target: definition.executionTarget,
         maximum_runtime_ms: maximumRuntimeMs,
         digest,
         created_at: now,
@@ -172,7 +228,7 @@ export class DenAutomationRepository implements AutomationRepository {
         id: newAutomationId,
         organization_id: normalizeOrganizationId(input.organizationId),
         owner_member_id: normalizeMemberId(input.ownerMemberId),
-        name: input.definition.name,
+        name: definition.name,
         state: "active",
         current_revision_id: newRevisionId,
         next_due_at: date(nextDueAt),
@@ -204,14 +260,31 @@ export class DenAutomationRepository implements AutomationRepository {
         .where(eq(AutomationRevisionTable.id, automation.current_revision_id)).limit(1)
       const current = revisionRows[0]
       if (!current) throw new Error("automation_revision_not_found")
-      const instructions = input.changes.instructions ?? current.instructions
+      const currentAction: AutomationAction = current.action ?? {
+        kind: "agent",
+        instructions: current.instructions,
+        model: { providerId: current.provider_id, modelId: current.model_id, variant: current.model_variant ?? null },
+      }
+      const action = input.changes.action ?? (currentAction.kind === "agent"
+        ? {
+            ...currentAction,
+            instructions: input.changes.instructions ?? currentAction.instructions,
+            model: input.changes.model ?? currentAction.model,
+          }
+        : currentAction)
+      const executionTarget = current.execution_target
+      const instructions = action.kind === "agent" ? action.instructions : "Execute the pinned saved Code Mode script."
       const schedule = input.changes.schedule ?? current.schedule_config
-      const model = input.changes.model ?? { providerId: current.provider_id, modelId: current.model_id, variant: current.model_variant ?? null }
+      const model = action.kind === "agent"
+        ? action.model
+        : { providerId: AUTOMATION_FREE_MODEL.providerId, modelId: AUTOMATION_FREE_MODEL.modelId, variant: null }
       const newRevisionId = createDenTypeId("automationRevision")
       const digest = automationRevisionDigest({
         instructions,
         schedule,
         model,
+        action,
+        executionTarget,
         maximumRuntimeMs: current.maximum_runtime_ms,
       })
       if (digest === current.digest) {
@@ -232,7 +305,8 @@ export class DenAutomationRepository implements AutomationRepository {
         provider_id: model.providerId,
         model_id: model.modelId,
         model_variant: model.variant ?? null,
-        execution_target: "desktop",
+        action,
+        execution_target: executionTarget,
         maximum_runtime_ms: current.maximum_runtime_ms,
         digest,
         created_at: new Date(input.now),
@@ -317,7 +391,11 @@ export class DenAutomationRepository implements AutomationRepository {
     return db.transaction(async (tx) => {
       const locked = await tx.select().from(AutomationTable)
         .where(eq(AutomationTable.id, normalizeAutomationId(input.automation.id))).limit(1).for("update")
-      if (!locked[0] || locked[0].state !== "active") throw new Error("automation_not_active")
+      const currentState = locked[0]?.state
+      const canRun = input.trigger === "manual"
+        ? currentState === "active" || currentState === "inactive"
+        : currentState === "active"
+      if (!canRun) throw new Error("automation_not_active")
       const identity = automationOccurrenceIdentity({
         automationId: input.automation.id,
         scheduledFor: input.scheduledFor,
@@ -344,7 +422,7 @@ export class DenAutomationRepository implements AutomationRepository {
         scheduled_for: date(input.scheduledFor),
         idempotency_key: identity.idempotencyKey,
         status: overlap ? "skipped" : "queued",
-        execution_target: "desktop",
+        execution_target: input.revision.executionTarget ?? "desktop",
         claim_deadline_at: overlap ? null : new Date(input.now + (input.claimDeadlineMs ?? input.leaseMs)),
         lease_owner: null,
         lease_expires_at: null,
@@ -365,7 +443,7 @@ export class DenAutomationRepository implements AutomationRepository {
         created_at: new Date(input.now),
         updated_at: new Date(input.now),
       })
-      if (!overlap) {
+      if (!overlap && (input.revision.executionTarget ?? "desktop") === "desktop") {
         await tx.insert(AutomationRunnerNotificationTable).values({
           organization_id: normalizeOrganizationId(input.automation.organizationId),
           owner_member_id: normalizeMemberId(input.automation.ownerMemberId),
@@ -385,6 +463,226 @@ export class DenAutomationRepository implements AutomationRepository {
         ? { kind: "overlap", run: mapRun(runRows[0]) }
         : { kind: "claimed", run: mapRun(runRows[0]), revision: input.revision }
     })
+  }
+
+  /** Records a manual attempt that policy refused without dispatching work. */
+  async recordSkippedManual(input: {
+    organizationId: string
+    ownerMemberId: string
+    automation: Automation
+    revision: AutomationRevision
+    nonce: string
+    code: AutomationError["code"]
+    message: string
+    now: number
+  }): Promise<AutomationRun> {
+    return db.transaction(async (tx) => {
+      const automationId = normalizeAutomationId(input.automation.id)
+      const revisionId = normalizeRevisionId(input.revision.id)
+      const locked = await tx.select().from(AutomationTable).where(and(
+        eq(AutomationTable.id, automationId),
+        eq(AutomationTable.organization_id, normalizeOrganizationId(input.organizationId)),
+        eq(AutomationTable.owner_member_id, normalizeMemberId(input.ownerMemberId)),
+      )).limit(1).for("update")
+      if (!locked[0] || locked[0].state === "archived") throw new Error("automation_not_found")
+      if (locked[0].current_revision_id !== revisionId) throw new Error("automation_revision_changed")
+
+      const identity = automationOccurrenceIdentity({
+        automationId: input.automation.id,
+        scheduledFor: null,
+        nonce: input.nonce,
+      })
+      const runId = createDenTypeId("automationRun")
+      await tx.insert(AutomationRunTable).values({
+        id: runId,
+        automation_id: automationId,
+        revision_id: revisionId,
+        trigger: "manual",
+        scheduled_for: null,
+        idempotency_key: identity.idempotencyKey,
+        status: "skipped",
+        execution_target: input.revision.executionTarget ?? "desktop",
+        claim_deadline_at: null,
+        lease_owner: null,
+        lease_expires_at: null,
+        heartbeat_at: null,
+        attempt_count: 0,
+        cloud_thread_id: createDenTypeId("automationThread"),
+        engine_kind: null,
+        engine_receipt: null,
+        engine_sequence: 0,
+        engine_admitted_at: null,
+        provider_id: input.revision.model.providerId,
+        model_id: input.revision.model.modelId,
+        model_variant: input.revision.model.variant ?? null,
+        finished_at: new Date(input.now),
+        error: { code: input.code, message: input.message, retryable: false },
+        result_summary: input.message,
+        usage: emptyUsage,
+        created_at: new Date(input.now),
+        updated_at: new Date(input.now),
+      })
+      await tx.update(AutomationTable).set({
+        latest_run_at: new Date(input.now),
+        updated_at: new Date(input.now),
+      }).where(eq(AutomationTable.id, automationId))
+      const rows = await tx.select().from(AutomationRunTable).where(eq(AutomationRunTable.id, runId)).limit(1)
+      if (!rows[0]) throw new Error("automation_run_not_durable")
+      return mapRun(rows[0])
+    })
+  }
+
+  async claimCloud(input: { runId: string; leaseOwner: string; leaseMs: number; maxConcurrency: number; now: number }): Promise<DesktopClaim | null> {
+    return db.transaction(async (tx) => {
+      // Admission and the queued -> running transition share one transaction.
+      // Locking the active status ranges serializes competing replicas even
+      // when there are currently no active rows (InnoDB next-key locking).
+      const active = await tx.select({ id: AutomationRunTable.id }).from(AutomationRunTable).where(and(
+        eq(AutomationRunTable.execution_target, "cloud"),
+        inArray(AutomationRunTable.status, ["claimed", "running"]),
+      )).limit(input.maxConcurrency).for("update")
+      if (active.length >= input.maxConcurrency) return null
+      const rows = await tx.select({ run: AutomationRunTable, automation: AutomationTable })
+        .from(AutomationRunTable)
+        .innerJoin(AutomationTable, eq(AutomationTable.id, AutomationRunTable.automation_id))
+        .where(and(
+          eq(AutomationRunTable.id, normalizeRunId(input.runId)),
+          eq(AutomationRunTable.status, "queued"),
+          eq(AutomationRunTable.execution_target, "cloud"),
+        )).limit(1).for("update")
+      const selected = rows[0]
+      if (!selected) return null
+      const revisions = await tx.select().from(AutomationRevisionTable)
+        .where(eq(AutomationRevisionTable.id, selected.run.revision_id)).limit(1)
+      const revision = revisions[0]
+      if (!revision) return null
+      const engineKind = revision.action?.kind === "saved_script"
+        ? "openwork-cloud-codemode-v1"
+        : "openwork-cloud-agent-v1"
+      await tx.update(AutomationRunTable).set({
+        status: "running",
+        lease_owner: input.leaseOwner,
+        lease_expires_at: new Date(input.now + input.leaseMs),
+        heartbeat_at: new Date(input.now),
+        attempt_count: selected.run.attempt_count + 1,
+        engine_kind: selected.run.engine_kind ?? engineKind,
+        started_at: selected.run.started_at ?? new Date(input.now),
+        updated_at: new Date(input.now),
+      }).where(and(eq(AutomationRunTable.id, selected.run.id), eq(AutomationRunTable.status, "queued")))
+      const currentRuns = await tx.select().from(AutomationRunTable)
+        .where(eq(AutomationRunTable.id, selected.run.id)).limit(1)
+      if (!currentRuns[0]) return null
+      return {
+        automation: mapAutomation(selected.automation),
+        revision: mapRevision(revision),
+        run: mapRun(currentRuns[0]),
+      }
+    }, { isolationLevel: "serializable", accessMode: "read write" })
+  }
+
+  async setCloudExecution(input: {
+    runId: string
+    leaseOwner: string
+    engineKind: string
+    receipt: Record<string, unknown>
+    now: number
+  }): Promise<void> {
+    const result: unknown = await db.update(AutomationRunTable).set({
+      engine_kind: input.engineKind,
+      engine_receipt: input.receipt,
+      engine_admitted_at: new Date(input.now),
+      updated_at: new Date(input.now),
+    }).where(and(
+      eq(AutomationRunTable.id, normalizeRunId(input.runId)),
+      eq(AutomationRunTable.lease_owner, input.leaseOwner),
+      eq(AutomationRunTable.status, "running"),
+    ))
+    if (!automationUpdateChangedRows(result)) throw new Error("automation_run_lease_lost")
+  }
+
+  async heartbeatCloud(input: { runId: string; leaseOwner: string; leaseMs: number; now: number }): Promise<boolean> {
+    const result: unknown = await db.update(AutomationRunTable).set({
+      heartbeat_at: new Date(input.now),
+      lease_expires_at: new Date(input.now + input.leaseMs),
+      updated_at: new Date(input.now),
+    }).where(and(
+      eq(AutomationRunTable.id, normalizeRunId(input.runId)),
+      eq(AutomationRunTable.lease_owner, input.leaseOwner),
+      eq(AutomationRunTable.status, "running"),
+      gt(AutomationRunTable.lease_expires_at, new Date(input.now)),
+    ))
+    return automationUpdateChangedRows(result)
+  }
+
+  async cloudRunState(runId: string): Promise<{ cancelRequested: boolean; receipt: Record<string, unknown> | null } | null> {
+    const rows = await db.select({
+      cancelRequestedAt: AutomationRunTable.cancel_requested_at,
+      receipt: AutomationRunTable.engine_receipt,
+    }).from(AutomationRunTable).where(and(
+      eq(AutomationRunTable.id, normalizeRunId(runId)),
+      eq(AutomationRunTable.execution_target, "cloud"),
+      eq(AutomationRunTable.status, "running"),
+    )).limit(1)
+    return rows[0] ? { cancelRequested: Boolean(rows[0].cancelRequestedAt), receipt: rows[0].receipt } : null
+  }
+
+  async completeCloud(input: {
+    automationId: string
+    runId: string
+    leaseOwner: string
+    status: "succeeded" | "failed" | "cancelled"
+    resultSummary: string
+    validatedResult?: unknown
+    codemodeReceiptId?: string | null
+    usage?: AutomationUsage
+    updateArtifactState?: boolean
+    error: AutomationError | null
+    now: number
+  }): Promise<AutomationRun> {
+    const completed = await this.complete({
+      runId: input.runId,
+      leaseOwner: input.leaseOwner,
+      status: input.status,
+      resultSummary: input.resultSummary,
+      usage: input.usage ?? emptyUsage,
+      error: input.error,
+      now: input.now,
+    })
+    await db.update(AutomationRunTable).set({
+      codemode_receipt_id: input.codemodeReceiptId ? normalizeDenTypeId("codemodeRun", input.codemodeReceiptId) : null,
+      validated_result: input.validatedResult,
+      updated_at: new Date(input.now),
+    }).where(eq(AutomationRunTable.id, normalizeRunId(input.runId)))
+    const artifactState = cloudArtifactStateUpdate({
+      runId: input.runId,
+      result: input.status === "succeeded"
+        ? { ok: true, value: input.validatedResult }
+        : { ok: false, message: input.error?.message ?? input.resultSummary },
+      now: input.now,
+    })
+    if (input.updateArtifactState === false) {
+      const refreshed = await this.runById(completed.id)
+      if (!refreshed) throw new Error("automation_cloud_result_not_durable")
+      return refreshed
+    }
+    if (artifactState.kind === "succeeded") {
+      await db.update(AutomationTable).set({
+        latest_successful_run_id: normalizeRunId(artifactState.latestSuccessfulRunId),
+        latest_successful_result: artifactState.latestSuccessfulResult,
+        state: artifactState.state,
+        needs_attention_reason: artifactState.needsAttentionReason,
+        updated_at: new Date(input.now),
+      }).where(eq(AutomationTable.id, normalizeAutomationId(input.automationId)))
+    } else {
+      await db.update(AutomationTable).set({
+        state: artifactState.state,
+        needs_attention_reason: artifactState.needsAttentionReason,
+        updated_at: new Date(input.now),
+      }).where(eq(AutomationTable.id, normalizeAutomationId(input.automationId)))
+    }
+    const refreshed = await this.runById(completed.id)
+    if (!refreshed) throw new Error("automation_cloud_result_not_durable")
+    return refreshed
   }
 
   async heartbeat(input: Parameters<AutomationRepository["heartbeat"]>[0]): Promise<boolean> {
@@ -519,7 +817,7 @@ export class DenAutomationRepository implements AutomationRepository {
       mcp_token_expires_at: immediate ? null : owned[0].run.mcp_token_expires_at,
       updated_at: new Date(input.now),
     }).where(eq(AutomationRunTable.id, normalizeRunId(input.runId)))
-    if (!immediate && ["claimed", "running"].includes(owned[0].run.status)) {
+    if (!immediate && owned[0].run.execution_target === "desktop" && ["claimed", "running"].includes(owned[0].run.status)) {
       await db.insert(AutomationRunnerNotificationTable).values({
         organization_id: normalizeOrganizationId(input.organizationId),
         owner_member_id: normalizeMemberId(input.ownerMemberId),
@@ -579,15 +877,6 @@ export class DenAutomationRepository implements AutomationRepository {
         eq(AutomationRunnerTable.organization_id, normalizeOrganizationId(input.organizationId)),
         eq(AutomationRunnerTable.owner_member_id, normalizeMemberId(input.ownerMemberId)),
       ))
-  }
-
-  async hasRecentDesktopRunner(input: { organizationId: string; ownerMemberId: string; seenAfter: number }) {
-    const rows = await db.select({ id: AutomationRunnerTable.id }).from(AutomationRunnerTable).where(and(
-      eq(AutomationRunnerTable.organization_id, normalizeOrganizationId(input.organizationId)),
-      eq(AutomationRunnerTable.owner_member_id, normalizeMemberId(input.ownerMemberId)),
-      gt(AutomationRunnerTable.last_seen_at, new Date(input.seenAfter)),
-    )).limit(1)
-    return rows.length > 0
   }
 
   async discoverDesktopWork(input: { organizationId: string; ownerMemberId: string; now: number; limit: number }) {
@@ -707,6 +996,27 @@ export class DenAutomationRepository implements AutomationRepository {
     payload: Record<string, unknown>
     now: number
   }): Promise<AutomationRunEvent> {
+    // This format was shipped with the Desktop runner protocol. Keep it stable
+    // so a retry after a Den deployment finds the event committed by the prior
+    // version instead of failing the ordered-sequence check.
+    const idempotencyKey = `desktop:${input.runId}:${input.attempt}:${input.sequence}`
+    return this.appendClaimedEvent(input, idempotencyKey)
+  }
+
+  appendCloudEvent(input: Parameters<DenAutomationRepository["appendDesktopEvent"]>[0]) {
+    const idempotencyKey = `${input.leaseOwner}:${input.runId}:${input.attempt}:${input.sequence}`
+    return this.appendClaimedEvent(input, idempotencyKey)
+  }
+
+  private async appendClaimedEvent(input: {
+    runId: string
+    leaseOwner: string
+    attempt: number
+    sequence: number
+    type: AutomationRunEventType
+    payload: Record<string, unknown>
+    now: number
+  }, idempotencyKey: string): Promise<AutomationRunEvent> {
     return db.transaction(async (tx) => {
       const runs = await tx.select().from(AutomationRunTable).where(and(
         eq(AutomationRunTable.id, normalizeRunId(input.runId)),
@@ -717,7 +1027,6 @@ export class DenAutomationRepository implements AutomationRepository {
       )).limit(1).for("update")
       const run = runs[0]
       if (!run) throw new Error("automation_run_lease_lost")
-      const idempotencyKey = `desktop:${input.runId}:${input.attempt}:${input.sequence}`
       const duplicate = await tx.select().from(AutomationRunEventTable).where(and(
         eq(AutomationRunEventTable.run_id, run.id),
         eq(AutomationRunEventTable.attempt, input.attempt),
@@ -885,10 +1194,7 @@ export class DenAutomationRepository implements AutomationRepository {
       heartbeat_at: null,
       mcp_token_hash: null,
       mcp_token_expires_at: null,
-      engine_kind: null,
-      engine_receipt: null,
       engine_sequence: 0,
-      engine_admitted_at: null,
       updated_at: new Date(input.now),
     }).where(eq(AutomationRunTable.id, normalizeRunId(input.runId)))
     return true
@@ -900,13 +1206,23 @@ export class DenAutomationRepository implements AutomationRepository {
     return Boolean(rows[0]?.cancelledAt)
   }
 
-  async markNeedsAttention(input: { automationId: string; reason: NonNullable<Automation["needsAttentionReason"]>; now: number }): Promise<void> {
-    await db.update(AutomationTable).set({
+  async markNeedsAttention(input: {
+    automationId: string
+    expectedRevisionId: string
+    reason: NonNullable<Automation["needsAttentionReason"]>
+    now: number
+  }): Promise<boolean> {
+    const result = await db.update(AutomationTable).set({
       state: "needs_attention",
       next_due_at: null,
       needs_attention_reason: input.reason,
       updated_at: new Date(input.now),
-    }).where(eq(AutomationTable.id, normalizeAutomationId(input.automationId)))
+    }).where(and(
+      eq(AutomationTable.id, normalizeAutomationId(input.automationId)),
+      eq(AutomationTable.current_revision_id, normalizeRevisionId(input.expectedRevisionId)),
+      eq(AutomationTable.state, "active"),
+    ))
+    return automationUpdateChangedRows(result)
   }
 
   private async runById(runId: string): Promise<AutomationRun | null> {

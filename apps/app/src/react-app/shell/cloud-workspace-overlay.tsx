@@ -19,12 +19,14 @@ import {
   formatCloudWorkspaceElapsed,
   mapCloudWorkspaceState,
   shouldAutoUpdateCloudWorkspace,
+  shouldShowCloudWorkspaceStatusPill,
   type CloudWorkspaceBootStage,
   type CloudWorkspaceMainContentDecision,
   type CloudWorkspaceViewModel,
 } from "./cloud-workspace-status";
 import type { DenCloudInstance } from "@/app/lib/den";
 import { OwDotTicker } from "./dot-ticker";
+import { useBootOverlayVisible } from "./boot-state";
 
 type CloudWorkspaceStatusContextValue = {
   gatewayMode: boolean;
@@ -247,7 +249,7 @@ function BootStageRow(props: { stage: CloudWorkspaceBootStage; reduceMotion: boo
               />
             </svg>
           ) : stage.state === "active" ? (
-            <OwDotTicker size="md" />
+            <span className="size-2.5 rounded-full bg-dls-accent" />
           ) : (
             <span className="size-2.5 rounded-full border-[1.5px] border-[rgb(var(--dls-secondary-rgb)/0.45)]" />
           )}
@@ -444,10 +446,21 @@ export function CloudWorkspaceStatusPanel(props: {
 
 function CloudWorkspaceOverlayInner() {
   const cloudWorkspace = useCloudWorkspaceStatus();
+  const bootOverlayVisible = useBootOverlayVisible();
   const [open, setOpen] = useState(false);
   const viewModel = cloudWorkspace.viewModel;
 
-  if (!cloudWorkspace.gatewayMode || !cloudWorkspace.visible) return null;
+  if (
+    bootOverlayVisible ||
+    cloudWorkspace.takeoverActive ||
+    !cloudWorkspace.gatewayMode ||
+    !cloudWorkspace.visible ||
+    !shouldShowCloudWorkspaceStatusPill({
+      variant: viewModel.variant,
+      hasInstance: cloudWorkspace.instance !== null,
+      requestFailed: cloudWorkspace.requestFailed,
+    })
+  ) return null;
 
   return (
     <LazyMotion features={domMax}>

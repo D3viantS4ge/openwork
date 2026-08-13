@@ -30,7 +30,8 @@ export type DenPluginConfigObjectType =
   | "mcp"
   | "hook"
   | "context"
-  | "custom";
+  | "custom"
+  | "script";
 
 export type DenPluginConfigObjectVersion = {
   id: string;

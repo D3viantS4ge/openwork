@@ -1,5 +1,6 @@
 /** @jsxImportSource react */
 import { useEffect } from "react"
+import { AUTOMATION_MODEL_ATTENTION_CAPABILITY } from "@openwork/types/automations"
 
 import { createDenClient, readDenSettings } from "@/app/lib/den"
 import { denSettingsChangedEvent } from "@/app/lib/den-session-events"
@@ -54,6 +55,7 @@ export function AutomationRunnerBridge({ enabled }: { enabled: boolean }) {
           runnerId,
           protocolVersion: 1,
           supportedExecutionTargets: ["desktop"],
+          capabilities: [AUTOMATION_MODEL_ATTENTION_CAPABILITY],
           appVersion: String(build?.version ?? "unknown"),
           platform,
           concurrency: 1,

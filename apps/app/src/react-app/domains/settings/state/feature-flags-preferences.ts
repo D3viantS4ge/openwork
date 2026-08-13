@@ -20,14 +20,14 @@ export function useFeatureFlagsPreferences() {
 
   const memoryEnabled = prefs.featureFlags?.memory === true;
 
-  const automationsEnabled = prefs.featureFlags?.automations === true;
+  const continuousEngineEnabled = prefs.featureFlags?.continuousEngine === true;
 
-  const toggleAutomations = useCallback(() => {
+  const setContinuousEngine = useCallback((enabled: boolean) => {
     setPrefs((previous) => ({
       ...previous,
       featureFlags: {
         ...previous.featureFlags,
-        automations: !previous.featureFlags?.automations,
+        continuousEngine: enabled,
       },
     }));
   }, [setPrefs]);
@@ -45,9 +45,9 @@ export function useFeatureFlagsPreferences() {
   return {
     microsandboxCreateSandboxEnabled,
     toggleMicrosandboxCreateSandbox,
+    continuousEngineEnabled,
+    setContinuousEngine,
     memoryEnabled,
     toggleMemory,
-    automationsEnabled,
-    toggleAutomations,
   };
 }

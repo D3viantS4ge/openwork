@@ -14,7 +14,6 @@ import {
   createOpenworkServerClient,
   isLoopbackOpenworkServerUrl,
   readOpenworkServerSettings,
-  OpenworkServerError,
   type OpenworkCloudMcpHealth,
   type OpenworkCloudMcpProviderModelContext,
   type OpenworkServerCapabilities,
@@ -134,6 +133,7 @@ import {
   useOpenWorkModelsPromoEligibility,
   isOpenWorkModelsPromoHidden,
   openWorkModelsPromoChangedEvent,
+  shouldShowOpenWorkModelsSyncing,
 } from "@/react-app/domains/cloud/openwork-models-promo";
 import {
   isDesktopRuntime,
@@ -158,7 +158,11 @@ import { ModelPickerModal } from "@/react-app/domains/session/modals/model-picke
 import type { ModelRef } from "@/app/types";
 import { workspaceSwatchColor } from "@/react-app/domains/session/sidebar/utils";
 import { recordInspectorEvent } from "../../app/lib/app-inspector";
-import { ensureDesktopLocalOpenworkConnection } from "./desktop-local-openwork";
+import {
+  ensureDesktopLocalOpenworkConnection,
+  shouldAttemptDesktopLocalReconnect,
+} from "./desktop-local-openwork";
+import { reloadEngineWithDesktopFallback } from "./engine-reload-escalation";
 import { resolveOpenworkConnection } from "./openwork-connection";
 import { abortSessionSafe } from "@/app/lib/opencode-session";
 import { notifyAlert } from "./notifications";
@@ -196,25 +200,13 @@ const ROUTE_OPENWORK_CAPABILITIES: OpenworkServerCapabilities = {
   config: { read: true, write: true },
 };
 
-function canRestartDesktopForReloadError(error: unknown) {
-  return (
-    error instanceof OpenworkServerError &&
-    (error.code === "opencode_engine_unreachable" || error.code === "opencode_unconfigured")
-  );
-}
-
 async function reloadEngineOrRestartDesktop(
   client: Pick<OpenworkServerClient, "reloadEngine">,
   workspaceId: string,
   afterRestart?: () => Promise<void>,
 ): Promise<void> {
-  try {
-    await client.reloadEngine(workspaceId);
-  } catch (error) {
-    if (!canRestartDesktopForReloadError(error) || !isDesktopRuntime()) {
-      throw error;
-    }
-    await engineRestart({});
+  const { restartedEngine } = await reloadEngineWithDesktopFallback(client, workspaceId);
+  if (restartedEngine) {
     await afterRestart?.();
   }
 }
@@ -423,7 +415,12 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
   const params = useParams<{ workspaceId?: string }>();
   const routeWorkspaceId = props.workspaceId?.trim() || params.workspaceId?.trim() || "";
   const local = useLocal();
-  const { memoryEnabled, toggleMemory, automationsEnabled, toggleAutomations } = useFeatureFlagsPreferences();
+  const {
+    continuousEngineEnabled,
+    memoryEnabled,
+    setContinuousEngine,
+    toggleMemory,
+  } = useFeatureFlagsPreferences();
   const platform = usePlatform();
   const checkDesktopRestriction = useCheckDesktopRestriction();
   const restrictionNotice = useRestrictionNotice();
@@ -473,6 +470,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
   const [activeClient, setActiveClient] = useState<Client | null>(null);
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
+  const [continuousEngineBusy, setContinuousEngineBusy] = useState(false);
   const workspacesRef = useRef<RouteWorkspace[]>([]);
   const refreshInFlightRef = useRef(false);
   const reconnectAttemptedWorkspaceIdRef = useRef("");
@@ -769,6 +767,16 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     void connectionsStore.refreshMcpServers();
   }, [connectionsStore, openworkServerStatusForMcp]);
 
+  useEffect(() => {
+    if (openworkServerStatusForMcp !== "connected") return;
+    // Same race for the Cloud Providers rows: the provider-auth store's
+    // start() read fires while this store still reports "disconnected", so
+    // it takes the legacy (empty) config read and the rows sit on "Syncing"
+    // even though the server's /cloud-provider-sync/status already lists the
+    // providers as synced. Re-derive from the server once it is reachable.
+    void providerAuthStore.refreshImportedCloudProviders();
+  }, [openworkServerStatusForMcp, providerAuthStore]);
+
   const cleanupCloudMcpForSignOut = useCallback(async (settings: DenSettings) => {
     const client = routeStateRef.current.selectedWorkspaceOpenworkClient;
     const workspaceId = routeStateRef.current.runtimeWorkspaceId?.trim() ?? "";
@@ -860,7 +868,12 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     providerConnectedIds,
     providers,
   });
-  const showOpenWorkModelsSyncing = openWorkModelsEntitled && !openWorkModelsAvailable;
+  const showOpenWorkModelsSyncing = shouldShowOpenWorkModelsSyncing({
+    entitled: openWorkModelsEntitled,
+    available: openWorkModelsAvailable,
+    workspaceReady: Boolean(selectedWorkspaceId && activeClient),
+    reloadPending: providerAuthSnapshot.cloudProviderServerSync?.reloadPending === true,
+  });
   const showOpenWorkModelsSubscribe =
     openWorkModelsPromoEligible &&
     !openWorkModelsEntitled &&
@@ -893,11 +906,6 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
       platform.openLink(getDenInferenceUrl(cloudSession.baseUrl));
     }, 0);
   }, [cloudSession.baseUrl, navigate, platform, providerAuthStore, selectedWorkspaceId]);
-
-  const refreshOpenWorkModels = useCallback(async () => {
-    await providerAuthStore.runCloudProviderSync("settings_cloud_opened");
-    await providerAuthStore.refreshProviders();
-  }, [providerAuthStore]);
 
   const handleOpenProviderAuth = useCallback(() => {
     if (providerAuthStore.isProviderAddRestricted()) {
@@ -1011,6 +1019,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     workspaceRoot: selectedWorkspaceRoot,
     onOpen: handleModelPickerOpen,
     onLoadError: handleModelPickerLoadError,
+    cloudProvidersEnabled: cloudSession.isSignedIn,
   });
   const currentCloudMcpModel = useMemo<OpenworkCloudMcpProviderModelContext | null>(() => {
     const provider = local.prefs.defaultModel?.providerID.trim() ?? "";
@@ -1276,7 +1285,11 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     writeStoredBoolean(SETTINGS_UPDATE_AUTO_DOWNLOAD_KEY, updateAutoDownload);
   }, [updateAutoDownload]);
 
-  const { markRouteReady: markBootRouteReady } = useBootState();
+  const {
+    markRouteReady: markBootRouteReady,
+    phase: bootPhase,
+    routeReady: bootRouteReady,
+  } = useBootState();
   const refreshRouteState = useMemo(() => async () => {
     if (refreshInFlightRef.current) return;
     refreshInFlightRef.current = true;
@@ -1429,6 +1442,35 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     }
   }, [markBootRouteReady, navigationSessionId, navigationWorkspaceId, routeWorkspaceId]);
 
+  const handleToggleContinuousEngine = useCallback(async () => {
+    if (!isDesktopRuntime()) return;
+    if (activeReloadBlockingSessions.length > 0) {
+      toast.error(t("settings.engine_rollover_blocked"));
+      return;
+    }
+    const next = !continuousEngineEnabled;
+    setContinuousEngineBusy(true);
+    setContinuousEngine(next);
+    try {
+      await engineRestart({ engineRollover: next });
+      await openworkServerStore.reconnectOpenworkServer();
+      await refreshRouteState();
+    } catch (error) {
+      setContinuousEngine(!next);
+      toast.error(t("settings.engine_rollover_failed"), {
+        description: describeRouteError(error),
+      });
+    } finally {
+      setContinuousEngineBusy(false);
+    }
+  }, [
+    activeReloadBlockingSessions.length,
+    continuousEngineEnabled,
+    openworkServerStore,
+    refreshRouteState,
+    setContinuousEngine,
+  ]);
+
   const reloadWorkspaceEngineFromUi = useCallback(async () => {
     const workspaceId = routeStateRef.current.runtimeWorkspaceId?.trim() || selectedWorkspaceId.trim();
     if (!openworkClient || !workspaceId) {
@@ -1571,13 +1613,25 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
   );
 
   useEffect(() => {
-    if (!isDesktopRuntime()) return;
-    if (loading) return;
     if (openworkClient) {
       reconnectAttemptedWorkspaceIdRef.current = "";
+    }
+    // Same gate as the session route: reconnect must not probe the local
+    // server while desktop runtime bootstrap is still starting it.
+    if (
+      !shouldAttemptDesktopLocalReconnect({
+        desktopRuntime: isDesktopRuntime(),
+        bootPhase,
+        bootRouteReady,
+        routeLoading: loading,
+        hasClient: Boolean(openworkClient),
+        connectionPending: false,
+        workspaceType: selectedWorkspace?.workspaceType ?? null,
+      })
+    ) {
       return;
     }
-    if (!selectedWorkspace || selectedWorkspace.workspaceType !== "local") return;
+    if (!selectedWorkspace) return;
     const workspaceId = selectedWorkspace.id?.trim() ?? "";
     if (!workspaceId || reconnectAttemptedWorkspaceIdRef.current === workspaceId) return;
     reconnectAttemptedWorkspaceIdRef.current = workspaceId;
@@ -1596,7 +1650,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
         dedupeKey: "server-reconnect",
       });
     });
-  }, [loading, openworkClient, selectedWorkspace, workspaces]);
+  }, [bootPhase, bootRouteReady, loading, openworkClient, selectedWorkspace, workspaces]);
 
   useEffect(() => {
     void refreshRouteState();
@@ -2195,7 +2249,6 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
             showOpenWorkModelsConnect={showOpenWorkModelsConnect}
             showOpenWorkModelsSyncing={showOpenWorkModelsSyncing}
             onSubscribeOpenWorkModels={subscribeToOpenWorkModels}
-            onRefreshOpenWorkModels={refreshOpenWorkModels}
             onDismissOpenWorkModels={dismissOpenWorkModelsPromo}
             cloudProvidersView={
               <CloudProvidersView
@@ -2213,6 +2266,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
                 onOpenAccount={openCloudAccountSettings}
                 refreshCloudOrgProviders={providerAuthStore.refreshCloudOrgProviders}
                 runCloudProviderSync={providerAuthStore.runCloudProviderSync}
+                serverSync={providerAuthSnapshot.cloudProviderServerSync}
               />
             }
           />
@@ -2240,11 +2294,12 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
             onNotificationSoundsChange={(notificationSounds) => {
               local.setPrefs((previous) => ({ ...previous, notificationSounds }));
             }}
+            continuousEngineAvailable={isDesktopRuntime()}
+            continuousEngineEnabled={continuousEngineEnabled}
+            continuousEngineBusy={continuousEngineBusy || activeReloadBlockingSessions.length > 0}
+            onToggleContinuousEngine={handleToggleContinuousEngine}
             memoryEnabled={memoryEnabled}
             onToggleMemory={toggleMemory}
-            showAutomations={isDesktopRuntime()}
-            automationsEnabled={automationsEnabled}
-            onToggleAutomations={toggleAutomations}
           />
         );
       case "extensions":
@@ -2296,7 +2351,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
                 enablementContext={enablementContext}
                 builtInExtensionsDisabled={builtInExtensionsDisabled}
                 connectMcp={(entry) => {
-                  void connectionsStore.connectMcp(entry);
+                  return connectionsStore.connectMcp(entry);
                 }}
                 configSlotForEntry={extensionController.configSlotForEntry}
                 isExtensionConnected={extensionController.isConnected}
@@ -2378,6 +2433,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
             onOpenAccount={openCloudAccountSettings}
             refreshCloudOrgProviders={providerAuthStore.refreshCloudOrgProviders}
             runCloudProviderSync={providerAuthStore.runCloudProviderSync}
+            serverSync={providerAuthSnapshot.cloudProviderServerSync}
           />
         );
       case "advanced":

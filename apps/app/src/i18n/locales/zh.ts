@@ -1,5 +1,3 @@
-import { automationsEnglish } from "./automations";
-
 /**
  * 中文（简体）翻译
  * 产品名称保留英文：OpenCode、OpenPackage、OpenWork
@@ -9,7 +7,6 @@ import { automationsEnglish } from "./automations";
  */
 
 export default {
-  ...automationsEnglish,
   "app.compact_command_desc": "压缩此会话以减少上下文大小。",
   "app.error_audit_load": "加载审计日志失败。",
   "app.error_auth_failed": "认证失败",
@@ -632,6 +629,10 @@ export default {
   "session.redo_aria_label": "重做上一条撤销的消息",
   "session.redo_label": "重做",
   "session.redo_title": "重做上一条撤销的消息",
+  "session.reverted_messages_hidden": "{count} 条较早的消息已隐藏",
+  "session.restore": "恢复",
+  "session.restoring": "正在恢复...",
+  "session.restore_failed": "无法恢复隐藏的消息，请重试。",
   "session.rename_description": "更新此会话名称。",
   "session.rename_label": "会话名称",
   "session.rename_placeholder": "输入新的名称",

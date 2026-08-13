@@ -140,7 +140,6 @@ jobs:
             health_path: /health
             smoke_env: >-
               -e DB_MODE=mysql
-              -e DATABASE_URL=mysql://smoke:smoke@127.0.0.1:3306/smoke
               -e DEN_DB_ENCRYPTION_KEY=ci-den-db-encryption-key-value-123456
               -e BETTER_AUTH_SECRET=ci-better-auth-secret-value-123456
               -e BETTER_AUTH_URL=http://127.0.0.1:8788
@@ -303,15 +302,95 @@ jobs:
         env:
           IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          image_tag="$(printf '%s\n' "$IMAGE_TAGS" | head -n 1)"
-          container_id="$(docker run -d --rm -P ${{ matrix.smoke_env }} "$image_tag")"
+          set -euo pipefail
+
+          image_tag="${IMAGE_TAGS%%$'\n'*}"
+          container_name="openwork-smoke-${{ matrix.image }}"
+          mysql_container=""
+          network_name=""
+
+          # shellcheck disable=SC2329 # Invoked by the EXIT trap.
           cleanup() {
-            docker stop "$container_id" >/dev/null || true
+            status=$?
+            trap - EXIT
+            set +e
+
+            if [ "$status" -ne 0 ]; then
+              if docker inspect "$container_name" >/dev/null 2>&1; then
+                echo "Smoke container logs:"
+                docker logs "$container_name" || true
+              fi
+              if [ -n "$mysql_container" ] && docker inspect "$mysql_container" >/dev/null 2>&1; then
+                echo "MySQL container logs:"
+                docker logs "$mysql_container" || true
+              fi
+            fi
+
+            docker rm -f "$container_name" >/dev/null 2>&1 || true
+            if [ -n "$mysql_container" ]; then
+              docker rm -f "$mysql_container" >/dev/null 2>&1 || true
+            fi
+            if [ -n "$network_name" ]; then
+              docker network rm "$network_name" >/dev/null 2>&1 || true
+            fi
+
+            exit "$status"
           }
           trap cleanup EXIT
 
+          if [ "${{ matrix.image }}" = "openwork-den-api" ]; then
+            network_name="openwork-den-api-smoke"
+            mysql_container="openwork-den-api-smoke-mysql"
+            database_url="mysql://smoke:smoke@${mysql_container}:3306/smoke"
+
+            docker network create "$network_name" >/dev/null
+            docker run -d \
+              --name "$mysql_container" \
+              --network "$network_name" \
+              -e MYSQL_ROOT_PASSWORD=smoke-root-password \
+              -e MYSQL_DATABASE=smoke \
+              -e MYSQL_USER=smoke \
+              -e MYSQL_PASSWORD=smoke \
+              mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb >/dev/null
+
+            mysql_ready="false"
+            for _ in {1..30}; do
+              if docker exec \
+                -e MYSQL_PWD=smoke-root-password \
+                "$mysql_container" \
+                mysqladmin ping --host=127.0.0.1 --user=root --silent >/dev/null 2>&1; then
+                mysql_ready="true"
+                echo "MySQL is ready"
+                break
+              fi
+              sleep 2
+            done
+            if [ "$mysql_ready" != "true" ]; then
+              echo "MySQL did not become ready" >&2
+              exit 1
+            fi
+
+            docker run --rm \
+              --network "$network_name" \
+              -e DATABASE_URL="$database_url" \
+              -e DEN_DB_ENCRYPTION_KEY=ci-den-db-encryption-key-value-123456 \
+              --entrypoint node \
+              "$image_tag" \
+              /app/ee/packages/den-db/dist/scripts/bootstrap.js
+
+            container_id="$(docker run -d \
+              --name "$container_name" \
+              --network "$network_name" \
+              -P \
+              -e DATABASE_URL="$database_url" \
+              ${{ matrix.smoke_env }} \
+              "$image_tag")"
+          else
+            container_id="$(docker run -d --name "$container_name" -P ${{ matrix.smoke_env }} "$image_tag")"
+          fi
+
           host_port=""
-          for attempt in {1..10}; do
+          for _ in {1..10}; do
             host_port="$(docker port "$container_id" "${{ matrix.port }}/tcp" 2>/dev/null | awk -F: 'NR == 1 { print $NF }')"
             if [ -n "$host_port" ]; then
               break
@@ -325,8 +404,9 @@ jobs:
 
           url="http://127.0.0.1:${host_port}${{ matrix.health_path }}"
 
-          for attempt in {1..30}; do
+          for _ in {1..30}; do
             if node -e "fetch(process.argv[1]).then((res) => process.exit(res.ok ? 0 : 1)).catch(() => process.exit(1))" "$url"; then
+              echo "Health endpoint is ready: $url"
               exit 0
             fi
             sleep 2
