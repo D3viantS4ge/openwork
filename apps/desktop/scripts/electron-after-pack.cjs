@@ -58,7 +58,12 @@ function verifyRuntimeDependencies(context) {
   if (!appAsarPath || !fs.existsSync(appAsarPath)) {
     throw new Error(`Missing packaged app.asar at ${appAsarPath || context.appOutDir}`);
   }
-  const packagedFiles = new Set(asar.listPackage(appAsarPath));
+  // @electron/asar returns platform-native separators (backslashes on
+  // Windows); the staged package paths below are always forward-slash, so
+  // normalize before comparing or every staged package reads as missing.
+  const packagedFiles = new Set(
+    asar.listPackage(appAsarPath).map((file) => file.replaceAll("\\", "/")),
+  );
   const stagedNodeModules = path.resolve(__dirname, "..", ".electron-runtime", "node_modules");
   const packageJsonPaths = [];
   function visitNodeModules(nodeModulesPath, archivePrefix) {
