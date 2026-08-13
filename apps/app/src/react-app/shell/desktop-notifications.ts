@@ -6,6 +6,7 @@ import {
   type DesktopNotificationPreference,
 } from "@/react-app/kernel/desktop-notification-preferences";
 import { LOCAL_PREFERENCES_KEY } from "@/react-app/kernel/local-preferences-storage";
+import { playEventSound } from "./notification-sounds";
 
 type DesktopNotificationImportance = "important" | "routine";
 type WebNotificationHandler = (title: string, description?: string, href?: string) => Promise<void>;
@@ -89,6 +90,11 @@ function copyForEvent(event: DesktopNotificationEvent): NotificationCopy {
 }
 
 export function notifyDesktopEvent(event: DesktopNotificationEvent): void {
+  // Sound-only chime, independent of the native-notification preference and
+  // app focus (opencode-web behavior). Native popups below keep their own
+  // gating.
+  playEventSound(event);
+
   const copy = copyForEvent(event);
   if (!shouldNotify(readDesktopNotificationPreference(), copy.importance)) return;
   if (isAppInView()) return;

@@ -1,9 +1,12 @@
 /** @jsxImportSource react */
+import { Play } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
   SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -15,6 +18,18 @@ import {
   isDesktopNotificationPreference,
   type DesktopNotificationPreference,
 } from "@/react-app/kernel/desktop-notification-preferences";
+import {
+  NOTIFICATION_SOUND_CATEGORIES,
+  NOTIFICATION_SOUND_EVENTS,
+  NOTIFICATION_SOUND_IDS,
+  isNotificationSoundId,
+  soundIdCategory,
+  soundIdLabel,
+  type NotificationSoundCategory,
+  type NotificationSoundEvent,
+  type NotificationSoundPreferences,
+} from "@/react-app/kernel/notification-sound-preferences";
+import { playSoundById } from "@/react-app/shell/notification-sounds";
 import {
   LayoutSection,
   LayoutSectionDescription,
@@ -40,6 +55,8 @@ export type PreferencesViewProps = {
   onToggleAnalytics: () => void;
   desktopNotifications: DesktopNotificationPreference;
   onDesktopNotificationsChange: (value: DesktopNotificationPreference) => void;
+  notificationSounds: NotificationSoundPreferences;
+  onNotificationSoundsChange: (value: NotificationSoundPreferences) => void;
   memoryEnabled: boolean;
   onToggleMemory: () => void;
   showAutomations: boolean;
@@ -56,6 +73,132 @@ function desktopNotificationPreferenceLabel(value: DesktopNotificationPreference
     case "off":
       return t("settings.desktop_notifications.off");
   }
+}
+
+const SOUND_NONE_VALUE = "none";
+
+const NOTIFICATION_SOUND_ROW_EVENTS: {
+  event: NotificationSoundEvent;
+  titleKey: string;
+  descriptionKey: string;
+}[] = [
+  {
+    event: "task.completed",
+    titleKey: "settings.notification_sounds.event.task_completed",
+    descriptionKey: "settings.notification_sounds.event.task_completed_desc",
+  },
+  {
+    event: "permission.asked",
+    titleKey: "settings.notification_sounds.event.permission_asked",
+    descriptionKey: "settings.notification_sounds.event.permission_asked_desc",
+  },
+  {
+    event: "question.asked",
+    titleKey: "settings.notification_sounds.event.question_asked",
+    descriptionKey: "settings.notification_sounds.event.question_asked_desc",
+  },
+  {
+    event: "task.failed",
+    titleKey: "settings.notification_sounds.event.task_failed",
+    descriptionKey: "settings.notification_sounds.event.task_failed_desc",
+  },
+];
+
+function notificationSoundCategoryLabel(category: NotificationSoundCategory): string {
+  switch (category) {
+    case "alerts":
+      return t("settings.notification_sounds.category.alerts");
+    case "bip-bops":
+      return t("settings.notification_sounds.category.bip_bops");
+    case "staplebops":
+      return t("settings.notification_sounds.category.staplebops");
+    case "nopes":
+      return t("settings.notification_sounds.category.nopes");
+    case "yups":
+      return t("settings.notification_sounds.category.yups");
+  }
+}
+
+type NotificationSoundEventRowProps = {
+  event: NotificationSoundEvent;
+  title: string;
+  description: string;
+  sounds: NotificationSoundPreferences["sounds"];
+  disabled: boolean;
+  onChange: (sounds: NotificationSoundPreferences["sounds"]) => void;
+};
+
+function NotificationSoundEventRow({
+  event,
+  title,
+  description,
+  sounds,
+  disabled,
+  onChange,
+}: NotificationSoundEventRowProps) {
+  const selected = sounds[event];
+  return (
+    <LayoutSectionItem>
+      <LayoutSectionItemHeader>
+        <LayoutSectionItemTitle>{title}</LayoutSectionItemTitle>
+        <LayoutSectionItemDescription>{description}</LayoutSectionItemDescription>
+        <LayoutSectionItemHeaderActions>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label={t("settings.notification_sounds.preview")}
+              disabled={disabled || !selected}
+              onClick={() => {
+                if (selected) void playSoundById(selected);
+              }}
+            >
+              <Play className="size-4" />
+            </Button>
+            <div className="w-44 max-w-full">
+              <Select
+                value={selected ?? SOUND_NONE_VALUE}
+                onValueChange={(value) => {
+                  if (value === SOUND_NONE_VALUE) {
+                    const next = { ...sounds };
+                    delete next[event];
+                    onChange(next);
+                    return;
+                  }
+                  if (isNotificationSoundId(value)) {
+                    onChange({ ...sounds, [event]: value });
+                  }
+                }}
+                disabled={disabled}
+              >
+                <SelectTrigger className="w-full" aria-label={title}>
+                  <SelectValue placeholder={t("settings.notification_sounds.none")} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={SOUND_NONE_VALUE}>
+                    {t("settings.notification_sounds.none")}
+                  </SelectItem>
+                  {NOTIFICATION_SOUND_CATEGORIES.map((category) => (
+                    <SelectGroup key={category}>
+                      <SelectLabel>{notificationSoundCategoryLabel(category)}</SelectLabel>
+                      {NOTIFICATION_SOUND_IDS.filter((id) => soundIdCategory(id) === category).map(
+                        (id) => (
+                          <SelectItem key={id} value={id}>
+                            {soundIdLabel(id)}
+                          </SelectItem>
+                        ),
+                      )}
+                    </SelectGroup>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </LayoutSectionItemHeaderActions>
+      </LayoutSectionItemHeader>
+    </LayoutSectionItem>
+  );
 }
 
 export function PreferencesView(props: PreferencesViewProps) {
@@ -144,6 +287,44 @@ export function PreferencesView(props: PreferencesViewProps) {
             </LayoutSectionItemHeaderActions>
           </LayoutSectionItemHeader>
         </LayoutSectionItem>
+      </LayoutSection>
+
+      <LayoutSection>
+        <LayoutSectionHeader>
+          <LayoutSectionTitle>{t("settings.notification_sounds.title")}</LayoutSectionTitle>
+          <LayoutSectionDescription>{t("settings.notification_sounds.section_desc")}</LayoutSectionDescription>
+        </LayoutSectionHeader>
+
+        <LayoutSectionItem>
+          <LayoutSectionItemHeader>
+            <LayoutSectionItemTitle>{t("settings.notification_sounds.master")}</LayoutSectionItemTitle>
+            <LayoutSectionItemDescription>{t("settings.notification_sounds.master_desc")}</LayoutSectionItemDescription>
+            <LayoutSectionItemHeaderActions>
+              <Switch
+                aria-label={t("settings.notification_sounds.master")}
+                checked={props.notificationSounds.enabled}
+                disabled={props.busy}
+                onCheckedChange={(enabled) =>
+                  props.onNotificationSoundsChange({ ...props.notificationSounds, enabled })
+                }
+              />
+            </LayoutSectionItemHeaderActions>
+          </LayoutSectionItemHeader>
+        </LayoutSectionItem>
+
+        {NOTIFICATION_SOUND_ROW_EVENTS.map((row) => (
+          <NotificationSoundEventRow
+            key={row.event}
+            event={row.event}
+            title={t(row.titleKey)}
+            description={t(row.descriptionKey)}
+            sounds={props.notificationSounds.sounds}
+            disabled={props.busy || !props.notificationSounds.enabled}
+            onChange={(sounds) =>
+              props.onNotificationSoundsChange({ ...props.notificationSounds, sounds })
+            }
+          />
+        ))}
       </LayoutSection>
 
       <DesktopIntegrationSection />

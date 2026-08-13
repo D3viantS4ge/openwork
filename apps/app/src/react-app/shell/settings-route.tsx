@@ -2236,6 +2236,10 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
             onDesktopNotificationsChange={(desktopNotifications) => {
               local.setPrefs((previous) => ({ ...previous, desktopNotifications }));
             }}
+            notificationSounds={local.prefs.notificationSounds}
+            onNotificationSoundsChange={(notificationSounds) => {
+              local.setPrefs((previous) => ({ ...previous, notificationSounds }));
+            }}
             memoryEnabled={memoryEnabled}
             onToggleMemory={toggleMemory}
             showAutomations={isDesktopRuntime()}

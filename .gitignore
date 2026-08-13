@@ -50,9 +50,6 @@ packaging/docker/workspace/
 # OS
 .DS_Store
 
-# OpenCode mirror
-vendor/opencode/
-
 # OpenCode local deps
 .opencode/node_modules/
 .opencode/bun.lock

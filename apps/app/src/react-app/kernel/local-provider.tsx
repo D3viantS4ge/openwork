@@ -20,6 +20,11 @@ import {
 } from "./desktop-notification-preferences";
 import { LOCAL_PREFERENCES_KEY } from "./local-preferences-storage";
 import {
+  DEFAULT_NOTIFICATION_SOUND_PREFERENCES,
+  isNotificationSoundPreferences,
+  type NotificationSoundPreferences,
+} from "./notification-sound-preferences";
+import {
   readStoredDefaultModel,
   storedDefaultModelChangedEvent,
   writeStoredDefaultModel,
@@ -78,6 +83,12 @@ export type LocalPreferences = {
    * users are not surprised by system popups.
    */
   desktopNotifications: DesktopNotificationPreference;
+  /**
+   * Sound-only notification chimes (opencode-web style). Independent of
+   * native notifications: plays a short sound per configured session event
+   * without showing an OS popup. Off by default.
+   */
+  notificationSounds: NotificationSoundPreferences;
 };
 
 type LocalContextValue = {
@@ -104,6 +115,7 @@ const INITIAL_PREFS: LocalPreferences = {
   hasCompletedOnboarding: false,
   analyticsEnabled: true,
   desktopNotifications: DEFAULT_DESKTOP_NOTIFICATION_PREFERENCE,
+  notificationSounds: DEFAULT_NOTIFICATION_SOUND_PREFERENCES,
 };
 
 function readPersisted<T>(key: string, fallback: T): T {
@@ -143,6 +155,9 @@ export function LocalProvider({ children }: LocalProviderProps) {
     persisted.desktopNotifications = isDesktopNotificationPreference(persisted.desktopNotifications)
       ? persisted.desktopNotifications
       : DEFAULT_DESKTOP_NOTIFICATION_PREFERENCE;
+    persisted.notificationSounds = isNotificationSoundPreferences(persisted.notificationSounds)
+      ? persisted.notificationSounds
+      : DEFAULT_NOTIFICATION_SOUND_PREFERENCES;
     if (persisted.defaultModel) {
       return persisted;
     }
