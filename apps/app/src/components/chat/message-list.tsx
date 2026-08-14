@@ -929,6 +929,11 @@ interface AssistantMessageGroupProps {
   isStreaming: boolean
 }
 
+// Positions within this many px of the bottom count as "at bottom" for the
+// capped step run: small anchoring jitter must not release the stream pin,
+// a real scroll-up must.
+const STEPS_STICKY_GAP_PX = 24
+
 function MessageGroup({
   items,
   messages,
@@ -942,11 +947,25 @@ function MessageGroup({
   const lastRealItem = items.findLast((item) => !isSessionErrorMessage(item.message))
   const isLiveGroup = isStreaming && lastItem !== undefined && lastItem.index === messages.length - 1
   const stepsRef = React.useRef<HTMLDivElement>(null)
+  // Whether the user is still looking at the tail of the capped step run.
+  // Starts true so streaming pins to the latest step; scrolling up inside
+  // the run (e.g. to read the start of a long reasoning block) releases the
+  // pin, and scrolling back to the bottom re-engages it.
+  const stepsAtBottomRef = React.useRef(true)
 
-  // Keep the capped step run pinned to the latest step while streaming.
+  const handleStepsScroll = () => {
+    const node = stepsRef.current
+    if (!node) return
+    stepsAtBottomRef.current =
+      node.scrollHeight - node.scrollTop - node.clientHeight <= STEPS_STICKY_GAP_PX
+  }
+
+  // Keep the capped step run pinned to the latest step while streaming, but
+  // only while the user is at the bottom of the run — reading the start of a
+  // long reasoning block must not be fought by the stream.
   React.useEffect(() => {
     const node = stepsRef.current
-    if (node && isLiveGroup) {
+    if (node && isLiveGroup && stepsAtBottomRef.current) {
       node.scrollTop = node.scrollHeight
     }
   })
@@ -1093,7 +1112,7 @@ function MessageGroup({
             </div>
           </CompletedStepRun>
         ) : (
-          <div ref={stepsRef} className="flex max-h-[520px] flex-col gap-2 overflow-y-auto">
+          <div ref={stepsRef} onScroll={handleStepsScroll} className="flex max-h-[520px] flex-col gap-2 overflow-y-auto">
             {renderItems(stepItems, 0)}
           </div>
         )
