@@ -933,6 +933,10 @@ interface AssistantMessageGroupProps {
 // capped step run: small anchoring jitter must not release the stream pin,
 // a real scroll-up must.
 const STEPS_STICKY_GAP_PX = 24
+// Scroll events within this window of a wheel/touch/pointer gesture are
+// treated as user input. Events from our own programmatic pins are never
+// preceded by a gesture, so they are ignored entirely.
+const STEPS_GESTURE_WINDOW_MS = 600
 
 function MessageGroup({
   items,
@@ -952,63 +956,52 @@ function MessageGroup({
   // the run (e.g. to read the start of a long reasoning block) releases the
   // pin, and scrolling back to the bottom re-engages it.
   const stepsAtBottomRef = React.useRef(true)
-  // While a programmatic pin's own scroll event is in flight, suppress the
-  // naive bottom-gap check: the event's scrollTop trails content that grew
-  // after the pin, so the gap would read as a user scroll-up and spuriously
-  // release the pin mid-stream. Scroll event tasks run before rAF callbacks
-  // of the same frame, so a single rAF window deterministically covers the
-  // pin's event; a real user up-move still bypasses the suppression.
-  const suppressStepsScrollRef = React.useRef(false)
-  const suppressStepsScrollRafRef = React.useRef<number | undefined>(undefined)
-  const lastStepsTopRef = React.useRef(0)
+  // User-input tracking for the steps run: scroll events caused by our own
+  // programmatic pin carry stale scrollTop values (content grows after the
+  // pin), so a naive bottom-gap check reads them as user scrolls and
+  // spuriously releases the pin. Only scroll events preceded by a wheel /
+  // touch / pointer gesture — or part of an ongoing scrollbar drag — are
+  // treated as user input.
+  const stepsGestureAtRef = React.useRef(0)
+  const stepsDraggingRef = React.useRef(false)
+
+  const markStepsGesture = React.useCallback(() => {
+    stepsGestureAtRef.current = Date.now()
+  }, [])
 
   const handleStepsScroll = () => {
     const node = stepsRef.current
     if (!node) return
-    const currentTop = node.scrollTop
-    const movedUp = lastStepsTopRef.current - currentTop > STEPS_STICKY_GAP_PX
-    if (suppressStepsScrollRef.current && !movedUp) {
-      lastStepsTopRef.current = currentTop
-      return
-    }
-    if (movedUp) {
-      stepsAtBottomRef.current = false
-    } else {
-      stepsAtBottomRef.current =
-        node.scrollHeight - currentTop - node.clientHeight <= STEPS_STICKY_GAP_PX
-    }
-    lastStepsTopRef.current = currentTop
+    const userDriven =
+      stepsDraggingRef.current ||
+      Date.now() - stepsGestureAtRef.current < STEPS_GESTURE_WINDOW_MS
+    if (!userDriven) return
+    stepsAtBottomRef.current =
+      node.scrollHeight - node.scrollTop - node.clientHeight <= STEPS_STICKY_GAP_PX
   }
 
   // Keep the capped step run pinned to the latest step while streaming, but
   // only while the user is at the bottom of the run — reading the start of a
-  // long reasoning block must not be fought by the stream.
+  // long reasoning block must not be fought by the stream. A fresh component
+  // instance per message (keyed by message id) resets the pin state.
   React.useEffect(() => {
     const node = stepsRef.current
-    if (!node) return
-    if (!isLiveGroup) {
-      stepsAtBottomRef.current = true
-      return
-    }
-    if (stepsAtBottomRef.current) {
-      suppressStepsScrollRef.current = true
-      if (suppressStepsScrollRafRef.current !== undefined) {
-        window.cancelAnimationFrame(suppressStepsScrollRafRef.current)
-      }
-      suppressStepsScrollRafRef.current = window.requestAnimationFrame(() => {
-        suppressStepsScrollRafRef.current = undefined
-        suppressStepsScrollRef.current = false
-      })
+    if (node && isLiveGroup && stepsAtBottomRef.current) {
       node.scrollTop = node.scrollHeight
-      lastStepsTopRef.current = node.scrollHeight
     }
   })
 
+  // Clear the drag state when the pointer is released anywhere (the thumb
+  // may be released outside the container).
   React.useEffect(() => {
+    const endDrag = () => {
+      stepsDraggingRef.current = false
+    }
+    window.addEventListener("pointerup", endDrag)
+    window.addEventListener("pointercancel", endDrag)
     return () => {
-      if (suppressStepsScrollRafRef.current !== undefined) {
-        window.cancelAnimationFrame(suppressStepsScrollRafRef.current)
-      }
+      window.removeEventListener("pointerup", endDrag)
+      window.removeEventListener("pointercancel", endDrag)
     }
   }, [])
 
@@ -1154,7 +1147,18 @@ function MessageGroup({
             </div>
           </CompletedStepRun>
         ) : (
-          <div ref={stepsRef} onScroll={handleStepsScroll} className="flex max-h-[520px] flex-col gap-2 overflow-y-auto">
+          <div
+            ref={stepsRef}
+            onWheel={markStepsGesture}
+            onTouchStart={markStepsGesture}
+            onTouchMove={markStepsGesture}
+            onPointerDown={() => {
+              stepsDraggingRef.current = true
+              markStepsGesture()
+            }}
+            onScroll={handleStepsScroll}
+            className="flex max-h-[520px] flex-col gap-2 overflow-y-auto"
+          >
             {renderItems(stepItems, 0)}
           </div>
         )
