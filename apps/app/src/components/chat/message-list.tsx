@@ -952,12 +952,32 @@ function MessageGroup({
   // the run (e.g. to read the start of a long reasoning block) releases the
   // pin, and scrolling back to the bottom re-engages it.
   const stepsAtBottomRef = React.useRef(true)
+  // While a programmatic pin's own scroll event is in flight, suppress the
+  // naive bottom-gap check: the event's scrollTop trails content that grew
+  // after the pin, so the gap would read as a user scroll-up and spuriously
+  // release the pin mid-stream. Scroll event tasks run before rAF callbacks
+  // of the same frame, so a single rAF window deterministically covers the
+  // pin's event; a real user up-move still bypasses the suppression.
+  const suppressStepsScrollRef = React.useRef(false)
+  const suppressStepsScrollRafRef = React.useRef<number | undefined>(undefined)
+  const lastStepsTopRef = React.useRef(0)
 
   const handleStepsScroll = () => {
     const node = stepsRef.current
     if (!node) return
-    stepsAtBottomRef.current =
-      node.scrollHeight - node.scrollTop - node.clientHeight <= STEPS_STICKY_GAP_PX
+    const currentTop = node.scrollTop
+    const movedUp = lastStepsTopRef.current - currentTop > STEPS_STICKY_GAP_PX
+    if (suppressStepsScrollRef.current && !movedUp) {
+      lastStepsTopRef.current = currentTop
+      return
+    }
+    if (movedUp) {
+      stepsAtBottomRef.current = false
+    } else {
+      stepsAtBottomRef.current =
+        node.scrollHeight - currentTop - node.clientHeight <= STEPS_STICKY_GAP_PX
+    }
+    lastStepsTopRef.current = currentTop
   }
 
   // Keep the capped step run pinned to the latest step while streaming, but
@@ -965,10 +985,32 @@ function MessageGroup({
   // long reasoning block must not be fought by the stream.
   React.useEffect(() => {
     const node = stepsRef.current
-    if (node && isLiveGroup && stepsAtBottomRef.current) {
+    if (!node) return
+    if (!isLiveGroup) {
+      stepsAtBottomRef.current = true
+      return
+    }
+    if (stepsAtBottomRef.current) {
+      suppressStepsScrollRef.current = true
+      if (suppressStepsScrollRafRef.current !== undefined) {
+        window.cancelAnimationFrame(suppressStepsScrollRafRef.current)
+      }
+      suppressStepsScrollRafRef.current = window.requestAnimationFrame(() => {
+        suppressStepsScrollRafRef.current = undefined
+        suppressStepsScrollRef.current = false
+      })
       node.scrollTop = node.scrollHeight
+      lastStepsTopRef.current = node.scrollHeight
     }
   })
+
+  React.useEffect(() => {
+    return () => {
+      if (suppressStepsScrollRafRef.current !== undefined) {
+        window.cancelAnimationFrame(suppressStepsScrollRafRef.current)
+      }
+    }
+  }, [])
 
   if (!lastItem || isMessageEmptyGroup(items)) {
     return null;
