@@ -21,3 +21,8 @@ test("saved scripts execute in Code Mode and are cloud-ready once synced", () =>
   expect(marketplaceConfigObjectExecutionMode("script")).toBe("codemode")
   expect(marketplaceConfigObjectReadyWhenSynced("script")).toBe(true)
 })
+
+test("app config objects stay out of instructional marketplace projection", () => {
+  expect(marketplaceConfigObjectExecutionMode("app")).toBe("desktop_only")
+  expect(marketplaceConfigObjectReadyWhenSynced("app")).toBe(false)
+})

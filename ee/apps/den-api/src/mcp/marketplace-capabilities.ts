@@ -811,6 +811,7 @@ export function marketplaceConfigObjectExecutionMode(objectType: ConfigObjectTyp
       return "instructional"
     case "script":
       return "codemode"
+    case "app":
     case "hook":
     case "tool":
       return "desktop_only"

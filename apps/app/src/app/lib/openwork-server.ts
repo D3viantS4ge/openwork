@@ -1946,7 +1946,7 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
     },
     callMcpAppTool: (
       workspaceId: string,
-      payload: { serverName: string; name: string; arguments?: Record<string, unknown> },
+      payload: { serverName: string; name: string; arguments?: Record<string, unknown>; approved?: boolean },
     ) => requestJson<OpenworkMcpAppToolResult>(
       baseUrl,
       `/workspace/${encodeURIComponent(workspaceId)}/mcp-apps/call`,

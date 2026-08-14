@@ -243,13 +243,17 @@ export function McpAppFrame({ part }: { part: DynamicToolUIPart }) {
     bridge.onrequestteardown = () => {
       setApp(null)
     }
-    bridge.oncalltool = async ({ name, arguments: args }) => mcpToolResult(
-      await openworkServerClient.callMcpAppTool(workspaceId, {
-        serverName: app.serverName,
-        name,
-        arguments: args,
-      }),
-    )
+    bridge.oncalltool = async ({ name, arguments: args }) => {
+      const request = { serverName: app.serverName, name, arguments: args }
+      try {
+        return mcpToolResult(await openworkServerClient.callMcpAppTool(workspaceId, request))
+      } catch (cause) {
+        if (!(cause instanceof OpenworkServerError) || cause.code !== "tool_requires_approval") throw cause
+        const approved = window.confirm(`Allow this MCP App to call ${name} on ${app.serverName}?`)
+        if (!approved) throw new Error("The user declined the MCP App tool call.")
+        return mcpToolResult(await openworkServerClient.callMcpAppTool(workspaceId, { ...request, approved: true }))
+      }
+    }
     bridge.oninitialized = () => {
       initialized = true
       checkpoint("app-initialized")

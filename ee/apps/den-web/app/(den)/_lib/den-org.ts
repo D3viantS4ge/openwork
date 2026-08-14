@@ -612,6 +612,10 @@ export function getPluginRoute(orgSlug: string | null | undefined, pluginId: str
   return `${getPluginsRoute(orgSlug)}/${encodeURIComponent(pluginId)}`;
 }
 
+export function getRemoteMcpAppRoute(orgSlug: string | null | undefined, appId: string): string {
+  return `${getOrgDashboardRoute(orgSlug)}/apps/${encodeURIComponent(appId)}`;
+}
+
 export function getPluginSkillRoute(orgSlug: string | null | undefined, pluginId: string, skillId: string): string {
   return `${getPluginRoute(orgSlug, pluginId)}/skills/${encodeURIComponent(skillId)}`;
 }

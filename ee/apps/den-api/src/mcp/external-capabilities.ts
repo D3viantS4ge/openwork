@@ -980,6 +980,10 @@ export async function executeExternalCapability(input: {
   args: unknown
   schemaDigest?: string
   redirectUriBase: string
+  /** Fail closed unless the live provider catalog still marks this exact tool read-only. */
+  requireReadOnly?: boolean
+  /** Fail closed when the live input schema no longer matches schemaDigest. */
+  requireSchemaMatch?: boolean
 }): Promise<ExternalCapabilityExecuteResult> {
   if (!input.member) {
     return { ok: false, error: "forbidden", message: "No active org membership for this token." }
@@ -1103,8 +1107,29 @@ export async function executeExternalCapability(input: {
       }
     }
 
+    if (input.requireReadOnly && (tool.annotations?.readOnlyHint !== true || tool.annotations?.destructiveHint === true)) {
+      return {
+        ok: false,
+        error: "policy_blocked",
+        capability: buildExternalCapabilityName(connection.id, input.toolName),
+        message: `${input.toolName} is no longer advertised as strictly read-only, so OpenWork blocked the Remote MCP App call.`,
+        sameArgumentsRetryable: false,
+        retry: { action: "search_capabilities", searchRequired: true },
+      }
+    }
+
     const schemaDigest = externalMcpToolSchemaDigest(tool.inputSchema)
     currentSchemaDigest = schemaDigest
+    if (input.requireSchemaMatch && input.schemaDigest && input.schemaDigest !== schemaDigest) {
+      return {
+        ok: false,
+        error: "policy_blocked",
+        capability: buildExternalCapabilityName(connection.id, input.toolName),
+        message: `${input.toolName} now advertises a different input schema, so OpenWork blocked the Remote MCP App call until its cached revision is refreshed.`,
+        sameArgumentsRetryable: false,
+        retry: { action: "search_capabilities", searchRequired: true },
+      }
+    }
     const schemaWarnings: ExternalMcpSchemaWarning[] = []
     if (input.schemaDigest && input.schemaDigest !== schemaDigest) {
       schemaWarnings.push({

@@ -15,7 +15,7 @@ import { denTypeIdColumn, encryptedColumn, encryptedMediumTextColumn } from "../
 import { MemberTable, OrganizationTable } from "../org"
 import { TeamTable } from "../teams"
 
-export const configObjectTypeValues = ["skill", "agent", "command", "tool", "mcp", "hook", "context", "custom", "script"] as const
+export const configObjectTypeValues = ["skill", "agent", "command", "tool", "mcp", "hook", "context", "custom", "script", "app"] as const
 export const configObjectSourceModeValues = ["cloud", "import", "connector"] as const
 export const configObjectStatusValues = ["active", "inactive", "deleted", "archived", "ingestion_error"] as const
 export const configObjectCreatedViaValues = ["cloud", "import", "connector", "system"] as const

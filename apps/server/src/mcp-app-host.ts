@@ -323,6 +323,7 @@ export async function callMcpAppTool(input: {
   serverName: string;
   name: string;
   arguments?: Record<string, unknown>;
+  approved?: boolean;
 }): Promise<CallToolResult> {
   const configured = await listMcp(input.serverConfig, input.workspaceId, input.workspaceRoot);
   const item = configured.find((candidate) => candidate.name === input.serverName);
@@ -339,10 +340,10 @@ export async function callMcpAppTool(input: {
     if ((await diagnoseMcpToolDenies(input.workspaceRoot, input.serverName, [projectedName])).length > 0) {
       throw new McpAppHostError("tool_denied", "This same-server MCP tool is denied by the workspace tool policy.");
     }
-    if (tool.annotations?.readOnlyHint !== true || tool.annotations?.destructiveHint === true) {
+    if ((tool.annotations?.readOnlyHint !== true || tool.annotations?.destructiveHint === true) && !input.approved) {
       throw new McpAppHostError(
         "tool_requires_approval",
-        "This host slice allows MCP App calls only to explicitly read-only, non-destructive tools.",
+        "This MCP App tool requires user approval before OpenWork can call it.",
       );
     }
     const result = await client.callTool({ name: input.name, arguments: input.arguments ?? {} });

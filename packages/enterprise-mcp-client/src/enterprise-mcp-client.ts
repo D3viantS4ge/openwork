@@ -16,15 +16,24 @@ import type {
   EnterpriseMcpConnection,
   EnterpriseMcpFetch,
   EnterpriseMcpLifecycle,
+  EnterpriseMcpListResourcesInput,
+  EnterpriseMcpListResourceTemplatesInput,
   EnterpriseMcpListToolsInput,
   EnterpriseMcpOperationPhase,
   EnterpriseMcpRequestPhase,
+  EnterpriseMcpReadResourceInput,
 } from "./contracts.js"
 import { EnterpriseMcpClientError, EnterpriseMcpLifecycleDeadlineError, EnterpriseMcpToolResultError } from "./errors.js"
 import { EnterpriseMcpOAuthProvider } from "./oauth-provider.js"
 import { createEnterpriseMcpRequestObserver, type EnterpriseMcpRequestObserver } from "./request-observer.js"
 import { createEnterpriseMcpTokenResponseCompat } from "./token-response-compat.js"
 import { collectEnterpriseMcpTools } from "./tool-catalog.js"
+import {
+  assertEnterpriseMcpResourceResult,
+  collectEnterpriseMcpResources,
+  collectEnterpriseMcpResourceTemplates,
+  ENTERPRISE_MCP_RESOURCE_URI_LIMIT_BYTES,
+} from "./resource-catalog.js"
 import { assertEnterpriseMcpToolArguments } from "./tool-input.js"
 
 const connectionSchema = z.object({
@@ -44,6 +53,10 @@ const oauthConfigurationSchema = z.object({
   requestedScopes: z.array(z.string().trim().min(1)).max(128).optional(),
 })
 const toolNameSchema = z.string().trim().min(1)
+const resourceUriSchema = z.string().trim().min(1).max(ENTERPRISE_MCP_RESOURCE_URI_LIMIT_BYTES).refine(
+  (value) => Buffer.byteLength(value, "utf8") <= ENTERPRISE_MCP_RESOURCE_URI_LIMIT_BYTES,
+  "MCP resource URIs must not exceed 16 KiB.",
+)
 const authorizationIdSchema = z.string().min(1).max(8 * 1024)
 const authorizationCodeSchema = z.string().min(1).max(8 * 1024)
 
@@ -52,6 +65,8 @@ const DEFAULT_CLOSE_TIMEOUT_MS = 5_000
 const DEFAULT_AUTHORIZATION_TRANSACTION_TTL_MS = 10 * 60_000
 const DEFAULT_EXPIRATION_SKEW_MS = 30_000
 export const ENTERPRISE_MCP_PROTOCOL_VERSION_FALLBACK = "2025-06-18"
+const MCP_APP_EXTENSION = "io.modelcontextprotocol/ui"
+const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app"
 
 const optionsSchema = z.object({
   operationTimeoutMs: z.number().int().positive(),
@@ -170,6 +185,8 @@ export function createEnterpriseMcpClient(options: EnterpriseMcpClientOptions): 
     return phase === "mcp-initialize"
       || phase === "mcp-tool-discovery"
       || phase === "mcp-tool-execution"
+      || phase === "mcp-resource-discovery"
+      || phase === "mcp-resource-read"
       || phase === "endpoint-request"
   }
 
@@ -177,7 +194,7 @@ export function createEnterpriseMcpClient(options: EnterpriseMcpClientOptions): 
     session: Session,
     input: { connectionId: string; operationPhase: EnterpriseMcpOperationPhase },
   ): Promise<void> {
-    if (!session.oauthProvider || input.operationPhase !== "tool-execution") return
+    if (!session.oauthProvider || !["tool-execution", "resource-discovery", "resource-read"].includes(input.operationPhase)) return
     const failure = session.observer.lastRequestFailure()
     if (!failure || !isMcpResourceRequest(failure.requestPhase)) return
     const rejected = (failure.httpStatus === 401 && failure.invalidToken)
@@ -270,7 +287,12 @@ export function createEnterpriseMcpClient(options: EnterpriseMcpClientOptions): 
       requestInit: requestInit(input.connection.authorization),
     })
     const transport = createTransport()
-    const client = new Client({ name: clientName, version: clientVersion }, { capabilities: {} })
+    const capabilities = {
+      extensions: {
+        [MCP_APP_EXTENSION]: { mimeTypes: [MCP_APP_MIME_TYPE] },
+      },
+    }
+    const client = new Client({ name: clientName, version: clientVersion }, { capabilities })
     const requestOptions: RequestOptions = {
       signal: requestSignal,
       timeout: requestTimeoutMs,
@@ -329,7 +351,14 @@ export function createEnterpriseMcpClient(options: EnterpriseMcpClientOptions): 
     })
     input.session.client = new Client(
       { name: clientName, version: clientVersion },
-      { capabilities: {}, protocolVersion: ENTERPRISE_MCP_PROTOCOL_VERSION_FALLBACK },
+      {
+        capabilities: {
+          extensions: {
+            [MCP_APP_EXTENSION]: { mimeTypes: [MCP_APP_MIME_TYPE] },
+          },
+        },
+        protocolVersion: ENTERPRISE_MCP_PROTOCOL_VERSION_FALLBACK,
+      },
     )
     input.session.transport = input.session.createTransport()
     await input.session.client.connect(input.session.transport, input.session.requestOptions)
@@ -650,6 +679,23 @@ export function createEnterpriseMcpClient(options: EnterpriseMcpClientOptions): 
       })
     },
 
+    async callToolRaw(input: EnterpriseMcpCallToolInput) {
+      const toolName = configurationValue(() => toolNameSchema.parse(input.toolName))
+      configurationValue(() => assertEnterpriseMcpToolArguments(input.arguments))
+      return runConnectedOperation({
+        connection: input.connection,
+        redirectUri: input.redirectUri,
+        operationPhase: "tool-execution",
+        operation: async (session) => {
+          const result = await session.client.callTool({
+            name: toolName,
+            arguments: input.arguments,
+          }, undefined, session.requestOptions)
+          return result
+        },
+      })
+    },
+
     async callTool(input: EnterpriseMcpCallToolInput) {
       const toolName = configurationValue(() => toolNameSchema.parse(input.toolName))
       configurationValue(() => assertEnterpriseMcpToolArguments(input.arguments))
@@ -664,6 +710,67 @@ export function createEnterpriseMcpClient(options: EnterpriseMcpClientOptions): 
           }, undefined, session.requestOptions)
           if ("isError" in result && result.isError) throw new EnterpriseMcpToolResultError(result)
           return result
+        },
+      })
+    },
+
+    async listResources(input: EnterpriseMcpListResourcesInput) {
+      return runConnectedOperation({
+        connection: input.connection,
+        redirectUri: input.redirectUri,
+        operationPhase: "resource-discovery",
+        operation: (session) => collectEnterpriseMcpResources({
+          requestOptions: session.requestOptions,
+          listPage: (cursor, options) => session.client.listResources(
+            cursor ? { cursor } : undefined,
+            options,
+          ),
+        }),
+      })
+    },
+
+    async readResource(input: EnterpriseMcpReadResourceInput) {
+      const uri = configurationValue(() => resourceUriSchema.parse(input.uri))
+      return runConnectedOperation({
+        connection: input.connection,
+        redirectUri: input.redirectUri,
+        operationPhase: "resource-read",
+        operation: async (session) => {
+          const result = await session.client.readResource({ uri }, session.requestOptions)
+          assertEnterpriseMcpResourceResult(result)
+          return result
+        },
+      })
+    },
+
+    async listResourceTemplates(input: EnterpriseMcpListResourceTemplatesInput) {
+      return runConnectedOperation({
+        connection: input.connection,
+        redirectUri: input.redirectUri,
+        operationPhase: "resource-discovery",
+        operation: (session) => collectEnterpriseMcpResourceTemplates({
+          requestOptions: session.requestOptions,
+          listPage: (cursor, options) => session.client.listResourceTemplates(
+            cursor ? { cursor } : undefined,
+            options,
+          ),
+        }),
+      })
+    },
+
+    async describeServer(input: EnterpriseMcpListResourcesInput) {
+      return runConnectedOperation({
+        connection: input.connection,
+        redirectUri: input.redirectUri,
+        operationPhase: "protocol-initialize",
+        operation: async (session) => {
+          const instructions = session.client.getInstructions()
+          const serverInfo = session.client.getServerVersion()
+          return {
+            capabilities: session.client.getServerCapabilities() ?? {},
+            ...(serverInfo ? { serverInfo } : {}),
+            ...(instructions ? { instructions } : {}),
+          }
         },
       })
     },

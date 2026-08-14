@@ -336,6 +336,23 @@ describe("MCP Apps host transport", () => {
     })).rejects.toMatchObject({ code: "tool_requires_approval" });
   });
 
+  test("calls an approved write tool on the exact originating server", async () => {
+    const { config, root } = await configuredFixture("openwork-mcp-app-approved-write-");
+    const result = await callMcpAppTool({
+      serverConfig: config,
+      workspaceId: WORKSPACE_ID,
+      workspaceRoot: root,
+      serverName: "fixture",
+      name: "write_detail",
+      arguments: { id: "approved" },
+      approved: true,
+    });
+    expect(result).toMatchObject({
+      content: [{ type: "text", text: "detail:approved" }],
+      structuredContent: { id: "approved" },
+    });
+  });
+
   test("rejects private MCP egress outside explicit development mode", async () => {
     const { config, root } = await configuredFixture("openwork-mcp-app-private-");
     delete process.env.OPENWORK_DEV_MODE;

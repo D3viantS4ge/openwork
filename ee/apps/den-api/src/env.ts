@@ -129,6 +129,7 @@ const EnvSchema = z.object({
   DEN_CONNECT_LINK_KEY_ID: z.string().max(64).optional(),
   DEN_MCP_CONNECTIONS_GATING_ENABLED: z.string().optional(),
   DEN_GENERATED_ARTIFACT_VIEWS_ENABLED: z.string().optional(),
+  DEN_REMOTE_MCP_APPS_ENABLED: z.string().optional(),
   SCIM_MAINTENANCE_INTERVAL_MS: z.string().optional(),
   POLAR_FEATURE_GATE_ENABLED: z.string().optional(),
   POLAR_API_BASE: z.string().optional(),
@@ -434,6 +435,11 @@ const mcpConnectionsGatingEnabled =
 const generatedArtifactViewsEnabled =
   (parsed.DEN_GENERATED_ARTIFACT_VIEWS_ENABLED ?? "false").trim().toLowerCase() === "true"
 
+// Imported apps use the same stable Desktop MCP Apps bridge but have an
+// independent lifecycle from generated Artifact views and Code Mode Programs.
+const remoteMcpAppsEnabled =
+  (parsed.DEN_REMOTE_MCP_APPS_ENABLED ?? "false").trim().toLowerCase() === "true"
+
 const devMode = (parsed.OPENWORK_DEV_MODE ?? "0").trim() === "1"
 const botIdProtectionEnabled = (parsed.DEN_BOTID_PROTECTION_ENABLED ?? "0").trim() === "1"
 const diagnosticsOrigin = normalizeDiagnosticsOrigin(parsed.DEN_DIAGNOSTICS_ORIGIN, devMode)
@@ -525,6 +531,7 @@ export const env = {
   connectLink,
   mcpConnectionsGatingEnabled,
   generatedArtifactViewsEnabled,
+  remoteMcpAppsEnabled,
   scimMaintenanceIntervalMs: Number(parsed.SCIM_MAINTENANCE_INTERVAL_MS ?? "300000"),
   requireEmailVerification,
   passwordBreachScreeningEnabled,

@@ -14,6 +14,7 @@ import { env } from "./env.js"
 import { publicRoute } from "./middleware/index.js"
 import { registerAdminMcpRoutes } from "./mcp/admin.js"
 import { registerAgentMcpRoutes } from "./mcp/agent.js"
+import { registerExternalConnectionProxyRoutes } from "./mcp/external-connection-proxy.js"
 import { registerMcpRoutes } from "./mcp/index.js"
 import type { MemberTeamsContext, OrganizationContextVariables, UserOrganizationsContext } from "./middleware/index.js"
 import { buildOperationId, emptyResponse, htmlResponse, jsonResponse } from "./openapi.js"
@@ -221,6 +222,7 @@ registerWorkerRoutes(app)
 registerMcpTokenRoutes(app)
 registerMcpRoutes(app)
 registerAgentMcpRoutes(app)
+registerExternalConnectionProxyRoutes(app)
 registerAdminMcpRoutes(app)
 registerTelemetryRoutes(app)
 

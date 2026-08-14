@@ -1,8 +1,8 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, LibraryBig, Search } from "lucide-react";
+import { ChevronRight, LibraryBig, Plus, Search } from "lucide-react";
 
 import { DashboardPageTemplate } from "../../_components/ui/dashboard-page-template";
 import { DenBrandMark } from "../../_components/ui/brand-mark";
@@ -12,7 +12,7 @@ import { DenInput } from "../../_components/ui/input";
 import { DenList, DenListRow } from "../../_components/ui/list-row";
 import { DenNotice } from "../../_components/ui/notice";
 import { type TabItem, UnderlineTabs } from "../../_components/ui/tabs";
-import { getOrgAccessFlags, getPluginRoute, getYourConnectionsRoute } from "../../_lib/den-org";
+import { getOrgAccessFlags, getPluginRoute, getRemoteMcpAppRoute, getYourConnectionsRoute } from "../../_lib/den-org";
 import { useOrgDashboard } from "../_providers/org-dashboard-provider";
 import {
   type LibraryConnectionItem,
@@ -20,16 +20,18 @@ import {
   type LibraryPluginItem,
   useLibrary,
 } from "./library-data";
+import { RemoteMcpAppImport } from "./remote-mcp-app-import";
 
 type LibraryStateTab = "all" | "needs_signin" | "needs_admin_setup" | "ready";
 type LibrarySectionState = Exclude<LibraryStateTab, "all">;
-type KindFilter = "all" | "programs" | "connections" | "skills" | "mcps" | "plugins";
+type KindFilter = "all" | "programs" | "apps" | "connections" | "skills" | "mcps" | "plugins";
 type FromFilter = "anyone" | "mine" | "shared" | "team" | "everyone";
-type RowKind = "program" | "connection" | "skill" | "plugin";
+type RowKind = "program" | "app" | "connection" | "skill" | "plugin";
 
 const KIND_FILTERS: readonly { value: KindFilter; label: string }[] = [
   { value: "all", label: "All kinds" },
   { value: "programs", label: "Programs" },
+  { value: "apps", label: "Apps" },
   { value: "connections", label: "Connections" },
   { value: "skills", label: "Skills" },
   { value: "mcps", label: "MCPs" },
@@ -58,7 +60,7 @@ function matchesFrom(item: LibraryItem, from: FromFilter): boolean {
   return item.edges.some((edge) => edge.kind === "org_wide" || edge.kind === "catalog");
 }
 
-function hasComponentKind(item: LibraryPluginItem, kind: "skill" | "mcp"): boolean {
+function hasComponentKind(item: LibraryPluginItem, kind: "app" | "skill" | "mcp"): boolean {
   return item.componentKinds.some((componentKind) => componentKind.toLowerCase() === kind);
 }
 
@@ -66,6 +68,7 @@ function matchesKind(item: LibraryItem, kind: KindFilter): boolean {
   if (kind === "all") return true;
   if (kind === "programs") return item.type === "program";
   if (kind === "connections") return item.type === "connection";
+  if (kind === "apps") return item.type === "app";
   if (kind === "plugins") return item.type === "plugin";
   if (kind === "skills") return item.type === "plugin" && hasComponentKind(item, "skill");
   return (item.type === "plugin" && hasComponentKind(item, "mcp"))
@@ -86,12 +89,14 @@ function matchesState(item: LibraryItem, state: LibraryStateTab): boolean {
 
 function getRowKind(item: LibraryItem): RowKind {
   if (item.type === "program") return "program";
+  if (item.type === "app") return "app";
   if (item.type === "connection") return "connection";
   return hasComponentKind(item, "skill") ? "skill" : "plugin";
 }
 
 function getKindLabel(kind: RowKind): string {
   if (kind === "program") return "Program";
+  if (kind === "app") return "App";
   if (kind === "skill") return "Skill";
   if (kind === "plugin") return "Plugin";
   return "Connection";
@@ -99,7 +104,7 @@ function getKindLabel(kind: RowKind): string {
 
 function KindChip({ kind }: { kind: RowKind }) {
   return (
-    <DenChip data-library-chip="" tone={kind === "connection" ? "info" : kind === "program" ? "teal" : "neutral"}>
+    <DenChip data-library-chip="" tone={kind === "connection" ? "info" : kind === "program" || kind === "app" ? "teal" : "neutral"}>
       {getKindLabel(kind)}
     </DenChip>
   );
@@ -181,11 +186,15 @@ function LibraryRow({ item, isAdmin, isFocused, orgName, orgSlug }: { item: Libr
     : undefined;
   const rowHref = item.type === "program"
     ? `/dashboard/library/programs/${encodeURIComponent(item.id)}`
-    : item.type === "plugin" && isAdmin ? getPluginRoute(orgSlug, item.id) : undefined;
+    : item.type === "app"
+      ? getRemoteMcpAppRoute(orgSlug, item.id)
+      : item.type === "plugin" && isAdmin
+        ? getPluginRoute(orgSlug, item.id)
+        : undefined;
   const iconUrl = item.type === "connection" && item.provider === "google-workspace"
     ? "/integrations/google.svg"
-    : item.type === "plugin"
-      ? getGitHubOwnerAvatar(item.sourceRepositoryUrl)
+    : item.type === "plugin" || item.type === "app"
+      ? getGitHubOwnerAvatar(item.type === "plugin" ? item.sourceRepositoryUrl : item.sourceUrl)
       : undefined;
   const simpleIconSlug = item.type === "connection" && item.provider === "microsoft-365"
     ? "microsoft"
@@ -239,6 +248,9 @@ function LibraryRow({ item, isAdmin, isFocused, orgName, orgSlug }: { item: Libr
               {sectionState === "needs_signin" ? "Connect your account" : "Waiting on your admin"}
             </DenChip>
           ) : null}
+          {item.type === "app" && item.status === "retired" ? (
+            <DenChip data-library-chip="" tone="warning">Retired</DenChip>
+          ) : null}
           {source?.isPerson ? (
             <DenChip data-library-chip="" data-library-source="" tone="info">
               {source.label}
@@ -268,7 +280,7 @@ function LibraryRow({ item, isAdmin, isFocused, orgName, orgSlug }: { item: Libr
       focused={isFocused}
       dataAttributes={{
         "data-library-item-type": item.type,
-        "data-library-item-state": item.type === "connection" || item.type === "program" ? item.state : undefined,
+        "data-library-item-state": item.type === "connection" || item.type === "program" || item.type === "app" ? item.state : undefined,
         "data-library-item-key": rowKey,
         "data-library-focused": isFocused ? "" : undefined,
       }}
@@ -345,6 +357,7 @@ function LibrarySection({
 }
 
 export function LibraryScreen() {
+  const router = useRouter();
   const { orgContext, orgSlug } = useOrgDashboard();
   const { data: items = [], isLoading, error } = useLibrary();
   const searchParams = useSearchParams();
@@ -352,6 +365,7 @@ export function LibraryScreen() {
   const [activeKind, setActiveKind] = useState<KindFilter>("all");
   const [activeFrom, setActiveFrom] = useState<FromFilter>("anyone");
   const [query, setQuery] = useState("");
+  const [importOpen, setImportOpen] = useState(false);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
   const handledFocusRef = useRef<string | null>(null);
   const [expandedSections, setExpandedSections] = useState<Record<LibrarySectionState, boolean>>({
@@ -369,7 +383,7 @@ export function LibraryScreen() {
 
   useEffect(() => {
     if (!requestedFocus || handledFocusRef.current === requestedFocus) return;
-    if (!/^(program|plugin|connection)-.+$/.test(requestedFocus)) return;
+    if (!/^(program|app|plugin|connection)-.+$/.test(requestedFocus)) return;
     const item = items.find((candidate) => `${candidate.type}-${candidate.id}` === requestedFocus);
     if (!item) return;
     handledFocusRef.current = requestedFocus;
@@ -394,6 +408,7 @@ export function LibraryScreen() {
   const kindCounts = useMemo(() => {
     const counts: Record<Exclude<KindFilter, "all">, number> = {
       programs: 0,
+      apps: 0,
       connections: 0,
       skills: 0,
       mcps: 0,
@@ -401,6 +416,7 @@ export function LibraryScreen() {
     };
     for (const item of items) {
       if (matchesKind(item, "programs")) counts.programs += 1;
+      if (matchesKind(item, "apps")) counts.apps += 1;
       if (matchesKind(item, "connections")) counts.connections += 1;
       if (matchesKind(item, "skills")) counts.skills += 1;
       if (matchesKind(item, "mcps")) counts.mcps += 1;
@@ -485,6 +501,11 @@ export function LibraryScreen() {
       colors={["#DBEAFE", "#1E3A8A", "#2563EB", "#A7F3D0"]}
       size="responsive"
     >
+      <div className="mb-5 flex justify-end">
+        <DenButton icon={Plus} onClick={() => setImportOpen(true)} data-testid="add-remote-mcp-app">
+          Add remote MCP App
+        </DenButton>
+      </div>
       <div className="mb-5 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <UnderlineTabs
           className="min-w-max [&>nav]:flex-nowrap [&_[role=tab]]:!pb-2.5 [&_[role=tab]]:!text-[13px] [&_[role=tab]]:!font-medium [&_[role=tab]]:!text-gray-500 [&_[role=tab][aria-selected=true]]:!border-gray-900 [&_[role=tab][aria-selected=true]]:!font-semibold [&_[role=tab][aria-selected=true]]:!text-gray-900"
@@ -581,6 +602,14 @@ export function LibraryScreen() {
           ))}
         </div>
       )}
+      <RemoteMcpAppImport
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={(appId) => {
+          setImportOpen(false);
+          router.push(getRemoteMcpAppRoute(orgSlug, appId));
+        }}
+      />
     </DashboardPageTemplate>
   );
 }

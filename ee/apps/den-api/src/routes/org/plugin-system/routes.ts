@@ -1036,7 +1036,7 @@ export function registerPluginArchRoutes<T extends { Variables: OrgRouteVariable
     describeRoute({
       tags: ["Plugins"],
       summary: "List my library",
-      description: "Lists the active plugins, Programs, and connections the caller can use, with every applicable access edge. Programs remain Script config objects contained by their parent OpenWork Connect Plugin.",
+      description: "Lists the Programs, Remote MCP Apps, plugins, and connections the caller can use, with every applicable access edge. Programs and Remote MCP Apps remain config objects contained by their parent OpenWork Connect Plugin.",
       responses: {
         200: jsonResponse("Effective member library returned successfully.", meLibraryListResponseSchema),
         401: jsonResponse("The caller must be signed in to view their library.", unauthorizedSchema),

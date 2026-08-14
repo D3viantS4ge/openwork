@@ -456,6 +456,13 @@
       "when": 1786639498908,
       "tag": "0065_cold_karnak",
       "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "5",
+      "when": 1786661029943,
+      "tag": "0066_lying_rawhide_kid",
+      "breakpoints": true
     }
   ]
 }

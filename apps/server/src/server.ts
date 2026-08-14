@@ -2919,7 +2919,9 @@ function createRoutes(
     const args = body.arguments && typeof body.arguments === "object" && !Array.isArray(body.arguments)
       ? body.arguments as Record<string, unknown>
       : {};
+    const approved = body.approved === true;
     if (!serverName || !name) throw new ApiError(400, "invalid_payload", "serverName and name are required");
+    if (approved) requireClientScope(ctx, "collaborator");
     try {
       return jsonResponse(await callMcpAppTool({
         serverConfig: config,
@@ -2928,6 +2930,7 @@ function createRoutes(
         serverName,
         name,
         arguments: args,
+        approved,
       }));
     } catch (error) {
       rethrowMcpAppHostError(error);

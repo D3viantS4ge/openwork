@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { Archive, ArrowLeft, Code2, FileText, MoreHorizontal, Pencil, Plus, Server, Store, Terminal, Users, Webhook } from "lucide-react";
+import { AppWindow, Archive, ArrowLeft, Code2, FileText, MoreHorizontal, Pencil, Plus, Server, Store, Terminal, Users, Webhook } from "lucide-react";
 
-import { getNewPluginSkillRoute, getOrgAccessFlags, getPluginSkillRoute, getPluginsRoute } from "../../_lib/den-org";
+import { getNewPluginSkillRoute, getOrgAccessFlags, getPluginSkillRoute, getPluginsRoute, getRemoteMcpAppRoute } from "../../_lib/den-org";
 import { buttonVariants, DenButton } from "../../_components/ui/button";
 import { DenInput } from "../../_components/ui/input";
 import { DenTextarea } from "../../_components/ui/textarea";
@@ -15,6 +15,7 @@ import {
   type PluginHook,
   type PluginMcp,
   type PluginProgram,
+  type PluginRemoteMcpApp,
   type PluginSkill,
   type PluginAgent,
   type PluginCommand,
@@ -102,6 +103,7 @@ export function PluginDetailScreen({ pluginId }: { pluginId: string }) {
   if (plugin.hooks.length === 0) missingLabels.push("hooks");
   if (plugin.mcps.length === 0) missingLabels.push("MCP servers");
   if (plugin.programs.length === 0) missingLabels.push("Programs");
+  if (plugin.apps.length === 0) missingLabels.push("Remote Apps");
 
   async function handleArchivePlugin() {
     try {
@@ -227,6 +229,7 @@ export function PluginDetailScreen({ pluginId }: { pluginId: string }) {
           }}
           onOpen={(programId) => setSelectedScriptId(programId)}
         />
+        <RemoteMcpAppsSection plugin={plugin} orgSlug={orgSlug} />
         <PrimitiveSection icon={Users} label="Agents" items={plugin.agents} render={renderAgentRow} />
         <PrimitiveSection icon={Terminal} label="Commands" items={plugin.commands} render={renderCommandRow} />
         <PrimitiveSection icon={Webhook} label="Hooks" items={plugin.hooks} render={renderHookRow} />
@@ -632,6 +635,24 @@ function ProgramsSection({ plugin, onAdd, onOpen }: { plugin: DenPlugin; onAdd: 
   );
 }
 
+function RemoteMcpAppsSection({ plugin, orgSlug }: { plugin: DenPlugin; orgSlug: string | null }) {
+  if (plugin.apps.length === 0) return null;
+  return (
+    <section>
+      <div className="mb-3">
+        <h2 className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">
+          <AppWindow className="h-3.5 w-3.5" />
+          Remote Apps
+        </h2>
+        <p className="mt-1 text-[12px] text-gray-400">Portable MCP Apps installed inside this Plugin and shared with the same audiences.</p>
+      </div>
+      <div className="grid gap-2">
+        {plugin.apps.map((app) => renderRemoteMcpAppRow(app, getRemoteMcpAppRoute(orgSlug, app.id)))}
+      </div>
+    </section>
+  );
+}
+
 function AddProgramDialog({
   open,
   plugin,
@@ -697,6 +718,28 @@ function renderProgramRow(program: PluginProgram, onOpen: () => void) {
         {program.outputSchema ? " · Validated output" : ""}
       </p>
     </button>
+  );
+}
+
+function renderRemoteMcpAppRow(app: PluginRemoteMcpApp, href: string) {
+  return (
+    <Link
+      key={app.id}
+      href={href}
+      className="block rounded-xl border border-gray-100 bg-white px-4 py-3 transition hover:border-gray-200 hover:bg-gray-50"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="truncate text-[14px] font-semibold tracking-[-0.01em] text-gray-900">{app.name}</p>
+        <span className="rounded-full bg-gray-50 px-2 py-0.5 text-[11px] text-gray-500">
+          Standard MCP App resource
+        </span>
+      </div>
+      {app.description ? <p className="mt-0.5 line-clamp-2 text-[12.5px] leading-[1.55] text-gray-500">{app.description}</p> : null}
+      <p className="mt-2 text-[11px] text-gray-400">
+        {app.version ? `Installed revision ${app.version}` : "Installed revision"}
+        {app.sourceUrl ? " · Cached from a published URL" : ""}
+      </p>
+    </Link>
   );
 }
 

@@ -21,6 +21,10 @@ import {
 import { EnterpriseMcpOAuthProvider } from "../src/oauth-provider.js"
 import { createEnterpriseMcpRequestObserver } from "../src/request-observer.js"
 import { collectEnterpriseMcpTools } from "../src/tool-catalog.js"
+import {
+  assertEnterpriseMcpResourceResult,
+  collectEnterpriseMcpResources,
+} from "../src/resource-catalog.js"
 import type { OAuthClientInformationMixed, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js"
 import { selectClientAuthMethod, type OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js"
 
@@ -70,7 +74,11 @@ function mockMcpFetch(options: MockMcpOptions = {}): EnterpriseMcpFetch {
         id: request.id,
         result: {
           protocolVersion: "2025-06-18",
-          capabilities: { tools: {} },
+          capabilities: {
+            tools: {},
+            resources: {},
+            extensions: { "io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] } },
+          },
           serverInfo: { name: "enterprise-mcp-test", version: "1.0.0" },
         },
       })
@@ -96,7 +104,47 @@ function mockMcpFetch(options: MockMcpOptions = {}): EnterpriseMcpFetch {
         id: request.id,
         result: {
           content: [{ type: "text", text: options.toolError ? (options.toolErrorText ?? "Provider rejected the operation") : "Record found" }],
+          structuredContent: { record: { id: "incident-42" } },
+          _meta: { providerTrace: "trace-42" },
           isError: options.toolError ?? false,
+        },
+      })
+    }
+
+    if (request.method === "resources/list") {
+      return Response.json({
+        jsonrpc: "2.0",
+        id: request.id,
+        result: {
+          resources: [{
+            name: "Incident App",
+            uri: "ui://incident/view.html",
+            mimeType: "text/html;profile=mcp-app",
+            _meta: { ui: { csp: { connectDomains: [] } } },
+          }],
+        },
+      })
+    }
+
+    if (request.method === "resources/templates/list") {
+      return Response.json({
+        jsonrpc: "2.0",
+        id: request.id,
+        result: { resourceTemplates: [{ name: "Incident", uriTemplate: "incident://{id}" }] },
+      })
+    }
+
+    if (request.method === "resources/read") {
+      return Response.json({
+        jsonrpc: "2.0",
+        id: request.id,
+        result: {
+          contents: [{
+            uri: "ui://incident/view.html",
+            mimeType: "text/html;profile=mcp-app",
+            text: "<!doctype html><html><body>Incident</body></html>",
+            _meta: { ui: { prefersBorder: true } },
+          }],
         },
       })
     }
@@ -393,7 +441,7 @@ describe("enterprise MCP client", () => {
     assert.equal(observer.lastFailedRequestPhase(), "oauth-token-exchange")
   })
 
-  it("connects, discovers tools, and calls a tool over MCP Streamable HTTP", async () => {
+  it("preserves tools, resources, UI metadata, and tool results over MCP Streamable HTTP", async () => {
     const events: EnterpriseMcpDiagnosticEvent[] = []
     const client = createEnterpriseMcpClient({
       fetch: mockMcpFetch(),
@@ -412,9 +460,24 @@ describe("enterprise MCP client", () => {
       arguments: { table: "incident" },
     })
     assert.equal("isError" in result ? result.isError : undefined, false)
+    assert.deepEqual(result.structuredContent, { record: { id: "incident-42" } })
+    assert.deepEqual(result._meta, { providerTrace: "trace-42" })
+    const resources = await client.listResources({ connection, redirectUri })
+    assert.deepEqual(resources[0]?._meta, { ui: { csp: { connectDomains: [] } } })
+    const templates = await client.listResourceTemplates({ connection, redirectUri })
+    assert.equal(templates[0]?.uriTemplate, "incident://{id}")
+    const resource = await client.readResource({ connection, redirectUri, uri: "ui://incident/view.html" })
+    assert.deepEqual(resource.contents[0]?._meta, { ui: { prefersBorder: true } })
+    const descriptor = await client.describeServer({ connection, redirectUri })
+    assert.deepEqual(descriptor.serverInfo, { name: "enterprise-mcp-test", version: "1.0.0" })
+    assert.deepEqual(descriptor.capabilities.extensions, {
+      "io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] },
+    })
     assert.ok(events.some((event) => event.kind !== "credential-invalidation" && event.requestPhase === "mcp-initialize" && event.outcome === "succeeded"))
     assert.ok(events.some((event) => event.kind !== "credential-invalidation" && event.requestPhase === "mcp-tool-discovery" && event.outcome === "succeeded"))
     assert.ok(events.some((event) => event.kind !== "credential-invalidation" && event.requestPhase === "mcp-tool-execution" && event.outcome === "succeeded"))
+    assert.ok(events.some((event) => event.kind !== "credential-invalidation" && event.requestPhase === "mcp-resource-discovery" && event.outcome === "succeeded"))
+    assert.ok(events.some((event) => event.kind !== "credential-invalidation" && event.requestPhase === "mcp-resource-read" && event.outcome === "succeeded"))
   })
 
   it("connects to a spec-legal MCP server that does not advertise tools", async () => {
@@ -594,6 +657,38 @@ describe("enterprise MCP client", () => {
         return true
       },
     )
+  })
+
+  it("preserves MCP isError results for transparent proxy callers", async () => {
+    const client = createEnterpriseMcpClient({ fetch: mockMcpFetch({ toolError: true }) })
+    const result = await client.callToolRaw({
+      connection: noAuthConnection(),
+      redirectUri: "https://den.example.test/callback",
+      toolName: "lookup-record",
+      arguments: {},
+    })
+    assert.equal(result.isError, true)
+    assert.match(JSON.stringify(result.content), /Provider rejected the operation/)
+  })
+
+  it("rejects resource URIs over the byte limit before opening a provider connection", async () => {
+    let fetchCount = 0
+    const client = createEnterpriseMcpClient({
+      fetch: async () => {
+        fetchCount += 1
+        return new Response(null, { status: 500 })
+      },
+    })
+    await assert.rejects(
+      client.readResource({
+        connection: noAuthConnection(),
+        redirectUri: "https://den.example.test/callback",
+        uri: `ui://${"🚀".repeat(4_096)}`,
+      }),
+      (error: unknown) => error instanceof EnterpriseMcpClientError
+        && error.operationPhase === "configuration",
+    )
+    assert.equal(fetchCount, 0)
   })
 
   it("retains only a safe invalid-argument signal from standardized MCP SDK tool errors", async () => {
@@ -1964,6 +2059,37 @@ describe("enterprise MCP OAuth persistence contract", () => {
 })
 
 describe("enterprise MCP catalog contract", () => {
+  it("collects resources without changing standard UI metadata", async () => {
+    const resources = await collectEnterpriseMcpResources({
+      requestOptions: {},
+      listPage: async (cursor) => cursor
+        ? { resources: [{ name: "Second", uri: "ui://second", _meta: { ui: { prefersBorder: false } } }] }
+        : {
+            resources: [{ name: "First", uri: "ui://first", _meta: { ui: { prefersBorder: true } } }],
+            nextCursor: "page-2",
+          },
+    })
+    assert.deepEqual(resources.map((resource) => [resource.uri, resource._meta]), [
+      ["ui://first", { ui: { prefersBorder: true } }],
+      ["ui://second", { ui: { prefersBorder: false } }],
+    ])
+  })
+
+  it("rejects duplicate resource URIs and oversized resource results", async () => {
+    await assert.rejects(collectEnterpriseMcpResources({
+      requestOptions: {},
+      listPage: async (cursor) => cursor
+        ? { resources: [{ name: "Again", uri: "ui://duplicate" }] }
+        : { resources: [{ name: "First", uri: "ui://duplicate" }], nextCursor: "again" },
+    }), (error: unknown) => error instanceof EnterpriseMcpCatalogError
+      && error.code === "MCP_CATALOG_DUPLICATE_RESOURCE")
+    assert.throws(
+      () => assertEnterpriseMcpResourceResult({ contents: [{ text: "x".repeat(2 * 1024 * 1024) }] }),
+      (error: unknown) => error instanceof EnterpriseMcpCatalogError
+        && error.code === "MCP_RESOURCE_RESULT_LIMIT",
+    )
+  })
+
   it("collects a bounded paginated tool catalog", async () => {
     const tools = await collectEnterpriseMcpTools({
       requestOptions: {},

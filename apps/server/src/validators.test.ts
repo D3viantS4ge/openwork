@@ -76,6 +76,7 @@ describe("validateUserMcpName", () => {
   test("reserves the OpenWork Connect runtime name", () => {
     expect(() => validateUserMcpName("openwork-cloud")).toThrow("reserved for OpenWork Connect");
     expect(() => validateUserMcpName("OPENWORK-CLOUD")).toThrow("reserved for OpenWork Connect");
+    expect(() => validateUserMcpName("openwork-connect-1234")).toThrow("reserved for OpenWork Connect");
   });
 
   test("allows ordinary workspace MCP names", () => {

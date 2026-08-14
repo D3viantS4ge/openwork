@@ -2142,6 +2142,7 @@ export function catalogDiagnosticError(input: {
     | "MCP_CATALOG_PAGE_LIMIT"
     | "MCP_CATALOG_ITEM_LIMIT"
     | "MCP_CATALOG_DUPLICATE_TOOL"
+    | "MCP_CATALOG_DUPLICATE_RESOURCE"
     | "MCP_CATALOG_TOOL_NAME_LIMIT"
     | "MCP_CATALOG_TOOL_DESCRIPTION_LIMIT"
     | "MCP_CATALOG_TOOL_TITLE_LIMIT"
@@ -2150,6 +2151,9 @@ export function catalogDiagnosticError(input: {
     | "MCP_CATALOG_SCHEMA_CYCLE"
     | "MCP_CATALOG_CURSOR_SIZE_LIMIT"
     | "MCP_CATALOG_BYTE_LIMIT"
+    | "MCP_RESOURCE_URI_LIMIT"
+    | "MCP_RESOURCE_DESCRIPTOR_LIMIT"
+    | "MCP_RESOURCE_RESULT_LIMIT"
   operatorAction: string
 }): ExternalMcpDiagnosticError {
   input.tracker.failed("MCP_TOOL_DISCOVERY")

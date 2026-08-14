@@ -11,6 +11,7 @@ import {
   PluginAccessGrantTable,
   PluginConfigObjectTable,
   PluginTable,
+  RemoteMcpAppTable,
 } from "@openwork-ee/den-db/schema"
 import { createDenTypeId } from "@openwork-ee/utils/typeid"
 import { Hono, type MiddlewareHandler } from "hono"
@@ -36,8 +37,10 @@ const memberUserId = createDenTypeId("user")
 const adminMemberId = createDenTypeId("member")
 const memberId = createDenTypeId("member")
 const pluginId = createDenTypeId("plugin")
+const remoteAppPluginId = createDenTypeId("plugin")
 const skillConfigObjectId = createDenTypeId("configObject")
 const mcpConfigObjectId = createDenTypeId("configObject")
+const remoteAppConfigObjectId = createDenTypeId("configObject")
 const mcpConnectionId = createDenTypeId("externalMcpConnection")
 const nativeConnectionId = createDenTypeId("externalMcpConnection")
 const pluginGrantedAt = new Date("2026-06-01T10:00:00.000Z")
@@ -72,6 +75,7 @@ const context: PluginArchActorContext = {
 }
 
 async function cleanup() {
+  await db.delete(RemoteMcpAppTable).where(eq(RemoteMcpAppTable.organizationId, organizationId))
   await db.delete(PluginConfigObjectTable).where(eq(PluginConfigObjectTable.organizationId, organizationId))
   await db.delete(PluginAccessGrantTable).where(eq(PluginAccessGrantTable.organizationId, organizationId))
   await db.delete(ConfigObjectTable).where(eq(ConfigObjectTable.organizationId, organizationId))
@@ -125,14 +129,24 @@ beforeAll(async () => {
     { id: adminMemberId, organizationId, userId: adminUserId, role: "admin" },
     { id: memberId, organizationId, userId: memberUserId, role: "member" },
   ])
-  await db.insert(PluginTable).values({
-    id: pluginId,
-    organizationId,
-    name: "Bravo Bundle",
-    description: "A mixed component bundle",
-    status: "active",
-    createdByOrgMembershipId: adminMemberId,
-  })
+  await db.insert(PluginTable).values([
+    {
+      id: pluginId,
+      organizationId,
+      name: "Bravo Bundle",
+      description: "A mixed component bundle",
+      status: "active",
+      createdByOrgMembershipId: adminMemberId,
+    },
+    {
+      id: remoteAppPluginId,
+      organizationId,
+      name: "Delta Dashboard",
+      description: "A portable remote MCP App",
+      status: "active",
+      createdByOrgMembershipId: adminMemberId,
+    },
+  ])
   await db.insert(ConfigObjectTable).values([
     {
       id: skillConfigObjectId,
@@ -149,6 +163,15 @@ beforeAll(async () => {
       objectType: "mcp",
       sourceMode: "cloud",
       title: "Library MCP",
+      status: "active",
+      createdByOrgMembershipId: adminMemberId,
+    },
+    {
+      id: remoteAppConfigObjectId,
+      organizationId,
+      objectType: "app",
+      sourceMode: "cloud",
+      title: "Delta Dashboard",
       status: "active",
       createdByOrgMembershipId: adminMemberId,
     },
@@ -170,17 +193,43 @@ beforeAll(async () => {
       membershipSource: "manual",
       createdByOrgMembershipId: adminMemberId,
     },
+    {
+      id: createDenTypeId("pluginConfigObject"),
+      organizationId,
+      pluginId: remoteAppPluginId,
+      configObjectId: remoteAppConfigObjectId,
+      membershipSource: "manual",
+      createdByOrgMembershipId: adminMemberId,
+    },
   ])
-  await db.insert(PluginAccessGrantTable).values({
-    id: createDenTypeId("pluginAccessGrant"),
+  await db.insert(PluginAccessGrantTable).values([
+    {
+      id: createDenTypeId("pluginAccessGrant"),
+      organizationId,
+      pluginId,
+      orgMembershipId: memberId,
+      teamId: null,
+      orgWide: false,
+      role: "editor",
+      createdByOrgMembershipId: adminMemberId,
+      createdAt: pluginGrantedAt,
+    },
+    {
+      id: createDenTypeId("pluginAccessGrant"),
+      organizationId,
+      pluginId: remoteAppPluginId,
+      orgWide: true,
+      role: "viewer",
+      createdByOrgMembershipId: adminMemberId,
+    },
+  ])
+  await db.insert(RemoteMcpAppTable).values({
+    configObjectId: remoteAppConfigObjectId,
     organizationId,
-    pluginId,
-    orgMembershipId: memberId,
-    teamId: null,
-    orgWide: false,
-    role: "editor",
-    createdByOrgMembershipId: adminMemberId,
-    createdAt: pluginGrantedAt,
+    pluginId: remoteAppPluginId,
+    sourceUrl: "https://example.test/apps/delta.html",
+    resolvedSourceUrl: "https://cdn.example.test/apps/delta-v1.html",
+    status: "active",
   })
   await db.insert(ExternalMcpConnectionTable).values([
     {
@@ -237,7 +286,7 @@ afterAll(async () => {
   mock.restore()
 })
 
-test("the member library unifies sorted plugin and connection items", async () => {
+test("the member library keeps Remote MCP Apps beside their parent plugins", async () => {
   const response = await app.fetch(new Request(`${API_ORIGIN}/v1/me/library`))
   expect(response.status).toBe(200)
   const body = meLibraryListResponseSchema.parse(await response.json())
@@ -283,6 +332,30 @@ test("the member library unifies sorted plugin and connection items", async () =
         state: "needs_signin",
         connectedAt: null,
         edges: [{ kind: "org_wide" }],
+      },
+      {
+        type: "app",
+        id: remoteAppConfigObjectId,
+        pluginId: remoteAppPluginId,
+        name: "Delta Dashboard",
+        description: "A portable remote MCP App",
+        sourceUrl: "https://example.test/apps/delta.html",
+        status: "active",
+        activeVersionId: null,
+        state: "ready",
+        edges: [{ kind: "org_wide" }],
+        role: "viewer",
+      },
+      {
+        type: "plugin",
+        id: remoteAppPluginId,
+        name: "Delta Dashboard",
+        description: "A portable remote MCP App",
+        componentCount: 1,
+        componentKinds: ["app"],
+        sourceRepositoryUrl: null,
+        edges: [{ kind: "org_wide" }],
+        role: "viewer",
       },
     ],
   })

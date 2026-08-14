@@ -63,6 +63,10 @@ import { requirePluginArchResourceRole, type PluginArchActorContext } from "../r
 import { clearProgramAgentSelection, getProgramAgentSelection, selectProgramForAgent } from "../program-agent-selection.js"
 import { getProgramDetail, listProgramLibraryItems } from "../program-library.js"
 import { parseArtifactViewResourceUri } from "../artifact-view-resource.js"
+import { listActiveRemoteMcpApps, loadRemoteMcpAppRevision } from "../remote-mcp-apps.js"
+import { registerAgentRemoteMcpApps } from "./remote-mcp-apps.js"
+import { listUsableExternalMcpConnections } from "../capability-sources/external-mcp-connections.js"
+import { registerConnectMcpServerIndex } from "./connect-mcp-server-index.js"
 
 export { externalToolContent } from "./tool-content.js"
 export { externalCapabilityErrorToolResult, externalCapabilitySuccessToolResult }
@@ -166,7 +170,8 @@ const programRunOutputSchema = z.object({
 })
 
 export const AGENT_MCP_INSTRUCTIONS = [
-  "This OpenWork Cloud MCP server uses standard MCP tools, resources, structured results, and list-changed notifications. OpenWork Programs add only durable identity, Plugin containment, access, retained results, selection, and lifecycle around those MCP primitives.",
+  "This OpenWork Cloud MCP server uses standard MCP tools, resources, structured results, and list-changed notifications. OpenWork Programs and Remote MCP Apps add only durable identity, Plugin containment, access, retained resources and results, selection, and lifecycle around those MCP primitives.",
+  "When Remote MCP App delivery is enabled, active apps in the member's Library appear as individually named launch tools backed by immutable ui:// resources.",
   "A Program is an immutable-versioned Code Mode Script config object inside an OpenWork Connect Plugin. Organizations with Code Mode scripts enabled receive execute_capability_script, the backwards-compatible render_dynamic_artifact MCP App tool, and a constant-size Program catalog: search_programs, select_program, and clear_program_selection.",
   "To use a Program, search by Library metadata, select one exact accessible Program, then refresh the tool catalog. The selected context exposes run_selected_program and render_selected_program; rendering returns an Artifact as fallback text plus retained data in structuredContent and binds the exact immutable MCP App resource URI in the tool definition.",
   "When a member asks to keep a successful Code Mode result, save it as a Program inside the existing OpenWork Connect Plugin they name by passing that pluginId to the Code Mode save operation. Omit pluginId only for a private Program in the member's My Programs Plugin. A Program inherits discovery and sharing from its Plugin and any Marketplace containing that Plugin; do not create a separate Program package or marketplace entry.",
@@ -406,6 +411,7 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
     const codemodeEnabled = codemodeScriptsEnabled(organizationRows[0]?.metadata)
     const requestInfo = await mcpRequestInfo(c.req.raw)
     const method = requestInfo.method
+    const redirectUriBase = resolvePublicOrigin(c.req.raw, env.apiPublicUrl)
     const capabilityContext = createCapabilityRegistryContext({
       app: app as unknown as Hono,
       env: c.env,
@@ -413,26 +419,26 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
       principal,
       organizationId,
       member: memberIdentity,
-      redirectUriBase: resolvePublicOrigin(c.req.raw, env.apiPublicUrl),
+      redirectUriBase,
       codemodeEnabled,
       organizationMetadata: organizationRows[0]?.metadata,
       mcpConnectionsGatingEnabled: env.mcpConnectionsGatingEnabled,
     })
     const { externalMcpConnectionsEnabled } = capabilityContext
     let remoteSkills: RemoteSkillDescriptor[] = []
-    let artifactContext: PluginArchActorContext | null = null
-    const artifactMethod = method === "initialize"
+    let libraryContext: PluginArchActorContext | null = null
+    const appCatalogMethod = method === "initialize"
       || method === "tools/list"
       || method === "tools/call"
       || method === "resources/list"
       || method === "resources/read"
-    if (codemodeEnabled && memberIdentity && artifactMethod) {
+    if (memberIdentity && appCatalogMethod) {
       const organizationContext = await getOrganizationContextForUser({
         userId: normalizeDenTypeId("user", principal.userId),
         organizationId,
       })
       if (organizationContext) {
-        artifactContext = {
+        libraryContext = {
           organizationContext,
           memberTeams: await listTeamsForMember({
             organizationId,
@@ -442,6 +448,7 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
         }
       }
     }
+    const artifactContext = codemodeEnabled ? libraryContext : null
     if (method === "initialize" || method === "resources/list" || method === "resources/read") {
       remoteSkills = [
         ...listBuiltinSkillDescriptors(),
@@ -454,7 +461,32 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
         .sort((a, b) => a.name.localeCompare(b.name) || a.capability.localeCompare(b.capability))
     }
     const server = createAgentMcpServer()
+    if (env.remoteMcpAppsEnabled && libraryContext && memberIdentity && appCatalogMethod) {
+      registerAgentRemoteMcpApps({
+        server,
+        apps: await listActiveRemoteMcpApps({ context: libraryContext }),
+        loadResource: async ({ configObjectId, versionId }) => {
+          const loaded = await loadRemoteMcpAppRevision({
+            context: libraryContext,
+            configObjectId,
+            versionId,
+          })
+          return { html: loaded.html, payload: loaded.payload }
+        },
+      })
+    }
     if (method === "initialize" || method === "resources/list" || method === "resources/read") {
+      if (memberIdentity) {
+        registerConnectMcpServerIndex({
+          server,
+          connections: await listUsableExternalMcpConnections({
+            organizationId,
+            orgMembershipId: memberIdentity.orgMembershipId,
+            teamIds: memberIdentity.teamIds,
+          }),
+          publicOrigin: redirectUriBase,
+        })
+      }
       registerAgentSkillResources({
         server,
         skills: remoteSkills,
