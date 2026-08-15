@@ -68,12 +68,15 @@ import { deriveOpenTargets, selectAutoOpenTarget, type OpenTarget } from "@/reac
 import { usePanelTabStore } from "@/react-app/domains/session/panel/panel-tab-store";
 import {
   markSessionSnapshotFetchStart,
+  permissionKey,
+  questionKey,
   seedSessionState,
   snapshotKey as reactSnapshotKey,
   statusKey as reactStatusKey,
   transcriptKey as reactTranscriptKey,
 } from "@/react-app/domains/session/sync/session-sync";
 import { resolveForkBoundaryId } from "@/react-app/domains/session/sync/transcript-reconcile";
+import { getReactQueryClient } from "@/react-app/infra/query-client";
 import {
   getComposerAttachments,
   getComposerDraft,
@@ -1330,6 +1333,12 @@ export function SessionSurface(props: SessionSurfaceProps) {
       setError({ message: t("session.stop_failed") });
       return;
     }
+    // A stopped run never answers its pending prompts: dismiss any open
+    // permission or question popup for this session instead of leaving it
+    // stuck with no way to close it.
+    const queryClient = getReactQueryClient();
+    queryClient.setQueryData(permissionKey(props.workspaceId, props.sessionId), []);
+    queryClient.setQueryData(questionKey(props.workspaceId, props.sessionId), []);
     captureAnalyticsEvent("task_run_stopped", {});
     await snapshotQuery.refetch();
   }, [chatStreaming, clearQueuedDrafts, opencodeClient, props.sessionId, props.workspaceRoot, queuedDrafts, snapshotQuery.refetch]);
