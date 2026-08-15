@@ -2,7 +2,7 @@ import type { FilePartInput, TextPartInput } from "@opencode-ai/sdk/v2/client";
 
 import type { ComposerAttachment } from "../../../../app/types";
 import { compressImageFile } from "./image-compression";
-import { joinWorkspaceRelativePath, toFileUrl } from "./prompt-file-parts";
+import { joinWorkspaceRelativePath, isValidLocalFileUrl, toFileUrl } from "./prompt-file-parts";
 
 type AttachmentKind = "image" | "file";
 
@@ -346,12 +346,20 @@ export async function composerAttachmentsToWorkspaceFileParts(input: {
 
     const workspacePath = workspaceInboxPath(result.path);
     const absolutePath = joinWorkspaceRelativePath(workspaceRoot, workspacePath);
+    const url = toFileUrl(absolutePath);
+    // Same guarantee as prompt-file-parts: never emit a file part the engine
+    // could not resolve, or the prompt fails to send.
+    if (!isValidLocalFileUrl(url)) {
+      throw new Error(
+        `Attachment "${metadata.filename}" resolved to an invalid file URL${url ? ` (${url})` : " (empty)"}; send aborted`,
+      );
+    }
     uploaded.push({
       filename: metadata.filename,
       mime: metadata.mime,
       bytes: result.bytes,
       workspacePath,
-      url: toFileUrl(absolutePath),
+      url,
       file,
     });
   }

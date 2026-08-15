@@ -1,5 +1,7 @@
 import type { FilePartInput } from "@opencode-ai/sdk/v2/client";
 
+import { isWindowsPlatform } from "@/app/utils";
+
 const FIRST_LINE_LOCAL_PATH_RE = /(?:file:\/\/[^\s"'`<>]+|~\/[^\s"'`<>]+|[A-Za-z]:[\\/][^\s"'`<>]+|(?<![:/])\/[A-Za-z0-9._~+%/-]*[\/.][A-Za-z0-9._~+%/-]*)/g;
 const TRAILING_PUNCTUATION_RE = /[),.;:]+$/;
 
@@ -50,7 +52,12 @@ function toAbsolutePath(value: string, workspaceRoot: string) {
     const home = homeFromWorkspaceRoot(workspaceRoot);
     return home ? `${home}/${value.slice(2)}` : "";
   }
-  if (value.startsWith("/")) return value;
+  if (value.startsWith("/")) {
+    // POSIX absolute paths are not absolute on Windows (e.g. WSL paths like
+    // /mnt/c); emitting them as file parts crashes the engine's
+    // fileURLToPath and the prompt fails to send.
+    return isWindowsPlatform() ? "" : value;
+  }
   if (/^[A-Za-z]:[\\/]/.test(value)) return value.replace(/\\/g, "/");
   return "";
 }
@@ -67,8 +74,36 @@ function encodeFilePath(path: string) {
 
 export function toFileUrl(path: string) {
   const normalized = path.replace(/\\/g, "/");
+  if (!normalized) return "";
   if (/^[A-Za-z]:\//.test(normalized)) return `file:///${encodeFilePath(normalized).replace(/^([A-Za-z])%3A/, "$1:")}`;
   return `file://${encodeFilePath(normalized)}`;
+}
+
+/**
+ * A file part URL is only safe to emit when it is a valid absolute file URL
+ * on the current platform. POSIX-style paths (/mnt/c, /Users/...) are
+ * absolute on Linux/macOS but not on Windows — the engine's fileURLToPath
+ * throws on them and the whole prompt fails to send. Returns false for
+ * anything the engine could not resolve.
+ */
+export function isValidLocalFileUrl(url: string): boolean {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "file:") return false;
+    const pathname = parsed.pathname;
+    if (!pathname.startsWith("/")) return false;
+    if (isWindowsPlatform()) {
+      // Windows absolute paths are drive-letter (file:///C:/... — possibly
+      // percent-encoded as /C%3A/...) or UNC (file://server/share ->
+      // pathname //server/share).
+      const decoded = safeDecodeURIComponent(pathname);
+      return /^\/[A-Za-z]:\//.test(decoded) || decoded.startsWith("//");
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function joinWorkspaceRelativePath(workspaceRoot: string, relativePath: string) {
@@ -89,10 +124,16 @@ export function firstLineLocalFileParts(text: string, workspaceRoot: string): Fi
     const absolute = toAbsolutePath(raw, workspaceRoot);
     if (!absolute || seen.has(absolute)) continue;
     seen.add(absolute);
+    // Never emit a part the engine could not resolve: an invalid file URL
+    // crashes fileURLToPath and the prompt fails to send. Tokens that do
+    // not map to a valid absolute file URL on this platform are skipped —
+    // the prompt still sends, with the path left as plain text.
+    const url = toFileUrl(absolute);
+    if (!url || !isValidLocalFileUrl(url)) continue;
     parts.push({
       type: "file",
       mime: "text/plain",
-      url: toFileUrl(absolute),
+      url,
       filename: filenameFromPath(raw),
     });
   }
