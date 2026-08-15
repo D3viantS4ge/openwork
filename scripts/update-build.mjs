@@ -7,9 +7,9 @@
 // branch to that remote's dev HEAD — fast-forward only, failing hard if
 // `dev` holds local commits (it is a mirror and must never gain any).
 // Then, when the current branch is not `dev`, rebase it onto the latest
-// upstream release tag (vX.Y.Z — a tested snapshot; dev HEAD can be
-// mid-flight, so updates land when a release drops instead of tracking
-// every dev commit). If no release tag exists, fall back to origin/dev.
+// published GitHub release tag, resolved via the gh CLI (gh is a hard
+// dependency; unreleased tags are deliberately ignored — stability over
+// freshness). If no published release exists, fall back to origin/dev.
 // If the rebase fails, abort it and fall back to a merge. If both fail,
 // abort everything and leave the tree clean. On success run the full
 // desktop build pipeline: pnpm install -> rebuild native modules for
@@ -59,10 +59,44 @@ const git = (args) => run("git", args);
 
 const fetchRemote = (target) => {
   console.log(`[update-build] Fetching ${target}...`);
-  // Tags included: the rebase target is the latest release tag, which may
-  // point at a commit not reachable from any branch.
+  // Tags included: the rebase target is the release tag, which may point at
+  // a commit not reachable from any branch.
   return git(["fetch", "--tags", target]).status === 0;
 };
+
+// The GitHub owner/repo for the given remote, used for gh lookups.
+function remoteRepoSlug(target) {
+  const result = capture("git", ["remote", "get-url", target]);
+  if (result.status !== 0) return null;
+  const url = result.stdout.trim();
+  const match = url.match(/github\.com[/:]([^/]+\/[^/.]+?)(?:\.git)?$/);
+  return match ? match[1] : null;
+}
+
+// The latest published release tag (vX.Y.Z) via gh. gh is a hard
+// dependency: unreleased tags are deliberately ignored in favor of
+// stability. /releases/latest returns the newest non-draft,
+// non-prerelease release by contract. Returns null when gh is
+// unavailable, unauthenticated, the repo has no releases, or the tag
+// does not match the strict vX.Y.Z pattern.
+function latestPublishedReleaseTag() {
+  const repo = remoteRepoSlug(remote);
+  if (!repo) {
+    console.warn("[update-build] Could not determine GitHub repo for gh — falling back to origin/dev");
+    return null;
+  }
+  const result = capture("gh", ["api", `repos/${repo}/releases/latest`, "--jq", ".tag_name"]);
+  if (result.status !== 0) {
+    console.warn("[update-build] gh release lookup failed — falling back to origin/dev");
+    return null;
+  }
+  const tag = result.stdout.trim();
+  if (!/^v\d+\.\d+\.\d+$/.test(tag)) {
+    console.warn(`[update-build] gh returned unexpected release tag '${tag}' — falling back to origin/dev`);
+    return null;
+  }
+  return tag;
+}
 
 // 1. Resolve the base remote: upstream when present, otherwise fall back to
 //    origin so the script still works for contributors who only have a fork
@@ -126,27 +160,20 @@ if (branch === "dev") {
   console.log("[update-build] On dev — skipping rebase.");
 }
 
-// 6. Rebase target for non-dev branches: the latest release tag (vX.Y.Z)
-//    when one exists, otherwise origin/dev. Snapshot tags like
-//    v<githash>-dev are excluded.
+// 6. Rebase target for non-dev branches: the latest published GitHub
+//    release tag (gh — never an unreleased tag), otherwise origin/dev.
 let branchTarget = FALLBACK_TARGET;
 if (branch !== "dev") {
-  const tagResult = capture("git", ["tag", "-l", "--sort=-v:refname"]);
-  if (tagResult.status === 0) {
-    const releaseTag = tagResult.stdout
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((tag) => /^v\d+\.\d+\.\d+$/.test(tag));
-    if (releaseTag) {
-      branchTarget = `refs/tags/${releaseTag}`;
-    } else {
-      console.warn(`[update-build] No release tag (vX.Y.Z) found — falling back to ${FALLBACK_TARGET}`);
-      if (remote !== FALLBACK_REMOTE) {
-        // Only the base remote was fetched so far; make sure origin/dev is
-        // current.
-        if (!fetchRemote(FALLBACK_REMOTE)) {
-          fail(`git fetch ${FALLBACK_REMOTE} failed`);
-        }
+  const releaseTag = latestPublishedReleaseTag();
+  if (releaseTag) {
+    branchTarget = `refs/tags/${releaseTag}`;
+  } else {
+    console.warn(`[update-build] No published release tag found — falling back to ${FALLBACK_TARGET}`);
+    if (remote !== FALLBACK_REMOTE) {
+      // Only the base remote was fetched so far; make sure origin/dev is
+      // current.
+      if (!fetchRemote(FALLBACK_REMOTE)) {
+        fail(`git fetch ${FALLBACK_REMOTE} failed`);
       }
     }
   }
