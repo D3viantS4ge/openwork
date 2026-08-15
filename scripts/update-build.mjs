@@ -1,19 +1,21 @@
 #!/usr/bin/env node
-// Pull latest dev onto the current branch and rebuild the desktop app.
+// Pull the latest release onto the current branch and rebuild the desktop app.
 //
 //   node scripts/update-build.mjs        (or: pnpm update:build)
 //
-// Fetch upstream, then rebase the current branch onto upstream/dev. If the
-// upstream remote is missing (or its fetch fails), fall back to origin/dev.
-// If the rebase fails, abort it and fall back to a merge. If both fail, abort
-// everything and leave the tree clean. On success run the full desktop
-// build pipeline: pnpm install -> rebuild native modules for Electron ->
-// package the unpacked win-unpacked app.
+// Fetch upstream, then rebase the current branch onto the latest upstream
+// release tag (vX.Y.Z — a tested snapshot; dev HEAD can be mid-flight, so
+// updates land when a release drops instead of tracking every dev commit).
+// If no release tag exists, fall back to origin/dev. If the upstream remote
+// is missing (or its fetch fails), fall back to origin/dev. If the rebase
+// fails, abort it and fall back to a merge. If both fail, abort everything
+// and leave the tree clean. On success run the full desktop build pipeline:
+// pnpm install -> rebuild native modules for Electron -> package the
+// unpacked win-unpacked app.
 import { spawnSync } from "node:child_process";
 
 const REMOTE = "upstream";
 const FALLBACK_REMOTE = "origin";
-const BRANCH_TARGET = `${REMOTE}/dev`;
 const FALLBACK_TARGET = `${FALLBACK_REMOTE}/dev`;
 const BUILD_STEPS = [
   ["pnpm", ["install"]],
@@ -42,27 +44,39 @@ function fail(message) {
   process.exit(1);
 }
 
-const git = (args) => run("git", args);
-
-// 1. Resolve the base remote: upstream when present (with its dev branch),
-//    otherwise fall back to origin so the script still works for
-//    contributors who only have a fork remote.
-let remote = REMOTE;
-let branchTarget = BRANCH_TARGET;
-if (git(["remote", "get-url", REMOTE]).status !== 0) {
-  console.warn(`[update-build] Remote '${REMOTE}' not found — falling back to ${FALLBACK_TARGET}`);
-  remote = FALLBACK_REMOTE;
-  branchTarget = FALLBACK_TARGET;
+// Capture command output (unlike run(), which inherits stdio).
+function capture(command, args = []) {
+  if (process.platform === "win32" && !/\.(exe|com)$/i.test(command)) {
+    const line = [command, ...args].map(quoteToken).join(" ");
+    return spawnSync(line, { encoding: "utf8", shell: true });
+  }
+  return spawnSync(command, args, { encoding: "utf8" });
 }
 
-// 2. Fetch latest remote state.
-console.log(`[update-build] Fetching ${remote}...`);
-if (git(["fetch", remote]).status !== 0) {
+const git = (args) => run("git", args);
+
+const fetchRemote = (target) => {
+  console.log(`[update-build] Fetching ${target}...`);
+  // Tags included: the rebase target is the latest release tag, which may
+  // point at a commit not reachable from any branch.
+  return git(["fetch", "--tags", target]).status === 0;
+};
+
+// 1. Resolve the base remote: upstream when present, otherwise fall back to
+//    origin so the script still works for contributors who only have a fork
+//    remote.
+let remote = REMOTE;
+if (git(["remote", "get-url", REMOTE]).status !== 0) {
+  console.warn(`[update-build] Remote '${REMOTE}' not found — falling back to ${FALLBACK_REMOTE}`);
+  remote = FALLBACK_REMOTE;
+}
+
+// 2. Fetch latest remote state; on failure fall back to origin.
+if (!fetchRemote(remote)) {
   if (remote === REMOTE) {
-    console.warn(`[update-build] git fetch ${remote} failed — falling back to ${FALLBACK_TARGET}`);
+    console.warn(`[update-build] git fetch ${remote} failed — falling back to ${FALLBACK_REMOTE}`);
     remote = FALLBACK_REMOTE;
-    branchTarget = FALLBACK_TARGET;
-    if (git(["fetch", remote]).status !== 0) {
+    if (!fetchRemote(remote)) {
       fail(`git fetch ${remote} failed`);
     }
   } else {
@@ -70,13 +84,35 @@ if (git(["fetch", remote]).status !== 0) {
   }
 }
 
-// 3. The tree must be clean before rebasing/merging.
+// 3. Rebase target: the latest release tag (vX.Y.Z) when one exists,
+//    otherwise origin/dev. Snapshot tags like v<githash>-dev are excluded.
+let branchTarget = FALLBACK_TARGET;
+const tagResult = capture("git", ["tag", "-l", "--sort=-v:refname"]);
+if (tagResult.status === 0) {
+  const releaseTag = tagResult.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((tag) => /^v\d+\.\d+\.\d+$/.test(tag));
+  if (releaseTag) {
+    branchTarget = `refs/tags/${releaseTag}`;
+  } else {
+    console.warn(`[update-build] No release tag (vX.Y.Z) found — falling back to ${FALLBACK_TARGET}`);
+    if (remote !== FALLBACK_REMOTE) {
+      // Only upstream was fetched so far; make sure origin/dev is current.
+      if (!fetchRemote(FALLBACK_REMOTE)) {
+        fail(`git fetch ${FALLBACK_REMOTE} failed`);
+      }
+    }
+  }
+}
+
+// 4. The tree must be clean before rebasing/merging.
 const status = spawnSync("git", ["status", "--porcelain"], { encoding: "utf8" });
 if (status.status !== 0 || status.stdout.trim()) {
   fail("working tree is not clean — commit or stash your changes first");
 }
 
-// 4. Try rebase; 5. fall back to merge; 6. abort everything if both fail.
+// 5. Try rebase; 6. fall back to merge; 7. abort everything if both fail.
 const branch = spawnSync("git", ["branch", "--show-current"], { encoding: "utf8" }).stdout.trim();
 console.log(`[update-build] Rebasing ${branch || "current branch"} onto ${branchTarget}...`);
 if (git(["rebase", branchTarget]).status !== 0) {
@@ -92,7 +128,7 @@ if (git(["rebase", branchTarget]).status !== 0) {
   console.log("[update-build] Rebase succeeded.");
 }
 
-// 7. Build pipeline.
+// 8. Build pipeline.
 for (const [command, args] of BUILD_STEPS) {
   console.log(`[update-build] ${command} ${args.join(" ")}`);
   const result = run(command, args);
