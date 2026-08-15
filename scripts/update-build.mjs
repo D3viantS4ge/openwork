@@ -1,24 +1,27 @@
 #!/usr/bin/env node
-// Pull the latest release onto the current branch and rebuild the desktop app.
+// Pull the latest stable release onto the current branch and rebuild the
+// desktop app.
 //
 //   node scripts/update-build.mjs        (or: pnpm update:build)
 //
-// Fetch the base remote (upstream, else origin), then advance the `dev`
-// branch to that remote's dev HEAD — fast-forward only, failing hard if
-// `dev` holds local commits (it is a mirror and must never gain any).
-// Then, when the current branch is not `dev`, rebase it onto the latest
-// published GitHub release tag, resolved via the gh CLI (gh is a hard
-// dependency; unreleased tags are deliberately ignored — stability over
-// freshness). If no published release exists, fall back to origin/dev.
-// If the rebase fails, abort it and fall back to a merge. If both fail,
-// abort everything and leave the tree clean. On success run the full
-// desktop build pipeline: pnpm install -> rebuild native modules for
-// Electron -> package the unpacked win-unpacked app.
+// Fetch the base remote (upstream, else origin). When the current branch is
+// `dev`, fast-forward it to that remote's dev HEAD and build — dev only
+// advances from this path. When the current branch is anything else
+// (dev-local), resolve the latest published GitHub release tag via the gh
+// CLI (a hard dependency; unreleased tags are deliberately ignored —
+// stability over freshness), and rebase the current branch onto that
+// release's merge base with the base remote's dev branch: the commit the
+// release was cut from, i.e. the released commit that also exists on dev.
+// Unreleased commits are never ingested: no published release means the
+// script fails loudly instead of falling back to dev HEAD. If the rebase
+// fails, abort it and fall back to a merge. If both fail, abort everything
+// and leave the tree clean. On success run the full desktop build pipeline:
+// pnpm install -> rebuild native modules for Electron -> package the
+// unpacked win-unpacked app.
 import { spawnSync } from "node:child_process";
 
 const REMOTE = "upstream";
 const FALLBACK_REMOTE = "origin";
-const FALLBACK_TARGET = `${FALLBACK_REMOTE}/dev`;
 const BUILD_STEPS = [
   ["pnpm", ["install"]],
   ["pnpm", ["--filter", "@openwork/desktop", "rebuild:electron-native"]],
@@ -82,17 +85,17 @@ function remoteRepoSlug(target) {
 function latestPublishedReleaseTag() {
   const repo = remoteRepoSlug(remote);
   if (!repo) {
-    console.warn("[update-build] Could not determine GitHub repo for gh — falling back to origin/dev");
+    console.warn("[update-build] Could not determine GitHub repo for gh");
     return null;
   }
   const result = capture("gh", ["api", `repos/${repo}/releases/latest`, "--jq", ".tag_name"]);
   if (result.status !== 0) {
-    console.warn("[update-build] gh release lookup failed — falling back to origin/dev");
+    console.warn("[update-build] gh release lookup failed");
     return null;
   }
   const tag = result.stdout.trim();
   if (!/^v\d+\.\d+\.\d+$/.test(tag)) {
-    console.warn(`[update-build] gh returned unexpected release tag '${tag}' — falling back to origin/dev`);
+    console.warn(`[update-build] gh returned unexpected release tag '${tag}'`);
     return null;
   }
   return tag;
@@ -129,57 +132,46 @@ if (status.status !== 0 || status.stdout.trim()) {
 const branch = spawnSync("git", ["branch", "--show-current"], { encoding: "utf8" }).stdout.trim();
 const devRef = `${remote}/dev`;
 
-// 4. Advance `dev` to the base remote's dev HEAD — one rule regardless of
-//    the starting branch: fast-forward only, fail hard if `dev` holds local
-//    commits (it is a mirror and must never gain any).
-console.log(`[update-build] Advancing dev to ${devRef} (fast-forward)...`);
+// 4. On dev: fast-forward to the base remote's dev HEAD (this also
+//    refreshes the working tree so the build compiles the new code).
+//    dev only ever advances from this path — never from other branches —
+//    and it fails hard when dev holds local commits.
 if (branch === "dev") {
-  // dev is checked out: merge --ff-only advances it AND refreshes the
-  // working tree so the build below compiles the new code. It inherently
-  // fails when dev has diverged (local commits).
+  console.log(`[update-build] Advancing dev to ${devRef} (fast-forward)...`);
   if (git(["merge", "--ff-only", devRef]).status !== 0) {
     fail(`dev could not fast-forward to ${devRef} — it likely holds local commits; resolve manually`);
   }
-} else {
-  const devExists = spawnSync("git", ["rev-parse", "--verify", "--quiet", "dev"], { encoding: "utf8" }).status === 0;
-  if (devExists) {
-    // Fails (exit 1) when dev is not an ancestor of the target, i.e. it
-    // holds commits the remote does not have.
-    if (git(["merge-base", "--is-ancestor", "dev", devRef]).status !== 0) {
-      fail(`dev could not fast-forward to ${devRef} — it likely holds local commits; resolve manually`);
-    }
-  }
-  if (git(["branch", "-f", "dev", devRef]).status !== 0) {
-    fail(`could not advance dev to ${devRef}`);
-  }
-}
-
-// 5. On dev there is nothing to rebase — the advance already moved it; go
-//    straight to the build pipeline.
-if (branch === "dev") {
   console.log("[update-build] On dev — skipping rebase.");
+} else {
+  console.log(`[update-build] On ${branch || "current branch"} — leaving dev untouched.`);
 }
 
-// 6. Rebase target for non-dev branches: the latest published GitHub
-//    release tag (gh — never an unreleased tag), otherwise origin/dev.
-let branchTarget = FALLBACK_TARGET;
+// 5. Rebase target for non-dev branches: the merge base of the base
+//    remote's dev branch and the latest published release tag — the
+//    commit the release was cut from, i.e. the released commit that also
+//    exists on dev. Unreleased commits are never ingested: no published
+//    release means no update (fail loudly), never a fallback to dev HEAD.
 if (branch !== "dev") {
   const releaseTag = latestPublishedReleaseTag();
-  if (releaseTag) {
-    branchTarget = `refs/tags/${releaseTag}`;
-  } else {
-    console.warn(`[update-build] No published release tag found — falling back to ${FALLBACK_TARGET}`);
-    if (remote !== FALLBACK_REMOTE) {
-      // Only the base remote was fetched so far; make sure origin/dev is
-      // current.
-      if (!fetchRemote(FALLBACK_REMOTE)) {
-        fail(`git fetch ${FALLBACK_REMOTE} failed`);
-      }
-    }
+  if (!releaseTag) {
+    fail(
+      "no published release found — update:build only lands on published releases; " +
+        "re-run when one publishes",
+    );
   }
+  const tagRef = `refs/tags/${releaseTag}`;
+  const baseResult = capture("git", ["merge-base", devRef, tagRef]);
+  if (baseResult.status !== 0 || !baseResult.stdout.trim()) {
+    fail(`could not find the merge base of ${devRef} and ${tagRef}`);
+  }
+  const branchTarget = baseResult.stdout.trim();
 
-  // 7. Try rebase; 8. fall back to merge; 9. abort everything if both fail.
-  console.log(`[update-build] Rebasing ${branch || "current branch"} onto ${branchTarget}...`);
+  // 6. Try rebase; 7. fall back to merge; 8. abort everything if both fail.
+  const shortBase = branchTarget.slice(0, 9);
+  console.log(
+    `[update-build] Rebasing ${branch || "current branch"} onto ${shortBase} ` +
+      `(merge base of ${devRef} and ${releaseTag})...`,
+  );
   if (git(["rebase", branchTarget]).status !== 0) {
     console.warn("[update-build] Rebase failed, aborting and falling back to merge...");
     git(["rebase", "--abort"]);
@@ -194,7 +186,7 @@ if (branch !== "dev") {
   }
 }
 
-// 10. Build pipeline.
+// 9. Build pipeline.
 for (const [command, args] of BUILD_STEPS) {
   console.log(`[update-build] ${command} ${args.join(" ")}`);
   const result = run(command, args);
