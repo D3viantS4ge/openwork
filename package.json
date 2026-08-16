@@ -20,7 +20,7 @@
     "dev:web": "pnpm run dev:den:web",
     "dev:web-local": "pnpm run dev:den",
     "dev:web:local": "cross-env OPENWORK_MANAGE_OPENCODE=1 OPENWORK_HOST=${OPENWORK_HOST:-0.0.0.0} OPENWORK_OPENCODE_BIN=${OPENWORK_OPENCODE_BIN:-apps/desktop/dist-electron/win-unpacked/resources/sidecars/opencode.exe} OPENWORK_WEB_ROOT=${OPENWORK_WEB_ROOT:-apps/app/dist} -- bun apps/server/src/cli.ts",
-    "build:web:local": "pnpm --filter @openwork/app build:web:local",
+    "build:web:local": "pnpm --filter @openwork/app build:web:local && node apps/desktop/scripts/prepare-sidecar.mjs --force --outdir apps/desktop/resources/sidecars",
     "web:local": "pnpm --filter @openwork/app build:web:local && pnpm dev:web:local",
     "dev:den": "node scripts/dev-local.mjs",
     "dev:enterprise-mock-lab": "pnpm --filter @openwork-ee/enterprise-mock-lab dev",
