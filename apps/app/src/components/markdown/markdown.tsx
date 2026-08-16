@@ -19,6 +19,7 @@ import {
   syncMarkdownImagePreviews,
 } from "./markdown-primitive";
 import { LinkActionMenu } from "./link-action-menu";
+import { useScrollStableHtml } from "./scroll-stability";
 import { useSelectionStableValue } from "./selection-stability";
 
 export { renderHighlightedMarkdownHtml, renderMarkdownHtml } from "./markdown-primitive";
@@ -164,6 +165,7 @@ function MarkdownBlockInner({
 
   const candidateHtml = !streaming && highlightedHtml?.text === text ? highlightedHtml.html : syncHtml;
   const html = useSelectionStableValue(rootRef, candidateHtml);
+  useScrollStableHtml(rootRef, html);
   const stableInnerHtml = useMemo(() => ({ __html: html }), [html]);
 
   // Keep the innerHTML prop referentially stable too: a fresh wrapper object

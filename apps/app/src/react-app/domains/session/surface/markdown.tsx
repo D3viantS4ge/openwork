@@ -7,6 +7,7 @@ import {
   renderHighlightedMarkdownHtml,
   renderMarkdownHtml,
 } from "@/components/markdown/markdown-primitive";
+import { useScrollStableHtml } from "@/components/markdown/scroll-stability";
 import { useSelectionStableValue } from "@/components/markdown/selection-stability";
 
 function MarkdownBlockInner(props: {
@@ -39,6 +40,7 @@ function MarkdownBlockInner(props: {
 
   const candidateHtml = !props.streaming && highlightedHtml?.text === props.text ? highlightedHtml.html : syncHtml;
   const html = useSelectionStableValue(rootRef, candidateHtml);
+  useScrollStableHtml(rootRef, html);
   const stableInnerHtml = useMemo(() => ({ __html: html }), [html]);
 
   useEffect(() => {
