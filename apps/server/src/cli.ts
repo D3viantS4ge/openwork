@@ -2,6 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
+import { resolve } from "node:path";
 
 import { parseCliArgs, printHelp, resolveServerConfig } from "./config.js";
 import { EnvService } from "./env-file.js";
@@ -26,6 +27,20 @@ import { sweepLegacyOpenCodeConfig } from "./legacy-config-sweep.js";
 import { resolveOpencodeModelsUrl } from "./opencode-models-url.js";
 import { startWorkerActivityHeartbeat } from "./worker-activity-heartbeat.js";
 import pkg from "../package.json" with { type: "json" };
+
+// The web-local dev server stages the engine sidecar under
+// apps/desktop/resources/sidecars (prepare-sidecar.mjs) and names it
+// opencode.exe on Windows; resolve that by default so `pnpm web:local`
+// works without a packaged desktop build.
+function defaultManagedOpencodeBin(): string {
+  return resolve(
+    "apps",
+    "desktop",
+    "resources",
+    "sidecars",
+    process.platform === "win32" ? "opencode.exe" : "opencode",
+  );
+}
 
 const args = parseCliArgs(process.argv.slice(2));
 
@@ -80,7 +95,7 @@ if (!config.opencodeBaseUrl && process.env.OPENWORK_MANAGE_OPENCODE === "1") {
     // shadowed.
     const userEnv = await EnvService.readForInjection();
     managedOpencode = await createManagedOpencodeServer({
-      bin: process.env.OPENWORK_OPENCODE_BIN,
+      bin: process.env.OPENWORK_OPENCODE_BIN?.trim() || defaultManagedOpencodeBin(),
       cwd: managedOpencodeCwd,
       excludedPorts: [config.port],
       env: {
@@ -126,7 +141,7 @@ if (!config.opencodeBaseUrl && process.env.OPENWORK_MANAGE_OPENCODE === "1") {
         serverRunId: managedOpencodeIdentity,
         ownerPid: process.pid,
         authProbe: buildEngineAuthProbeHeader(managedOpencode.username, managedOpencode.password),
-        bin: process.env.OPENWORK_OPENCODE_BIN?.trim() || "opencode",
+        bin: process.env.OPENWORK_OPENCODE_BIN?.trim() || defaultManagedOpencodeBin(),
       }).catch(() => undefined);
     }
     logger.log("info", `Managed OpenCode listening on ${managedOpencode.url}`);
