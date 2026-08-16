@@ -1,4 +1,4 @@
-import type { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
+import type { createOpencodeClient, Session } from "@opencode-ai/sdk/v2/client";
 import { ApiError } from "../errors.js";
 import { buildSession, buildSessionList, buildSessionMessages, buildSessionSnapshot } from "../session-read-model.js";
 import {
@@ -79,6 +79,118 @@ export function registerSessionRoutes(options: RegisterSessionRoutesOptions): vo
       }
     }
     throw error;
+  }
+
+  // Subagents run in their own engine sessions (fresh session per Task call),
+  // so the parent session's cost/tokens exclude all downstream usage. The
+  // engine only reports per-session usage and its `children` query is
+  // single-level, so we roll up descendants recursively here. The rollup is
+  // best-effort: engines without the children route keep parent-only usage.
+  const SUBAGENT_USAGE_DEPTH_LIMIT = 8;
+  const rolledUpUsageWarned = new Set<string>();
+
+  type SessionUsageAccumulator = {
+    cost: number;
+    tokens: {
+      input: number;
+      output: number;
+      reasoning: number;
+      cacheRead: number;
+      cacheWrite: number;
+    };
+  };
+
+  function emptySessionUsage(): SessionUsageAccumulator {
+    return { cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 } };
+  }
+
+  function accumulateSessionUsage(accumulator: SessionUsageAccumulator, session: Session): void {
+    if (typeof session.cost === "number") accumulator.cost += session.cost;
+    const tokens = session.tokens;
+    if (!tokens) return;
+    accumulator.tokens.input += tokens.input;
+    accumulator.tokens.output += tokens.output;
+    accumulator.tokens.reasoning += tokens.reasoning;
+    accumulator.tokens.cacheRead += tokens.cache.read;
+    accumulator.tokens.cacheWrite += tokens.cache.write;
+  }
+
+  function mergeUsage(total: SessionUsageAccumulator, part: SessionUsageAccumulator): void {
+    total.cost += part.cost;
+    total.tokens.input += part.tokens.input;
+    total.tokens.output += part.tokens.output;
+    total.tokens.reasoning += part.tokens.reasoning;
+    total.tokens.cacheRead += part.tokens.cacheRead;
+    total.tokens.cacheWrite += part.tokens.cacheWrite;
+  }
+
+  function applySubagentUsage(session: Session, usage: SessionUsageAccumulator): void {
+    if (
+      usage.cost <= 0 &&
+      usage.tokens.input <= 0 &&
+      usage.tokens.output <= 0 &&
+      usage.tokens.reasoning <= 0 &&
+      usage.tokens.cacheRead <= 0 &&
+      usage.tokens.cacheWrite <= 0
+    ) {
+      return;
+    }
+    const tokens = session.tokens;
+    session.cost = (typeof session.cost === "number" ? session.cost : 0) + usage.cost;
+    session.tokens = {
+      input: (tokens?.input ?? 0) + usage.tokens.input,
+      output: (tokens?.output ?? 0) + usage.tokens.output,
+      reasoning: (tokens?.reasoning ?? 0) + usage.tokens.reasoning,
+      cache: {
+        read: (tokens?.cache?.read ?? 0) + usage.tokens.cacheRead,
+        write: (tokens?.cache?.write ?? 0) + usage.tokens.cacheWrite,
+      },
+    };
+  }
+
+  async function fetchSessionChildren(
+    opencode: WorkspaceOpencodeClient,
+    sessionId: string,
+  ): Promise<Session[]> {
+    try {
+      return unwrapOpencodeResult(
+        await opencode.session.children({ sessionID: sessionId }),
+        `/session/${encodeURIComponent(sessionId)}/children`,
+      );
+    } catch (error) {
+      if (!rolledUpUsageWarned.has(sessionId)) {
+        rolledUpUsageWarned.add(sessionId);
+        console.warn(
+          `[sessions] subagent usage rollup unavailable for ${sessionId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+      return [];
+    }
+  }
+
+  async function collectDescendantUsage(
+    opencode: WorkspaceOpencodeClient,
+    sessionId: string,
+    depth: number,
+    visited: Set<string>,
+  ): Promise<SessionUsageAccumulator> {
+    if (depth > SUBAGENT_USAGE_DEPTH_LIMIT || visited.has(sessionId)) return emptySessionUsage();
+    visited.add(sessionId);
+    const children = await fetchSessionChildren(opencode, sessionId);
+    const grandchildUsages = await Promise.all(
+      children.map((child) => collectDescendantUsage(opencode, child.id, depth + 1, visited)),
+    );
+    const usage = emptySessionUsage();
+    for (let index = 0; index < children.length; index++) {
+      const child = children[index];
+      const grandchildUsage = grandchildUsages[index];
+      if (!child || !grandchildUsage) continue;
+      accumulateSessionUsage(usage, child);
+      mergeUsage(usage, grandchildUsage);
+    }
+    return usage;
   }
 
   async function listWorkspaceSessions(
@@ -187,6 +299,10 @@ export function registerSessionRoutes(options: RegisterSessionRoutesOptions): vo
           .then((result) => unwrapOpencodeResult(result, `/session/${encodeURIComponent(sessionId)}/todo`)),
         opencode.session.status().then((result) => unwrapOpencodeResult(result, "/session/status")),
       ]);
+      // Subagents spend tokens in their own sessions; fold their usage into
+      // the parent record so the token bar shows the full cost of the run.
+      const descendantUsage = await collectDescendantUsage(opencode, sessionId, 0, new Set());
+      applySubagentUsage(session, descendantUsage);
       return buildSessionSnapshot({ session, messages, todos, statuses });
     } catch (error) {
       remapSessionReadError(error);

@@ -35,7 +35,7 @@ function auth(token: string) {
   return { Authorization: `Bearer ${token}` };
 }
 
-function startMockOpencode(input?: { invalidList?: boolean; holdCommand?: Promise<void> }) {
+function startMockOpencode(input?: { invalidList?: boolean; holdCommand?: Promise<void>; withChildren?: boolean }) {
   const requests: Array<{ pathname: string; search: string; directory: string | null; method: string; body?: unknown }> = [];
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -74,6 +74,17 @@ function startMockOpencode(input?: { invalidList?: boolean; holdCommand?: Promis
             slug: "hostname-check",
             directory: request.headers.get("x-opencode-directory"),
             time: { created: 100, updated: 200 },
+            ...(input?.withChildren
+              ? {
+                  cost: 0.02,
+                  tokens: {
+                    input: 2000,
+                    output: 100,
+                    reasoning: 50,
+                    cache: { read: 1000, write: 10 },
+                  },
+                }
+              : {}),
           },
         ]);
       }
@@ -89,7 +100,61 @@ function startMockOpencode(input?: { invalidList?: boolean; holdCommand?: Promis
           slug: "hostname-check",
           directory: request.headers.get("x-opencode-directory"),
           time: { created: 100, updated: 200 },
+          ...(input?.withChildren
+            ? {
+                cost: 0.02,
+                tokens: {
+                  input: 2000,
+                  output: 100,
+                  reasoning: 50,
+                  cache: { read: 1000, write: 10 },
+                },
+              }
+            : {}),
         });
+      }
+
+      if (url.pathname === "/session/ses_1/children" && input?.withChildren) {
+        return Response.json([
+          {
+            id: "ses_child_a",
+            title: "Child A",
+            slug: "child-a",
+            projectID: "proj_1",
+            directory: request.headers.get("x-opencode-directory"),
+            version: "1",
+            cost: 0.04,
+            tokens: { input: 400, output: 40, reasoning: 10, cache: { read: 100, write: 5 } },
+            time: { created: 150, updated: 160 },
+          },
+          {
+            id: "ses_child_b",
+            title: "Child B",
+            slug: "child-b",
+            projectID: "proj_1",
+            directory: request.headers.get("x-opencode-directory"),
+            version: "1",
+            cost: 0.06,
+            tokens: { input: 600, output: 60, reasoning: 0, cache: { read: 0, write: 0 } },
+            time: { created: 150, updated: 160 },
+          },
+        ]);
+      }
+
+      if (url.pathname === "/session/ses_child_a/children" && input?.withChildren) {
+        return Response.json([
+          {
+            id: "ses_grandchild",
+            title: "Grandchild",
+            slug: "grandchild",
+            projectID: "proj_1",
+            directory: request.headers.get("x-opencode-directory"),
+            version: "1",
+            cost: 0.01,
+            tokens: { input: 100, output: 10, reasoning: 1, cache: { read: 10, write: 0 } },
+            time: { created: 170, updated: 180 },
+          },
+        ]);
       }
 
       if (url.pathname === "/session/ses_1/message") {
@@ -336,6 +401,37 @@ describe("workspace session read APIs", () => {
     expect(response.status).toBe(200);
     const proxyRequest = mock.requests.find((request) => request.pathname === "/session");
     expect(proxyRequest?.directory).toBe(encodeURIComponent(workspaceRoot));
+  });
+
+  test("rolls subagent usage into the parent snapshot session", async () => {
+    const workspaceRoot = await createWorkspaceRoot();
+    const mock = startMockOpencode({ withChildren: true });
+    const openwork = await startOpenworkServer({
+      workspaceRoot,
+      opencodeBaseUrl: `http://127.0.0.1:${mock.server.port}`,
+    });
+
+    const response = await fetch(
+      `http://127.0.0.1:${openwork.server.port}/workspace/ws_1/sessions/ses_1/snapshot`,
+      { headers: auth(openwork.token) },
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.item.session).toMatchObject({
+      id: "ses_1",
+      cost: 0.13,
+      tokens: {
+        input: 3100,
+        output: 210,
+        reasoning: 61,
+        cache: { read: 1110, write: 15 },
+      },
+    });
+
+    const childrenRequest = mock.requests.find(
+      (request) => request.pathname === "/session/ses_1/children",
+    );
+    expect(childrenRequest?.directory).toBe(workspaceRoot);
   });
 
   test("returns 404 when the upstream session is missing", async () => {
