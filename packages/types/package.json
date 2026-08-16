@@ -100,7 +100,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup"
+    "build": "tsup",
+    "prepare": "tsup"
   },
   "dependencies": {
     "zod": "^4.3.6"

@@ -24,7 +24,8 @@
   },
   "scripts": {
     "build": "tsup",
-    "test": "bun test src/observability.test.ts"
+    "test": "bun test src/observability.test.ts",
+    "prepare": "tsup"
   },
   "dependencies": {
     "luxon": "^3.6.1",

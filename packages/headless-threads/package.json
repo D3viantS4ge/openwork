@@ -19,7 +19,8 @@
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean --external zod --target es2022",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "bun test src"
+    "test": "bun test src",
+    "prepare": "tsup src/index.ts --format esm --dts --clean --external zod --target es2022"
   },
   "dependencies": {
     "zod": "^4.3.6"

@@ -26,11 +26,19 @@ function generateCurrentSchemaSql() {
     cwd: packageDir,
     encoding: "utf8",
     env: process.env,
+    // On Windows pnpm resolves to pnpm.cmd, which cannot be spawned
+    // directly; shell: true routes through cmd.exe. The arguments contain
+    // no spaces, so the concatenation is safe.
+    shell: process.platform === "win32",
   })
 
+  if (result.error) {
+    process.stderr.write(String(result.error))
+    process.exit(1)
+  }
   if (result.status !== 0) {
-    process.stdout.write(result.stdout)
-    process.stderr.write(result.stderr)
+    if (result.stdout) process.stdout.write(result.stdout)
+    if (result.stderr) process.stderr.write(result.stderr)
     process.exit(result.status ?? 1)
   }
 

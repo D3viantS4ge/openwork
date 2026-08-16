@@ -21,7 +21,8 @@
   ],
   "scripts": {
     "build": "tsup",
-    "dev": "email dev --dir emails"
+    "dev": "email dev --dir emails",
+    "prepare": "tsup"
   },
   "dependencies": {
     "@react-email/components": "^1.0.12",

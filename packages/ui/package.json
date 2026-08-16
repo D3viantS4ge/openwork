@@ -15,7 +15,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsup --config tsup.config.react.ts"
+    "build": "tsup --config tsup.config.react.ts",
+    "prepare": "tsup --config tsup.config.react.ts"
   },
   "dependencies": {
     "@paper-design/shaders": "0.0.72",

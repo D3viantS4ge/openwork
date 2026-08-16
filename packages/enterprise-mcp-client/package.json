@@ -18,7 +18,8 @@
   "scripts": {
     "build": "tsup",
     "test": "tsx --test test/*.test.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepare": "tsup"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

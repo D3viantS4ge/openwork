@@ -21,7 +21,8 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "prepare": "tsup"
   },
   "dependencies": {
     "@openwork/types": "workspace:*",

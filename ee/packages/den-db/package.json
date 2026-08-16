@@ -82,7 +82,8 @@
     "db:push": "pnpm run build && node --import tsx ./node_modules/drizzle-kit/bin.cjs push --config drizzle.config.ts && node --import tsx scripts/ensure-fulltext-indexes.ts && node --import tsx scripts/ensure-schema-repairs.ts",
     "test": "NODE_OPTIONS=--conditions=development tsx --test test/*.test.ts",
     "db:verify-memory": "pnpm run build && node --import tsx scripts/verify-memory-schema.ts",
-    "benchmark:admin-scale:mysql": "node --import tsx scripts/admin-scale-benchmark.ts"
+    "benchmark:admin-scale:mysql": "node --import tsx scripts/admin-scale-benchmark.ts",
+    "prepare": "pnpm run build:utils && tsup && tsup --config tsup.scripts.config.ts && node scripts/build-assets.mjs"
   },
   "dependencies": {
     "@openwork/types": "workspace:*",
