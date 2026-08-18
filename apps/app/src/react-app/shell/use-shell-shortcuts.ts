@@ -2,6 +2,7 @@
 // global keyboard shortcuts that toggle them. Extracted verbatim from
 // session-route.tsx.
 import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { isDesktopRuntime } from "@/app/lib/runtime-env";
 import { usePlatform } from "../kernel/platform";
 import { useSessionNumberShortcutsStore } from "./session-number-shortcuts-store";
 import {
@@ -93,8 +94,10 @@ export function useShellShortcuts(input: UseShellShortcutsInput) {
   //   Cmd/Ctrl+J        -> toggle terminal panel (matches VS Code)
   //   Cmd/Ctrl+F        -> find in current conversation (handled by session surface)
   //   Cmd/Ctrl+Shift+F  -> search every session (titles + messages)
-  //   Cmd/Ctrl+T        -> next session tab
-  //   Cmd/Ctrl+Shift+T  -> previous session tab
+  //   Cmd/Ctrl+T        -> next session tab (desktop only; the browser owns
+  //                        new-tab in the web UI, so it passes through)
+  //   Cmd/Ctrl+Shift+T  -> previous session tab (desktop only; the browser owns
+  //                        reopen-closed-tab in the web UI, so it passes through)
   //   Cmd/Ctrl+1–9      -> matching visible sidebar session
   const handleGlobalShortcut = useEffectEvent((event: KeyboardEvent) => {
     const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
@@ -106,6 +109,7 @@ export function useShellShortcuts(input: UseShellShortcutsInput) {
       return;
     }
     if (event.shiftKey && !event.altKey && event.key?.toLowerCase() === "t") {
+      if (!isDesktopRuntime()) return;
       event.preventDefault();
       onPrevSessionTab?.();
       return;
@@ -133,6 +137,8 @@ export function useShellShortcuts(input: UseShellShortcutsInput) {
       return;
     }
     if (key === "t") {
+      // The browser owns Ctrl+T (new tab) in the web UI.
+      if (!isDesktopRuntime()) return;
       event.preventDefault();
       onNextSessionTab?.();
       return;
