@@ -236,7 +236,13 @@ function describeOpenworkServer(info: OpenworkServerInfo | null, fallback?: Open
     const diagnostics = fallback.diagnostics;
     const running = Boolean(diagnostics?.ok);
     const serverBlock = diagnostics?.server;
-    const lines = [t("settings.debug_base_url", { url: fallback.url || "—" })];
+    // The store's url state is not populated on web; the origin IS the server
+    // in that deployment, so fall back to it before showing an em-dash.
+    const effectiveUrl =
+      fallback.url ||
+      (typeof window !== "undefined" ? window.location.origin : "") ||
+      "—";
+    const lines = [t("settings.debug_base_url", { url: effectiveUrl })];
     if (serverBlock?.platform) {
       lines.push(t("settings.debug_server_platform", { platform: serverBlock.platform }));
     }
