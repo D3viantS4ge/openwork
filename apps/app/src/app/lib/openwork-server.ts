@@ -152,6 +152,7 @@ export type OpenworkServerPlatform = "win32" | "linux" | "darwin";
 export type OpenworkServerDiagnostics = {
   ok: boolean;
   version: string;
+  opencodeVersion?: string;
   uptimeMs: number;
   readOnly: boolean;
   approval: { mode: "manual" | "auto"; timeoutMs: number };

@@ -33,6 +33,7 @@ import { downloadTextAsFile } from "../../../../app/lib/download";
 import {
   writeOpenworkServerSettings,
   type OpenworkRuntimeConfigStatus,
+  type OpenworkServerDiagnostics,
 } from "../../../../app/lib/openwork-server";
 import {
   clearStartupPreference,
@@ -219,7 +220,48 @@ function formatBinaryWithSource(path: string | null | undefined, source: string 
   return sourceLabel ? `${binary} (${sourceLabel})` : binary;
 }
 
-function describeOpenworkServer(info: OpenworkServerInfo | null) {
+/**
+ * Remote-server fallback for the OpenWork server card: when the app runs
+ * against a server without the desktop bridge (web/server runtime), describe
+ * the remote server from its own /status payload — the same information the
+ * desktop would show if it were running on that machine.
+ */
+type OpenworkServerCardFallback = {
+  url: string;
+  diagnostics: OpenworkServerDiagnostics | null;
+};
+
+function describeOpenworkServer(info: OpenworkServerInfo | null, fallback?: OpenworkServerCardFallback) {
+  if (!info && fallback) {
+    const diagnostics = fallback.diagnostics;
+    const running = Boolean(diagnostics?.ok);
+    const serverBlock = diagnostics?.server;
+    const lines = [t("settings.debug_base_url", { url: fallback.url || "—" })];
+    if (serverBlock?.platform) {
+      lines.push(t("settings.debug_server_platform", { platform: serverBlock.platform }));
+    }
+    if (serverBlock?.host && serverBlock.port) {
+      lines.push(t("settings.debug_bind_address", { address: `${serverBlock.host}:${serverBlock.port}` }));
+    }
+    if (diagnostics?.version) {
+      lines.push(t("settings.debug_openwork_server_version", { version: diagnostics.version }));
+    }
+    if (diagnostics?.opencodeVersion) {
+      lines.push(t("settings.debug_opencode_version", { version: diagnostics.opencodeVersion }));
+    }
+    lines.push(t("settings.debug_server_workspaces", { count: String(diagnostics?.workspaceCount ?? 0) }));
+    if (serverBlock?.configPath) {
+      lines.push(t("settings.debug_server_config_path", { path: serverBlock.configPath }));
+    }
+    return {
+      ...statusPill(running),
+      lines,
+      stdout: null,
+      stderr: null,
+      execution: null,
+      error: null,
+    };
+  }
   const running = Boolean(info?.running);
   return {
     ...statusPill(running),
@@ -474,8 +516,16 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
 
   const engineCard = useMemo(() => describeEngine(engineInfoState), [engineInfoState]);
   const openworkCard = useMemo(
-    () => describeOpenworkServer(openworkServerSnapshot.openworkServerHostInfo),
-    [openworkServerSnapshot.openworkServerHostInfo],
+    () =>
+      describeOpenworkServer(openworkServerSnapshot.openworkServerHostInfo, {
+        url: openworkServerSnapshot.openworkServerUrl,
+        diagnostics: openworkServerSnapshot.openworkServerDiagnostics,
+      }),
+    [
+      openworkServerSnapshot.openworkServerDiagnostics,
+      openworkServerSnapshot.openworkServerHostInfo,
+      openworkServerSnapshot.openworkServerUrl,
+    ],
   );
   const opencodeConnectCard = useMemo(
     () => describeOpencodeConnect(engineInfoState),
