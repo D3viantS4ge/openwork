@@ -1799,6 +1799,12 @@ export function SessionRoute() {
       }
       forgetWorkspaceMemory(workspaceId);
       sessionManagementStore.getState().forgetWorkspace(workspaceId);
+      // Prune the workspace from the route state before the refresh: the
+      // workspace-list merge appends "missing desktop" entries at the bottom,
+      // which would resurrect a deleted workspace on web (no desktop bridge to
+      // prune it like workspaceForget does) until the next full reload.
+      setWorkspaces((current) => current.filter((workspace) => workspace.id !== workspaceId));
+      workspacesRef.current = workspacesRef.current.filter((workspace) => workspace.id !== workspaceId);
       await refreshRouteState();
     },
     [client, navigate, refreshRouteState, selectedWorkspaceId],

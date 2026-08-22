@@ -110,6 +110,17 @@ describe("workspace route list merging", () => {
     expect(mergeRouteWorkspaces({ items: undefined }, desktopWorkspaces)).toEqual(desktopWorkspaces);
   });
 
+  test("appends previously-known workspaces missing from the server list at the bottom", () => {
+    // Deletion contract: a workspace the server no longer lists (e.g. it was
+    // deleted) survives the merge when it is still in the desktop/previous
+    // list — appended last. Web removal therefore must prune the route state
+    // before refreshing, or the deleted workspace resurrects at the bottom
+    // until a full reload (the desktop bridge prunes via workspaceForget).
+    const serverItems = [{ id: "workspace-server", name: "Server", path: "/tmp/server", workspaceType: "local" }];
+    const result = mergeRouteWorkspaces(serverItems, previouslyKnownWorkspaces);
+    expect(result.map((workspace) => workspace.id)).toEqual(["workspace-server", "workspace-known"]);
+  });
+
   test("preserves known workspaces when the route list payload is missing items", async () => {
     await expect(refreshRouteWorkspaceListState({
       load: async () => ({}),
