@@ -1,5 +1,6 @@
 import type { FilePartInput, TextPartInput } from "@opencode-ai/sdk/v2/client";
 
+import type { OpenworkServerPlatform } from "@/app/lib/openwork-server";
 import type { ComposerAttachment } from "../../../../app/types";
 import { compressImageFile } from "./image-compression";
 import { joinWorkspaceRelativePath, isValidLocalFileUrl, toFileUrl } from "./prompt-file-parts";
@@ -27,12 +28,29 @@ type InboxUploadResult = {
 
 type ChatAttachmentUploadClient = {
   uploadInbox: (workspaceId: string, file: File, options?: { path?: string }) => Promise<InboxUploadResult>;
+  /**
+   * Optional resolver for the workspace server's platform (the machine the
+   * opencode engine runs on). When present, the file-URL validity check uses
+   * it instead of the browser platform, so a Windows browser attached to a
+   * WSL2/Linux server can emit POSIX `file://` parts. Absent in tests and on
+   * older servers — the check then falls back to browser detection.
+   */
+  platform?: () => Promise<OpenworkServerPlatform | undefined>;
 };
 
 export type ChatAttachmentWorkspaceEndpoint = {
   client: ChatAttachmentUploadClient;
   workspaceId: string;
 };
+
+async function resolveEnginePlatform(endpoint: ChatAttachmentWorkspaceEndpoint): Promise<OpenworkServerPlatform | undefined> {
+  if (typeof endpoint.client.platform !== "function") return undefined;
+  try {
+    return await endpoint.client.platform();
+  } catch {
+    return undefined;
+  }
+}
 
 type UploadedChatAttachment = {
   filename: string;
@@ -314,6 +332,13 @@ export async function composerAttachmentsToWorkspaceFileParts(input: {
   }
 
   const uploaded: UploadedChatAttachment[] = [];
+
+  // The engine that consumes the file parts runs on the workspace server, not
+  // necessarily on the browser's platform (Windows browser + WSL2/Linux
+  // server). Resolve the server platform once per send so the URL validity
+  // check below accepts the paths the server actually owns.
+  const enginePlatform = await resolveEnginePlatform(input.endpoint);
+
   for (const attachment of input.attachments) {
     // Oversized images are re-encoded here, at send time, so the composer chip
     // appears instantly at attach time and the canvas work happens while the
@@ -348,8 +373,9 @@ export async function composerAttachmentsToWorkspaceFileParts(input: {
     const absolutePath = joinWorkspaceRelativePath(workspaceRoot, workspacePath);
     const url = toFileUrl(absolutePath);
     // Same guarantee as prompt-file-parts: never emit a file part the engine
-    // could not resolve, or the prompt fails to send.
-    if (!isValidLocalFileUrl(url)) {
+    // could not resolve, or the prompt fails to send. The platform under
+    // check is the engine's (server) platform, not the browser's.
+    if (!isValidLocalFileUrl(url, enginePlatform === "win32")) {
       throw new Error(
         `Attachment "${metadata.filename}" resolved to an invalid file URL${url ? ` (${url})` : " (empty)"}; send aborted`,
       );

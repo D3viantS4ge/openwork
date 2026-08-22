@@ -141,6 +141,14 @@ function parseCloudProviderSyncStatus(value: unknown): OpenworkCloudProviderSync
 
 export type OpenworkServerStatus = "connected" | "disconnected" | "limited";
 
+/**
+ * Platform of the workspace server — and therefore of the opencode engine it
+ * spawns. This is the platform that must be able to resolve `file://` part
+ * URLs, which is not necessarily the platform of the browser rendering the
+ * app (e.g. a Windows browser talking to a WSL2/Linux server).
+ */
+export type OpenworkServerPlatform = "win32" | "linux" | "darwin";
+
 export type OpenworkServerDiagnostics = {
   ok: boolean;
   version: string;
@@ -153,7 +161,7 @@ export type OpenworkServerDiagnostics = {
   selectedWorkspaceId?: string | null;
   workspace: OpenworkWorkspaceInfo | null;
   authorizedRoots: string[];
-  server: { host: string; port: number; configPath?: string | null };
+  server: { host: string; port: number; configPath?: string | null; platform?: string };
   tokenSource: { client: string; host: string };
 };
 
@@ -1469,6 +1477,8 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
   const token = options.token;
   const hostToken = options.hostToken;
 
+  let platformPromise: Promise<OpenworkServerPlatform | undefined> | null = null;
+
   const timeouts = {
     health: 3_000,
     capabilities: 6_000,
@@ -1496,6 +1506,22 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
     runtimeVersions: () =>
       requestJson<OpenworkRuntimeSnapshot>(baseUrl, "/runtime/versions", { token, hostToken, timeoutMs: timeouts.status }),
     status: () => requestJson<OpenworkServerDiagnostics>(baseUrl, "/status", { token, hostToken, timeoutMs: timeouts.status }),
+    /**
+     * Cached platform of the workspace server (the machine the opencode
+     * engine runs on). `undefined` when the server predates `platform` in
+     * `/status`; callers then fall back to browser-based detection.
+     */
+    platform: () => {
+      if (!platformPromise) {
+        platformPromise = requestJson<OpenworkServerDiagnostics>(baseUrl, "/status", { token, hostToken, timeoutMs: timeouts.status })
+          .then((diagnostics) => {
+            const raw = diagnostics.server.platform?.trim().toLowerCase();
+            return raw === "win32" || raw === "linux" || raw === "darwin" ? raw : undefined;
+          })
+          .catch(() => undefined);
+      }
+      return platformPromise;
+    },
     capabilities: () => requestJson<OpenworkServerCapabilities>(baseUrl, "/capabilities", { token, hostToken, timeoutMs: timeouts.capabilities }),
     getConnectState: (workspaceId?: string | null) => {
       const query = new URLSearchParams();

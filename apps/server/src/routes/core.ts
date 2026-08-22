@@ -237,6 +237,12 @@ export function registerCoreRoutes(options: RegisterCoreRoutesOptions): void {
         host: config.host,
         port: config.port,
         configPath: config.configPath ?? null,
+        // The platform the workspace server (and therefore the opencode
+        // engine it spawns) runs on. Clients use this instead of the browser
+        // platform to decide whether a `file://` part URL is resolvable — a
+        // Windows browser talking to a WSL2/Linux server must emit POSIX
+        // paths, not drive-letter paths.
+        platform: process.platform,
       },
       tokenSource: {
         client: config.tokenSource,

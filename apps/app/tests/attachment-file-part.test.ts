@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import type { OpenworkServerPlatform } from "../src/app/lib/openwork-server";
 import type { ComposerAttachment } from "../src/app/types";
 import {
   buildChatAttachmentInboxPath,
@@ -53,7 +54,10 @@ function decodedDataUrlBytes(url: string) {
   return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
 
-function uploadRecorder(workspaceId: string) {
+function uploadRecorder(
+  workspaceId: string,
+  options: { platform?: () => Promise<OpenworkServerPlatform | undefined> } = {},
+) {
   const calls: UploadCall[] = [];
   const endpoint: ChatAttachmentWorkspaceEndpoint = {
     workspaceId,
@@ -69,6 +73,7 @@ function uploadRecorder(workspaceId: string) {
         });
         return { ok: true, path, bytes: file.size };
       },
+      ...(options.platform ? { platform: options.platform } : {}),
     },
   };
   return { endpoint, calls };
@@ -473,5 +478,47 @@ describe("composer attachment file parts", () => {
       workspaceRoot: "/workspace/a",
       createId: () => "nonce-a",
     })).rejects.toThrow("Failed to copy attachment \"scan.pdf\" into this worker workspace: upload was rejected");
+  });
+
+  test("accepts POSIX attachment URLs when the workspace server is Linux (WSL2 browser-on-Windows topology)", async () => {
+    // A Windows browser talking to a WSL2/Linux server: the engine runs on the
+    // server, so the POSIX inbox path is resolvable even though the browser
+    // would report a Windows platform. Regression: this used to abort the
+    // send with "resolved to an invalid file URL".
+    const { endpoint, calls } = uploadRecorder("server-workspace-42", { platform: async () => "linux" });
+    const file = new File(["{}"], "opencode.json", { type: "application/json" });
+
+    const parts = await composerAttachmentsToWorkspaceFileParts({
+      attachments: [attachmentFor(file)],
+      endpoint,
+      sessionId: "ses_wsl",
+      workspaceRoot: "/home/openwork/openwork",
+      createId: () => "nonce-linux",
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(filePartUrl(parts, 1)).toBe(
+      "file:///home/openwork/openwork/.opencode/openwork/inbox/chat-attachments/ses_wsl/nonce-linux-opencode.json",
+    );
+    expect(parts[1]).toMatchObject({
+      type: "file",
+      filename: "opencode.json",
+      mime: "text/plain",
+    });
+  });
+
+  test("still aborts POSIX attachment URLs when the workspace server is Windows", async () => {
+    // A Windows engine cannot fileURLToPath a POSIX path; the guard must
+    // follow the *server* platform, not the browser's.
+    const { endpoint } = uploadRecorder("server-workspace-42", { platform: async () => "win32" });
+    const file = new File(["{}"], "opencode.json", { type: "application/json" });
+
+    await expect(composerAttachmentsToWorkspaceFileParts({
+      attachments: [attachmentFor(file)],
+      endpoint,
+      sessionId: "ses_win",
+      workspaceRoot: "/home/openwork/openwork",
+      createId: () => "nonce-win",
+    })).rejects.toThrow("resolved to an invalid file URL");
   });
 });

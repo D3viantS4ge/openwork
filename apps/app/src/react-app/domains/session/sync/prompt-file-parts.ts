@@ -81,19 +81,25 @@ export function toFileUrl(path: string) {
 
 /**
  * A file part URL is only safe to emit when it is a valid absolute file URL
- * on the current platform. POSIX-style paths (/mnt/c, /Users/...) are
- * absolute on Linux/macOS but not on Windows — the engine's fileURLToPath
- * throws on them and the whole prompt fails to send. Returns false for
- * anything the engine could not resolve.
+ * on the platform that will resolve it — the opencode engine, which runs on
+ * the workspace server (not necessarily the browser's platform: a Windows
+ * browser talking to a WSL2/Linux server must emit POSIX paths). POSIX-style
+ * paths (/mnt/c, /Users/...) are absolute on Linux/macOS but not on Windows —
+ * the engine's fileURLToPath throws on them and the whole prompt fails to
+ * send. Returns false for anything the engine could not resolve.
+ *
+ * `engineIsWindows` defaults to the browser platform for callers that have no
+ * server platform available (first-line path inference); send paths that know
+ * the workspace server's platform pass it explicitly.
  */
-export function isValidLocalFileUrl(url: string): boolean {
+export function isValidLocalFileUrl(url: string, engineIsWindows: boolean = isWindowsPlatform()): boolean {
   if (!url) return false;
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== "file:") return false;
     const pathname = parsed.pathname;
     if (!pathname.startsWith("/")) return false;
-    if (isWindowsPlatform()) {
+    if (engineIsWindows) {
       // Windows absolute paths are drive-letter (file:///C:/... — possibly
       // percent-encoded as /C%3A/...) or UNC (file://server/share ->
       // pathname //server/share).
