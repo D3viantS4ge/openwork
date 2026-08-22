@@ -7,11 +7,11 @@
 // Fetch the base remote (upstream, else origin). When the current branch is
 // `dev`, fast-forward it to that remote's dev HEAD and build — dev only
 // advances from this path. When the current branch is anything else
-// (dev-local), resolve the latest published GitHub release tag via the gh
-// CLI (a hard dependency; unreleased tags are deliberately ignored —
-// stability over freshness), and rebase the current branch onto that
-// release's merge base with the base remote's dev branch: the commit the
-// release was cut from, i.e. the released commit that also exists on dev.
+// (dev-local), resolve the latest published GitHub release tag from the
+// GitHub REST API (no gh dependency; unreleased tags are deliberately
+// ignored — stability over freshness), and rebase the current branch onto
+// that release's merge base with the base remote's dev branch: the commit
+// the release was cut from, i.e. the released commit that also exists on dev.
 // Unreleased commits are never ingested: no published release means the
 // script fails loudly instead of falling back to dev HEAD. If the rebase
 // fails, abort it and fall back to a merge. If both fail, abort everything
@@ -67,7 +67,8 @@ const fetchRemote = (target) => {
   return git(["fetch", "--tags", target]).status === 0;
 };
 
-// The GitHub owner/repo for the given remote, used for gh lookups.
+// The GitHub owner/repo for the given remote, used to build the release
+// lookup URL.
 function remoteRepoSlug(target) {
   const result = capture("git", ["remote", "get-url", target]);
   if (result.status !== 0) return null;
@@ -76,29 +77,42 @@ function remoteRepoSlug(target) {
   return match ? match[1] : null;
 }
 
-// The latest published release tag (vX.Y.Z) via gh. gh is a hard
-// dependency: unreleased tags are deliberately ignored in favor of
-// stability. /releases/latest returns the newest non-draft,
-// non-prerelease release by contract. Returns null when gh is
-// unavailable, unauthenticated, the repo has no releases, or the tag
-// does not match the strict vX.Y.Z pattern.
-function latestPublishedReleaseTag() {
+// The latest published release tag (vX.Y.Z) via the GitHub REST API. gh is
+// not required: /releases/latest is public for public repos, so a plain
+// HTTPS GET works unauthenticated (subject to GitHub's per-IP rate limit).
+// Unreleased tags are deliberately ignored in favor of stability.
+// /releases/latest returns the newest non-draft, non-prerelease release by
+// contract. Returns null when the lookup fails, the repo has no releases,
+// or the tag does not match the strict vX.Y.Z pattern.
+async function latestPublishedReleaseTag() {
   const repo = remoteRepoSlug(remote);
   if (!repo) {
-    console.warn("[update-build] Could not determine GitHub repo for gh");
+    console.warn("[update-build] Could not determine GitHub repo for release lookup");
     return null;
   }
-  const result = capture("gh", ["api", `repos/${repo}/releases/latest`, "--jq", ".tag_name"]);
-  if (result.status !== 0) {
-    console.warn("[update-build] gh release lookup failed");
+  try {
+    const response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        // GitHub rejects requests without a User-Agent header.
+        "User-Agent": "openwork-update-build",
+      },
+    });
+    if (!response.ok) {
+      console.warn(`[update-build] GitHub release lookup failed (HTTP ${response.status})`);
+      return null;
+    }
+    const payload = await response.json();
+    const tag = typeof payload?.tag_name === "string" ? payload.tag_name.trim() : "";
+    if (!/^v\d+\.\d+\.\d+$/.test(tag)) {
+      console.warn(`[update-build] GitHub returned unexpected release tag '${tag}'`);
+      return null;
+    }
+    return tag;
+  } catch (error) {
+    console.warn(`[update-build] GitHub release lookup failed: ${error instanceof Error ? error.message : String(error)}`);
     return null;
   }
-  const tag = result.stdout.trim();
-  if (!/^v\d+\.\d+\.\d+$/.test(tag)) {
-    console.warn(`[update-build] gh returned unexpected release tag '${tag}'`);
-    return null;
-  }
-  return tag;
 }
 
 // 1. Resolve the base remote: upstream when present, otherwise fall back to
@@ -152,7 +166,7 @@ if (branch === "dev") {
 //    exists on dev. Unreleased commits are never ingested: no published
 //    release means no update (fail loudly), never a fallback to dev HEAD.
 if (branch !== "dev") {
-  const releaseTag = latestPublishedReleaseTag();
+  const releaseTag = await latestPublishedReleaseTag();
   if (!releaseTag) {
     fail(
       "no published release found — update:build only lands on published releases; " +
