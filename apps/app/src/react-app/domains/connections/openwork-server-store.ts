@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 import { t } from "../../../i18n";
 import type { StartupPreference, WorkspaceDisplay } from "../../../app/types";
 import { isDesktopRuntime } from "../../../app/utils";
+import { isWebDeployment } from "../../../app/lib/openwork-deployment";
 import {
   openworkServerInfo,
   openworkServerRestart,
@@ -133,6 +134,15 @@ export function createOpenworkServerStore(options: CreateOpenworkServerStoreOpti
     for (const listener of listeners) listener();
   };
 
+  // Web deployment served by the local server: no urlOverride is stored, and
+  // the origin IS the server. Mirror resolveOpenworkConnection's same-origin
+  // fallback so the store can reach /status and friends without stored URL
+  // settings (token/hostToken still come from the stored connection).
+  const sameOriginUrl = () =>
+    !isDesktopRuntime() && isWebDeployment() && typeof window !== "undefined"
+      ? normalizeOpenworkServerUrl(window.location.origin) ?? ""
+      : "";
+
   const getBaseUrl = () => {
     const gatewayOrigin = getOpenworkGatewayOrigin();
     if (gatewayOrigin) return normalizeOpenworkServerUrl(gatewayOrigin) ?? "";
@@ -145,8 +155,8 @@ export function createOpenworkServerStore(options: CreateOpenworkServerStoreOpti
     if (pref === "server" && settingsUrl && isLoopbackOpenworkServerUrl(settingsUrl) && hostInfo?.baseUrl) {
       return hostInfo.baseUrl;
     }
-    if (pref === "server") return settingsUrl;
-    return hostInfo?.baseUrl ?? settingsUrl;
+    if (pref === "server") return settingsUrl || sameOriginUrl();
+    return hostInfo?.baseUrl || settingsUrl || sameOriginUrl();
   };
 
   const getAuth = () => {
@@ -174,9 +184,10 @@ export function createOpenworkServerStore(options: CreateOpenworkServerStoreOpti
       };
     }
     if (pref === "server") {
+      const effectiveUrl = settingsUrl || sameOriginUrl();
       return {
         token: settingsToken || undefined,
-        hostToken: settingsUrl && isLoopbackOpenworkServerUrl(settingsUrl) ? settingsHostToken || undefined : undefined,
+        hostToken: effectiveUrl && isLoopbackOpenworkServerUrl(effectiveUrl) ? settingsHostToken || undefined : undefined,
       };
     }
     if (hostInfo?.baseUrl) {
