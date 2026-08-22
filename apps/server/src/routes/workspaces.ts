@@ -1,5 +1,5 @@
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { recordAudit } from "../audit.js";
 import { ApiError } from "../errors.js";
 import { inheritWorkspaceOpencodeConnection, resolveWorkspaceOpencodeConnection } from "../opencode-connection.js";
@@ -278,10 +278,29 @@ export function registerWorkspaceRoutes(options: RegisterWorkspaceRoutesOptions)
     if (!folderPath) {
       throw new ApiError(400, "invalid_payload", "folderPath is required");
     }
+    if (!isAbsolute(folderPath)) {
+      throw new ApiError(
+        400,
+        "invalid_path",
+        "folderPath must be an absolute path on this server",
+      );
+    }
 
     const workspacePath = resolve(folderPath);
-    await ensureDir(workspacePath);
-    await ensureWorkspaceFiles(workspacePath, preset);
+    try {
+      // mkdir -p semantics: the folder is created (with parents) when missing,
+      // so a brand-new workspace path works on first try.
+      await ensureDir(workspacePath);
+      await ensureWorkspaceFiles(workspacePath, preset);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new ApiError(
+        400,
+        "path_not_creatable",
+        `Could not create workspace folder at ${workspacePath}: ${reason}`,
+        { path: workspacePath, reason },
+      );
+    }
 
     const workspaceId = workspaceIdForPath(workspacePath);
     // Seed the per-workspace openwork config in the runtime DB (replaces the

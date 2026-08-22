@@ -66,6 +66,12 @@ export type CreateWorkspaceModalProps = {
   submittingProgress?: CreateWorkspaceProgress | null;
   localDisabled?: boolean;
   localDisabledReason?: string | null;
+  /**
+   * When true, the local-workspace panel takes the folder as a text path that
+   * the server resolves (used when there is no native folder picker, e.g. the
+   * server web UI). Defaults to false (desktop folder picker).
+   */
+  pathInputMode?: boolean;
 };
 
 export type CreateRemoteWorkspaceModalProps = {

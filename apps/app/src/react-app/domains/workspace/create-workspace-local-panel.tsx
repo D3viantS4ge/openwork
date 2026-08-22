@@ -52,6 +52,13 @@ export type CreateWorkspaceLocalPanelProps = {
   hasSelectedFolder: boolean;
   pickingFolder: boolean;
   onPickFolder: () => void;
+  /**
+   * When true the folder is entered as a text path that the server resolves
+   * (used when there is no native folder picker, e.g. the server web UI).
+   * The path is created on the server with mkdir -p semantics if missing.
+   */
+  pathInputMode: boolean;
+  onFolderPathInput: (value: string) => void;
   projectLabel: string;
   onProjectLabelInput: (value: string) => void;
   showProjectLabel: boolean;
@@ -116,41 +123,85 @@ export function CreateWorkspaceLocalPanel(
       >
         <div className="space-y-4">
           <div className={surfaceCardClass}>
-            <div className={sectionTitleClass}>
-              {t("welcome.folder_title")}
-            </div>
-            <div className={`${sectionBodyClass} mt-2`}>
-              {t("welcome.folder_explanation")}
-            </div>
-            <ul className="mt-3 space-y-1.5 pl-1">
-              <li className="flex items-start gap-2 text-[13px] text-dls-secondary">
-                <Check size={14} className="mt-0.5 shrink-0 text-emerald-10" />
-                {t("welcome.folder_read")}
-              </li>
-              <li className="flex items-start gap-2 text-[13px] text-dls-secondary">
-                <Check size={14} className="mt-0.5 shrink-0 text-emerald-10" />
-                {t("welcome.folder_write")}
-              </li>
-              <li className="flex items-start gap-2 text-[13px] text-dls-secondary">
-                <Check size={14} className="mt-0.5 shrink-0 text-emerald-10" />
-                {t("welcome.folder_anything")}
-              </li>
-            </ul>
-            <div className="mt-2 text-[12px] text-dls-secondary italic">
-              {t("welcome.folder_drop_hint")}
-            </div>
+            {props.pathInputMode ? (
+              <>
+                <div className={sectionTitleClass}>
+                  {t("dashboard.workspace_path_label")}
+                </div>
+                <div className={`${sectionBodyClass} mt-2`}>
+                  {t("dashboard.workspace_path_explanation")}
+                </div>
+                <input
+                  type="text"
+                  value={props.selectedFolder ?? ""}
+                  onChange={(event) =>
+                    props.onFolderPathInput(event.currentTarget.value)
+                  }
+                  placeholder={t("dashboard.workspace_path_placeholder")}
+                  disabled={props.submitting}
+                  spellCheck={false}
+                  className="mt-4 w-full rounded-[20px] border border-dls-border bg-dls-surface px-4 py-3 font-mono text-[13px] text-dls-text outline-none placeholder:text-dls-secondary transition-colors focus:border-dls-accent disabled:cursor-not-allowed disabled:opacity-60"
+                />
+                <div className="mt-2 text-[12px] text-dls-secondary italic">
+                  {t("dashboard.workspace_path_hint")}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className={sectionTitleClass}>
+                  {t("welcome.folder_title")}
+                </div>
+                <div className={`${sectionBodyClass} mt-2`}>
+                  {t("welcome.folder_explanation")}
+                </div>
+                <ul className="mt-3 space-y-1.5 pl-1">
+                  <li className="flex items-start gap-2 text-[13px] text-dls-secondary">
+                    <Check size={14} className="mt-0.5 shrink-0 text-emerald-10" />
+                    {t("welcome.folder_read")}
+                  </li>
+                  <li className="flex items-start gap-2 text-[13px] text-dls-secondary">
+                    <Check size={14} className="mt-0.5 shrink-0 text-emerald-10" />
+                    {t("welcome.folder_write")}
+                  </li>
+                  <li className="flex items-start gap-2 text-[13px] text-dls-secondary">
+                    <Check size={14} className="mt-0.5 shrink-0 text-emerald-10" />
+                    {t("welcome.folder_anything")}
+                  </li>
+                </ul>
+                <div className="mt-2 text-[12px] text-dls-secondary italic">
+                  {t("welcome.folder_drop_hint")}
+                </div>
 
-            <div className="mt-4 rounded-[20px] border border-dls-border bg-dls-hover px-4 py-3">
-              {props.hasSelectedFolder ? (
-                <span className="block truncate font-mono text-[12px] text-dls-text">
-                  {props.selectedFolder}
-                </span>
-              ) : (
-                <span className="text-[14px] text-dls-secondary">
-                  No folder selected yet.
-                </span>
-              )}
-            </div>
+                <div className="mt-4 rounded-[20px] border border-dls-border bg-dls-hover px-4 py-3">
+                  {props.hasSelectedFolder ? (
+                    <span className="block truncate font-mono text-[12px] text-dls-text">
+                      {props.selectedFolder}
+                    </span>
+                  ) : (
+                    <span className="text-[14px] text-dls-secondary">
+                      No folder selected yet.
+                    </span>
+                  )}
+                </div>
+                <div className="mt-4">
+                  <button
+                    type="button"
+                    onClick={props.onPickFolder}
+                    disabled={props.pickingFolder || props.submitting}
+                    className={pillSecondaryClass}
+                  >
+                    {props.pickingFolder ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <FolderPlus size={14} />
+                    )}
+                    {props.hasSelectedFolder
+                      ? t("dashboard.change")
+                      : "Select folder"}
+                  </button>
+                </div>
+              </>
+            )}
 
             {props.showProjectLabel ? (
               <Accordion
@@ -192,23 +243,6 @@ export function CreateWorkspaceLocalPanel(
                 </AccordionItem>
               </Accordion>
             ) : null}
-            <div className="mt-4">
-              <button
-                type="button"
-                onClick={props.onPickFolder}
-                disabled={props.pickingFolder || props.submitting}
-                className={pillSecondaryClass}
-              >
-                {props.pickingFolder ? (
-                  <Loader2 size={14} className="animate-spin" />
-                ) : (
-                  <FolderPlus size={14} />
-                )}
-                {props.hasSelectedFolder
-                  ? t("dashboard.change")
-                  : "Select folder"}
-              </button>
-            </div>
           </div>
 
         </div>

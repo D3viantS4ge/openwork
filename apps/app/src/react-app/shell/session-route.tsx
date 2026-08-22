@@ -20,6 +20,7 @@ import { trackSessionActive, trackTaskStarted } from "@/app/lib/den-telemetry";
 import { buildDiagnosticsBundleJson } from "@/app/lib/diagnostics-bundle";
 import { downloadTextAsFile } from "@/app/lib/download";
 import { canCreateWorkspaces } from "@/app/lib/workspace-creation-policy";
+import { describeCreateWorkspaceError } from "@/app/lib/workspace-create-error";
 import { createClient, unwrap } from "@/app/lib/opencode";
 import { abortSessionSafe, forkSession, listCommands, revertSession, setSessionArchived, shellInSession, unrevertSession } from "@/app/lib/opencode-session";
 import { useSessionManagementStore as sessionManagementStore } from "@/react-app/domains/session/sidebar/session-management-store";
@@ -2374,13 +2375,16 @@ export function SessionRoute() {
       let list: WorkspaceList | null = null;
       let createdOnServer = false;
       if (client) {
-        list = await client
-          .createLocalWorkspace({ folderPath: folder, name: workspaceName, preset })
-          .then((serverList) => {
-            createdOnServer = true;
-            return serverList;
-          })
-          .catch(() => null);
+        try {
+          list = await client.createLocalWorkspace({ folderPath: folder, name: workspaceName, preset });
+          createdOnServer = true;
+        } catch (error) {
+          // Surface the server's structured error (e.g. path not creatable,
+          // permission denied) instead of failing silently.
+          setCreateWorkspaceError(describeCreateWorkspaceError(error));
+          setCreateWorkspaceBusy(false);
+          return;
+        }
       }
       if (!list) {
         throw new Error("OpenWork server is unavailable. Start or reconnect the server before creating a workspace.");
@@ -2927,12 +2931,7 @@ export function SessionRoute() {
       onPickFolder={async () => singlePickedDirectory(await pickDirectory({ title: t("onboarding.authorize_folder") }))}
       submitting={createWorkspaceBusy}
       localError={createWorkspaceError}
-      localDisabled={!platform.capabilities.nativeFilePicker}
-      localDisabledReason={
-        platform.capabilities.nativeFilePicker
-          ? undefined
-          : t("app.local_disabled_reason")
-      }
+      pathInputMode={!platform.capabilities.nativeFilePicker}
       remoteSubmitting={createWorkspaceRemoteBusy}
       remoteError={createWorkspaceRemoteError}
     />

@@ -268,6 +268,8 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
             hasSelectedFolder={hasSelectedFolder}
             pickingFolder={pickingFolder}
             onPickFolder={() => void handlePickFolder()}
+            pathInputMode={props.pathInputMode ?? false}
+            onFolderPathInput={setSelectedFolder}
             projectLabel={showProjectLabel ? projectLabel : ""}
             onProjectLabelInput={setProjectLabel}
             showProjectLabel={showProjectLabel}
