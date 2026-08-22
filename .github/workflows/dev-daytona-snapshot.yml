@@ -1,5 +1,7 @@
 # web.openworklabs.com engine channel:
-# Per-push snapshot from dev HEAD, named <base>-dev-<short-sha>, with a nightly backstop.
+# Per-push snapshot builds from dev HEAD stay; the production pin moves only on
+# the nightly backstop, manual dispatch, or releases after the 2026-08-15
+# merge-burst update treadmill recycled every running cloud workspace 3 times.
 # DAYTONA_PIN_CHANNEL resolves pin ping-pong: release pinning defers to the dev channel.
 # Set DAYTONA_PIN_CHANNEL=release to stop this pipeline; the next release re-pins.
 # Sandboxes roll forward via the existing stopped+stale recycle.
@@ -168,7 +170,7 @@ jobs:
 
       - name: Update production snapshot pin
         id: pin
-        if: steps.channel.outputs.enabled == 'true'
+        if: steps.channel.outputs.enabled == 'true' && github.event_name != 'push'
         shell: bash
         env:
           DAYTONA_CLOUD_ENV_GROUP_ID: ${{ vars.DAYTONA_CLOUD_ENV_GROUP_ID }}
@@ -200,13 +202,20 @@ jobs:
             echo
             echo "$result"
           } >> "$GITHUB_STEP_SUMMARY"
+          changed=false
+          case "$result" in
+            updated:*) changed=true ;;
+          esac
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
 
       - name: Redeploy den-api so the new pin takes effect
         # Render does not redeploy services when an env group value changes, so
         # den-api keeps serving the previous DAYTONA_SNAPSHOT until it redeploys.
         # Without this the pin moves but `latestVersion` stays stale and no
         # sandbox ever recycles - observed for real on v0.18.11.
-        if: steps.channel.outputs.enabled == 'true' && steps.pin.outcome == 'success'
+        # Gated on the pin actually moving, so unchanged re-runs and the
+        # nightly backstop no longer redeploy production for a no-op.
+        if: steps.channel.outputs.enabled == 'true' && github.event_name != 'push' && steps.pin.outcome == 'success' && steps.pin.outputs.changed == 'true'
         shell: bash
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
@@ -234,4 +243,52 @@ jobs:
           {
             echo
             echo "Triggered a den-api deploy so the new pin takes effect."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Per-push dev snapshots accumulate forever. Keep the pinned snapshot plus
+      # the 5 newest and skip snapshots referenced by active sandboxes. Old
+      # stopped/archived sandboxes do not block pruning because they keep their own disks.
+      # This also runs nightly as a pruning backstop when the snapshot already exists.
+      - name: Prune old dev snapshots
+        if: steps.channel.outputs.enabled == 'true' && steps.resolve.outcome == 'success'
+        shell: bash
+        env:
+          DAYTONA_API_KEY: ${{ secrets.DAYTONA_API_KEY }}
+          DAYTONA_API_URL: ${{ vars.DAYTONA_API_URL }}
+          DAYTONA_CLOUD_ENV_GROUP_ID: ${{ vars.DAYTONA_CLOUD_ENV_GROUP_ID }}
+          DAYTONA_SNAPSHOT_NAME_BASE: ${{ vars.DAYTONA_SNAPSHOT_NAME_BASE }}
+          DAYTONA_SNAPSHOT_NAME: ${{ steps.resolve.outputs.snapshot_name }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DAYTONA_CLOUD_ENV_GROUP_ID:-}" ] || [ -z "${RENDER_API_KEY:-}" ]; then
+            echo "::notice::prune skipped: current pin unknown"
+            echo "prune skipped: current pin unknown" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! current_pin="$(node .snapshot-pin-automation/scripts/update-daytona-snapshot-pin.mjs --env-group-id "$DAYTONA_CLOUD_ENV_GROUP_ID" --read)"; then
+            echo "::notice::prune skipped: current pin unknown"
+            echo "prune skipped: current pin unknown" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ -z "$current_pin" ]; then
+            echo "::notice::prune skipped: current pin unknown"
+            echo "prune skipped: current pin unknown" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          result="$(node scripts/prune-daytona-dev-snapshots.mjs \
+            ${DAYTONA_API_URL:+--api-url "$DAYTONA_API_URL"} \
+            --name-base "${DAYTONA_SNAPSHOT_NAME_BASE:-openwork}" \
+            --keep "$DAYTONA_SNAPSHOT_NAME" \
+            --keep "$current_pin" \
+            --keep-count 5)"
+          echo "$result"
+          {
+            echo "### Daytona dev snapshot prune"
+            echo
+            echo '```'
+            echo "$result"
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

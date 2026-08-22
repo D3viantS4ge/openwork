@@ -28,6 +28,7 @@ export const WorkerTable = mysqlTable(
     index("worker_status").on(table.status),
     index("worker_last_heartbeat_at").on(table.last_heartbeat_at),
     index("worker_last_active_at").on(table.last_active_at),
+    index("worker_claimable_updated").on(table.destination, table.sandbox_backend, table.status, table.updated_at),
   ],
 )
 

@@ -13,7 +13,7 @@ import { getMcpConnectionsRoute } from "../../_lib/den-org";
 import { useDenFlow } from "../../_providers/den-flow-provider";
 import { useOrgDashboard } from "../_providers/org-dashboard-provider";
 import { ConnectorQuickAddGrid } from "./connector-quick-add-grid";
-import { useMcpConnectionPresets, useMcpConnections, useTelegramConnection } from "./mcp-connections-data";
+import { useMcpConnectionPresets, useMcpConnections } from "./mcp-connections-data";
 import { OrganizationDownloadCard } from "./organization-download-card";
 
 /* ── Types ── */
@@ -88,7 +88,6 @@ export function DashboardOverviewScreen() {
   const { user } = useDenFlow();
   const { data: connections = [] } = useMcpConnections();
   const { data: presets = [] } = useMcpConnectionPresets();
-  const telegramConnection = useTelegramConnection(true);
 
   const { data: adoption } = useQuery({
     queryKey: ["telemetry", "adoption"],
@@ -135,7 +134,6 @@ export function DashboardOverviewScreen() {
         <ConnectorQuickAddGrid
           connections={connections}
           presets={presets}
-          telegramConnected={Boolean(telegramConnection.data)}
           filter=""
           onSelect={(id) => {
             router.push(`${getMcpConnectionsRoute(activeOrg?.slug)}?quickAdd=${encodeURIComponent(id)}`);

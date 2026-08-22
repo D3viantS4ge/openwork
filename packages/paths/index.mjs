@@ -9,6 +9,56 @@ function pathApi(platform) {
   return platform === "win32" ? path.win32 : path.posix;
 }
 
+function invalidWindowsWorkspaceRoot(value) {
+  const error = new TypeError(`Invalid Windows workspace root: ${value}`);
+  Object.defineProperty(error, "code", { value: "invalid_workspace_root" });
+  return error;
+}
+
+function isWindowsDeviceNamespace(value) {
+  return /^\\\\[?.]\\/.test(value);
+}
+
+/**
+ * Normalizes Windows verbatim drive and UNC paths without consulting the
+ * filesystem. Missing drives and disconnected shares must remain unchanged so
+ * callers can report their real accessibility error instead of resolving them
+ * against another drive.
+ */
+export function normalizeWorkspaceRootPath(value, opts) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed || optionPlatform(opts) !== "win32") return trimmed;
+
+  const windowsPath = trimmed.replace(/\//g, "\\");
+  let normalized = windowsPath;
+  if (windowsPath.startsWith("\\\\?\\")) {
+    const verbatimPath = windowsPath.slice(4);
+    if (/^UNC(?:\\|$)/i.test(verbatimPath)) {
+      const uncPath = verbatimPath.slice(3).replace(/^\\/, "");
+      const [server, share] = uncPath.split("\\");
+      if (!server || !share) throw invalidWindowsWorkspaceRoot(trimmed);
+      normalized = `\\\\${uncPath}`;
+    } else {
+      if (!/^[A-Za-z]:\\/.test(verbatimPath)) throw invalidWindowsWorkspaceRoot(trimmed);
+      normalized = verbatimPath;
+    }
+  }
+
+  if (isWindowsDeviceNamespace(normalized)) {
+    throw invalidWindowsWorkspaceRoot(trimmed);
+  }
+
+  if (/^[A-Za-z]:(?!\\)/.test(normalized)) {
+    throw invalidWindowsWorkspaceRoot(trimmed);
+  }
+  if (normalized.startsWith("\\")) {
+    if (!normalized.startsWith("\\\\")) throw invalidWindowsWorkspaceRoot(trimmed);
+    const [server, share] = normalized.slice(2).split("\\");
+    if (!server || !share) throw invalidWindowsWorkspaceRoot(trimmed);
+  }
+  return normalized;
+}
+
 function optionEnv(opts) {
   return opts?.env ?? process.env;
 }

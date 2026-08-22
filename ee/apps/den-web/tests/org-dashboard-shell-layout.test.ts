@@ -14,6 +14,16 @@ describe("OrgDashboardShell layout", () => {
     expect(source).toMatch(/<main className="[^\"]*\bflex-1\b[^\"]*\boverflow-y-auto\b[^\"]*">/);
   });
 
+  test("pins the workspace switcher and scrolls only the nav when Settings expands", () => {
+    const source = readFileSync(shellPath, "utf8");
+
+    expect(source).toMatch(/<aside className="[^\"]*\boverflow-hidden\b[^\"]*\bmd:h-screen\b[^\"]*">/);
+    expect(source).toMatch(/<nav className="[^\"]*\bmin-h-0\b[^\"]*\boverflow-x-hidden\b[^\"]*\boverflow-y-auto\b[^\"]*" data-testid="den-org-sidebar">/);
+    expect(source).toContain('data-testid="den-org-sidebar-footer"');
+    expect(source).toMatch(/className="[^\"]*\bmt-auto\b[^\"]*\bshrink-0\b[^\"]*" data-testid="den-org-sidebar-footer"/);
+    expect(source).not.toMatch(/<aside className="[^\"]*\bmd:min-h-screen\b[^\"]*">/);
+  });
+
   test("bounds the workspace switcher and dismisses only outside pointer input", () => {
     const source = readFileSync(shellPath, "utf8");
 

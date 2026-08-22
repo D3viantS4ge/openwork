@@ -42,6 +42,7 @@ import type {
   OpenworkServerStatus,
 } from "../../../../app/lib/openwork-server";
 import {
+  DenApiError,
   createDenClient,
   readDenSettings,
   type DenOrgMarketplaceResolved,
@@ -63,6 +64,13 @@ import {
 } from "../../../../app/cloud/desktop-cloud-sync";
 import { notifyEvent } from "../../../shell/notifications";
 import type { OpenworkServerStore } from "../../connections/openwork-server-store";
+import { clearCloudInventoryCache } from "../../connections/cloud-inventory-cache";
+import {
+  denLibraryPluginCreateRequest,
+  waitForListedLibraryPlugin,
+  type CreateLibraryItemInput,
+  type LibraryAuthorableKind,
+} from "../library";
 
 const OPENCODE_SKILL_NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const OPENCODE_MCP_NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_-]*$/;
@@ -2227,6 +2235,64 @@ export function createExtensionsStore(options: {
     }
   }
 
+  async function createLibraryItem(
+    kind: LibraryAuthorableKind,
+    input: CreateLibraryItemInput,
+  ): Promise<string> {
+    const description = input.description.trim();
+    const instructions = input.instructions.trim();
+    const drafts = input.components?.filter((component) => component.name.trim() && component.content.trim()) ?? [];
+    if (!input.name.trim()) {
+      throw new Error(t("extensions.add_name_required"));
+    }
+    if (kind === "mcp") {
+      if (!instructions) {
+        throw new Error(t("extensions.add_mcp_url_required"));
+      }
+    } else if (kind !== "plugin") {
+      if (!description) {
+        throw new Error(t("extensions.add_description_required"));
+      }
+      if (!instructions) {
+        throw new Error(t("extensions.add_instructions_required"));
+      }
+    }
+    if (kind === "plugin" && drafts.length === 0) {
+      throw new Error(t("extensions.add_plugin_component_required"));
+    }
+
+    const settings = readDenSettings();
+    const token = settings.authToken?.trim() ?? "";
+    const orgId = settings.activeOrgId?.trim() ?? "";
+    if (!token || !orgId) {
+      throw new Error(t("extensions.add_sign_in_required"));
+    }
+    const client = createDenClient({
+      baseUrl: settings.baseUrl,
+      apiBaseUrl: settings.apiBaseUrl,
+      token,
+    });
+    const body = denLibraryPluginCreateRequest(kind, {
+      ...input,
+      components: kind === "plugin" ? drafts : input.components,
+    });
+    try {
+      await client.setActiveOrganization({ organizationId: orgId });
+      const pluginId = await client.createOrgPlugin(orgId, body);
+      await waitForListedLibraryPlugin(
+        () => client.listMeLibraryPlugins(orgId),
+        pluginId,
+      );
+      clearCloudInventoryCache();
+      return pluginId;
+    } catch (error) {
+      if (error instanceof DenApiError && error.status === 401) {
+        throw new Error(t("extensions.add_unauthorized"));
+      }
+      throw error;
+    }
+  }
+
   function abortRefreshes() {
     refreshSkillsAborted = true;
     refreshPluginsAborted = true;
@@ -2356,6 +2422,7 @@ export function createExtensionsStore(options: {
     uninstallSkill,
     readSkill,
     saveSkill,
+    createLibraryItem,
     abortRefreshes,
     ensureSkillsFresh,
     ensurePluginsFresh,

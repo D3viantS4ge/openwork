@@ -1,4 +1,5 @@
 import os from "node:os"
+import { readFileSync } from "node:fs"
 import path from "node:path"
 import { DEN_WORKER_POLL_INTERVAL_MS } from "./CONSTS.js"
 import { normalizeConfiguredPublicApiBaseUrl } from "./request-url.js"
@@ -81,20 +82,27 @@ const EnvSchema = z.object({
   OPENWORK_INSTALLER_RELEASE_TAG: z.string().optional(),
   OPENWORK_INSTALLER_RELEASE_REPO: z.string().optional(),
   OPENWORK_INSTALLER_CACHE_DIR: z.string().optional(),
+  DEN_DESKTOP_RELEASES_BASE_URL: z.string().optional(),
+  DEN_DESKTOP_RELEASES_MODE: z.enum(["github", "static"]).optional(),
   DEN_DESKTOP_DEN_BASE_URL: z.string().optional(),
   DEN_MARKETING_URL: z.string().optional(),
   DEN_MCP_CLAIM_NAMESPACE: z.string().optional(),
   DEN_BOOTSTRAP_ADMIN_EMAILS: z.string().optional(),
+  DEN_INITIAL_ADMIN_BOOTSTRAP_CODE: z.string().optional(),
+  DEN_INITIAL_ADMIN_BOOTSTRAP_CODE_FILE: z.string().optional(),
   WORKER_PROXY_PORT: z.string().optional(),
   WORKER_PROVISIONING_RECONCILE_INTERVAL_MS: z.string().optional(),
   WORKER_PROVISIONING_RECONCILE_STALE_MS: z.string().optional(),
   WORKER_PROVISIONING_RECONCILE_BATCH_SIZE: z.string().optional(),
+  CLOUD_PROVISION_DEADLINE_MS: z.string().optional(),
+  CLOUD_MATERIALIZATION_FAILURE_COOLDOWN_MS: z.string().optional(),
   CLOUD_IDLE_STOP_MINUTES: z.string().optional(),
   CLOUD_IDLE_LOOP_SECONDS: z.string().optional(),
   CLOUD_IDLE_STOP_BATCH_SIZE: z.string().optional(),
   PROVISIONER_MODE: z.enum(["stub", "render", "daytona"]).optional(),
   WORKER_URL_TEMPLATE: z.string().optional(),
   WORKER_ACTIVITY_BASE_URL: z.string().optional(),
+  DEN_AUTOMATIONS_ENABLED: z.string().optional(),
   DEN_AUTOMATIONS_POLL_INTERVAL_MS: z.string().optional(),
   DEN_AUTOMATIONS_BATCH_SIZE: z.string().optional(),
   DEN_AUTOMATIONS_MAX_CONCURRENCY: z.string().optional(),
@@ -232,6 +240,18 @@ function automationTuning(value: string | undefined, fallback: number) {
 function optionalString(value: string | undefined) {
   const trimmed = value?.trim()
   return trimmed ? trimmed : undefined
+}
+
+function readOptionalSecretFile(envName: string, pathValue: string | undefined) {
+  const filePath = optionalString(pathValue)
+  if (!filePath) {
+    return undefined
+  }
+  try {
+    return readFileSync(filePath, "utf8").trim()
+  } catch {
+    throw new Error(`${envName} must point to a readable file`)
+  }
 }
 
 export type DenOrgMode = "single_org" | "multi_org"
@@ -418,6 +438,8 @@ if (connectLinkMode === "signed" && (!connectLinkPrivateKeyPem || !connectLinkKi
     "DEN_CONNECT_LINK_MODE=signed requires DEN_CONNECT_LINK_PRIVATE_KEY and DEN_CONNECT_LINK_KEY_ID.",
   )
 }
+const initialAdminBootstrapCode = optionalString(parsed.DEN_INITIAL_ADMIN_BOOTSTRAP_CODE)
+  ?? readOptionalSecretFile("DEN_INITIAL_ADMIN_BOOTSTRAP_CODE_FILE", parsed.DEN_INITIAL_ADMIN_BOOTSTRAP_CODE_FILE)
 const connectLink = connectLinkMode === "signed" && connectLinkPrivateKeyPem && connectLinkKid
   ? { privateKeyPem: connectLinkPrivateKeyPem, kid: connectLinkKid }
   : null
@@ -435,10 +457,15 @@ const mcpConnectionsGatingEnabled =
 const generatedArtifactViewsEnabled =
   (parsed.DEN_GENERATED_ARTIFACT_VIEWS_ENABLED ?? "false").trim().toLowerCase() === "true"
 
-// Imported apps use the same stable Desktop MCP Apps bridge but have an
-// independent lifecycle from generated Artifact views and Code Mode Programs.
+// Native and imported MCP Apps require an explicit deployment opt-in plus an
+// explicit organization capability. Missing configuration always fails closed.
 const remoteMcpAppsEnabled =
   (parsed.DEN_REMOTE_MCP_APPS_ENABLED ?? "false").trim().toLowerCase() === "true"
+
+// Automations are deployment-sensitive and must be explicitly enabled. This
+// keeps direct and packaged self-hosted deployments fail-closed when the flag
+// is omitted; hosted OpenWork sets the same flag to true in its environment.
+const automationsEnabled = parseBooleanFlag(parsed.DEN_AUTOMATIONS_ENABLED ?? "false")
 
 const devMode = (parsed.OPENWORK_DEV_MODE ?? "0").trim() === "1"
 const botIdProtectionEnabled = (parsed.DEN_BOTID_PROTECTION_ENABLED ?? "0").trim() === "1"
@@ -475,6 +502,7 @@ const allowInsecureInternalRedis = parseBooleanFlag(parsed.DATABASE_REDIS_ALLOW_
 const requireEmailVerification = parsed.DEN_REQUIRE_EMAIL_VERIFICATION === undefined
   ? orgMode === "multi_org" && !devMode
   : parsed.DEN_REQUIRE_EMAIL_VERIFICATION.trim().toLowerCase() !== "false"
+// Fail-closed even in dev mode: offline rigs opt out explicitly via DEN_PASSWORD_BREACH_SCREENING_ENABLED=false.
 const passwordBreachScreeningEnabled = parsed.DEN_PASSWORD_BREACH_SCREENING_ENABLED === undefined
   ? true
   : parsed.DEN_PASSWORD_BREACH_SCREENING_ENABLED.trim().toLowerCase() !== "false"
@@ -606,6 +634,10 @@ export const env = {
   installerReleaseTagExplicit: optionalString(parsed.OPENWORK_INSTALLER_RELEASE_TAG) !== undefined,
   installerReleaseRepo: optionalString(parsed.OPENWORK_INSTALLER_RELEASE_REPO) ?? "different-ai/openwork",
   installerCacheDir: optionalString(parsed.OPENWORK_INSTALLER_CACHE_DIR) ?? path.join(os.tmpdir(), "openwork-desktop-artifacts"),
+  // Desktop-release endpoint overrides for evals/self-host testing. Static mode
+  // keeps air-gapped deployments on the committed release snapshot.
+  desktopReleasesBaseUrl: optionalString(parsed.DEN_DESKTOP_RELEASES_BASE_URL),
+  desktopReleasesMode: parsed.DEN_DESKTOP_RELEASES_MODE ?? "github",
   // Native-provider endpoint overrides for evals/self-host testing. Unset in
   // production so Google, Microsoft Entra, and Graph use their public APIs.
   googleOAuthAuthorizeUrl: optionalString(parsed.DEN_GOOGLE_OAUTH_AUTHORIZE_URL),
@@ -619,10 +651,13 @@ export const env = {
   marketingUrl: optionalString(parsed.DEN_MARKETING_URL),
   mcpClaimNamespace: normalizeOrigin(optionalString(parsed.DEN_MCP_CLAIM_NAMESPACE) ?? parsed.BETTER_AUTH_URL),
   bootstrapAdminEmails: splitCsv(parsed.DEN_BOOTSTRAP_ADMIN_EMAILS).map((email) => email.toLowerCase()),
+  initialAdminBootstrapCode,
   provisionerMode: parsed.PROVISIONER_MODE ?? "stub",
   workerProvisioningReconcileIntervalMs: Number(parsed.WORKER_PROVISIONING_RECONCILE_INTERVAL_MS ?? "60000"),
   workerProvisioningReconcileStaleMs: Number(parsed.WORKER_PROVISIONING_RECONCILE_STALE_MS ?? "1200000"),
   workerProvisioningReconcileBatchSize: Number(parsed.WORKER_PROVISIONING_RECONCILE_BATCH_SIZE ?? "10"),
+  cloudProvisionDeadlineMs: Number(parsed.CLOUD_PROVISION_DEADLINE_MS ?? "900000"),
+  cloudMaterializationFailureCooldownMs: Number(parsed.CLOUD_MATERIALIZATION_FAILURE_COOLDOWN_MS ?? "120000"),
   cloudIdleStopMs: Number(parsed.CLOUD_IDLE_STOP_MINUTES ?? "30") * 60_000,
   cloudIdleLoopIntervalMs: Number(parsed.CLOUD_IDLE_LOOP_SECONDS ?? "60") * 1000,
   cloudIdleStopBatchSize: Number(parsed.CLOUD_IDLE_STOP_BATCH_SIZE ?? "10"),
@@ -631,12 +666,18 @@ export const env = {
     optionalString(parsed.WORKER_ACTIVITY_BASE_URL) ??
     parsed.BETTER_AUTH_URL.trim().replace(/\/+$/, ""),
   automations: {
+    enabled: automationsEnabled,
     pollIntervalMs: automationTuning(parsed.DEN_AUTOMATIONS_POLL_INTERVAL_MS, 15_000),
     batchSize: automationTuning(parsed.DEN_AUTOMATIONS_BATCH_SIZE, 25),
     maxConcurrency: automationTuning(parsed.DEN_AUTOMATIONS_MAX_CONCURRENCY, 4),
     leaseMs: automationTuning(parsed.DEN_AUTOMATIONS_LEASE_MS, 60_000),
     runTimeoutMs: automationTuning(parsed.DEN_AUTOMATIONS_RUN_TIMEOUT_MS, 900_000),
-    runnerClaimDeadlineMs: automationTuning(parsed.DEN_AUTOMATIONS_RUNNER_CLAIM_DEADLINE_MS, 60_000),
+    // How long a desktop occurrence stays claimable. A desktop is a laptop
+    // that sleeps, restarts, and changes networks, so this is a recovery
+    // window rather than a liveness check: a desktop that returns inside it
+    // still runs the occurrence, and only a genuinely absent desktop misses.
+    // Runs never stay claimable past their own next occurrence.
+    runnerClaimDeadlineMs: automationTuning(parsed.DEN_AUTOMATIONS_RUNNER_CLAIM_DEADLINE_MS, 900_000),
   },
   inferenceProxyBaseUrl: optionalString(parsed.INFERENCE_PROXY_BASE_URL) ?? "http://127.0.0.1:8791",
   openRouterManagementApiKey: optionalString(parsed.OPENROUTER_MANAGEMENT_API_KEY),

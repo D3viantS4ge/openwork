@@ -136,6 +136,48 @@ describe("tool part mapper", () => {
     });
   });
 
+  test("recovers a connection-action MCP App from an errored capability result", () => {
+    const error = JSON.stringify({
+      error: "needs_connection",
+      message: "Connect Acme Tracker.",
+      connectionStatus: {
+        connectionId: "emc_acme",
+        connectionName: "Acme Tracker",
+        state: "needs_connection",
+        actor: "member",
+        message: "Acme Tracker is not connected.",
+        action: {
+          type: "connect",
+          label: "Connect Acme Tracker",
+          surface: "openwork_your_connections",
+          url: "https://app.openworklabs.com/dashboard/your-connections?connectionId=emc_acme",
+        },
+      },
+    });
+
+    expect(parseDynamicToolUIPart(writeToolPart("error", {}, {}, error))).toMatchObject({
+      state: "output-error",
+      callProviderMetadata: {
+        openwork: {
+          mcpResult: {
+            structuredContent: {
+              schemaVersion: "1",
+              connectionId: "emc_acme",
+              state: "needs_connection",
+            },
+            _meta: {
+              "openwork/mcpApp": {
+                toolName: "connection_action",
+                resourceUri: "ui://openwork/connection-action/v1/view.html",
+                arguments: { connectionId: "emc_acme" },
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
   test("summarizes and clamps huge HTML tool errors at ingestion", () => {
     const htmlError = `<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body>${"x".repeat(1_024 * 1_024)}</body></html>`;
     const parsed = parseDynamicToolUIPart(writeToolPart("error", {}, {}, htmlError));

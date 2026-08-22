@@ -376,6 +376,7 @@ export function registerMeRoutes<T extends { Variables: AuthContextVariables & P
 
       return c.json({
         ...desktopPolicy,
+        automationsEnabled: env.automations.enabled,
         connectEnabled: memberFacingMcpConnectionsEnabled(organization.metadata, {
           gatingEnabled: env.mcpConnectionsGatingEnabled,
         }),

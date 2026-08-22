@@ -49,12 +49,15 @@ import { useDesktopRestriction } from "@/react-app/domains/cloud/desktop-config-
 import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal"
 import { AutomationEditor } from "./automation-editor"
 import { dispatchAutomationsStateChanged } from "./automation-events"
-import { automationExecutionThreadRoute, automationExecutionIdentity } from "./automation-cloud-thread"
+import { automationExecutionThreadRoute, automationExecutionIdentity, automationLocalSessionRoute } from "./automation-cloud-thread"
 import { formatAutomationSchedule, formatAutomationTime } from "./automation-format"
 import type { AutomationProviderCatalog } from "./automation-model-options"
 import { automationModelOptions, describeAutomationModel } from "./automation-model-options"
 
 const ACTIVE_RUN_STATUSES = new Set<AutomationRun["status"]>(["queued", "claimed", "running"])
+const AUTOMATIONS_PAGE_FAST_POLL_MS = 10_000
+const AUTOMATIONS_PAGE_SLOW_POLL_MS = 60_000
+const AUTOMATIONS_PAGE_FAST_POLL_WINDOW_MS = 5 * 60_000
 
 function stateLabel(state: AutomationState) {
   if (state === "needs_attention") return "Needs attention"
@@ -76,7 +79,10 @@ function runVariant(status: AutomationRun["status"]): "default" | "secondary" | 
 
 function runLabel(run: AutomationRun) {
   if (run.status === "skipped" && run.error?.code === "runner_unavailable") {
-    return "Missed — desktop runner unavailable"
+    // Den names the cause it observed — no desktop, a busy desktop, or one
+    // that stayed silent. Older receipts predate that and carry the single
+    // generic wording, so fall back rather than restate it for every cause.
+    return run.error.message.trim() || "Missed — desktop runner unavailable"
   }
   if (run.status === "skipped" && (run.error?.code === "model_access_lost" || run.error?.code === "provider_unavailable")) {
     return "Skipped — model unavailable"
@@ -157,6 +163,7 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
   const selectedRunId = searchParams.get("run")?.trim() || null
   const selectedThreadId = searchParams.get("thread")?.trim() || null
   const creating = searchParams.get("create") === "1"
+  const [pageMountedAt] = useState(() => Date.now())
   const ready = denAuth.isSignedIn && Boolean(client && organizationId)
   const queryRoot = ["den", "automations", organizationId]
   const zenModelRestricted = useDesktopRestriction("allowZenModel")
@@ -168,13 +175,28 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
     queryKey: [...queryRoot, "list"],
     queryFn: () => client!.listAutomations(organizationId!, { limit: 100 }),
     enabled: ready,
-    refetchInterval: 15_000,
+    refetchInterval: () => Date.now() - pageMountedAt < AUTOMATIONS_PAGE_FAST_POLL_WINDOW_MS
+      ? AUTOMATIONS_PAGE_FAST_POLL_MS
+      : AUTOMATIONS_PAGE_SLOW_POLL_MS,
   })
   const providersQuery = useQuery({
     queryKey: [...queryRoot, "models"],
     queryFn: () => client!.listOrgLlmProviders(organizationId!),
     enabled: ready,
   })
+  const runnerPresenceQuery = useQuery({
+    queryKey: [...queryRoot, "runner-presence"],
+    queryFn: () => client!.getAutomationDesktopRunnerPresence(organizationId!),
+    enabled: ready,
+    // A failed probe waits for the next interval instead of retrying, and a
+    // Den without the route answers null once — there is nothing to poll.
+    retry: false,
+    refetchInterval: (queryState) => (queryState.state.data === null ? false : 60_000),
+  })
+  // Only a Den that positively reports no desktop earns the warning. A Den too
+  // old to answer, or one that has not answered yet, leaves presence unknown,
+  // and claiming there is no desktop on that basis would be worse than silence.
+  const noDesktopConnected = runnerPresenceQuery.data?.connected === false
   const detailQuery = useQuery({
     queryKey: [...queryRoot, "detail", selectedId],
     queryFn: () => client!.getAutomation(organizationId!, selectedId!),
@@ -184,7 +206,9 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
     queryKey: [...queryRoot, "runs", selectedId],
     queryFn: () => client!.listAutomationRuns(organizationId!, selectedId!, { limit: 100 }),
     enabled: ready && Boolean(selectedId),
-    refetchInterval: 5_000,
+    refetchInterval: (queryState) => queryState.state.data?.items.some((run) => ACTIVE_RUN_STATUSES.has(run.status))
+      ? AUTOMATIONS_PAGE_FAST_POLL_MS
+      : AUTOMATIONS_PAGE_SLOW_POLL_MS,
   })
   const receiptQuery = useQuery({
     queryKey: [...queryRoot, "receipt", selectedRunId],
@@ -192,7 +216,7 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
     enabled: ready && Boolean(selectedRunId),
     refetchInterval: (queryState) => {
       const run = queryState.state.data?.run
-      return run && ACTIVE_RUN_STATUSES.has(run.status) ? 3_000 : false
+      return run && ACTIVE_RUN_STATUSES.has(run.status) ? AUTOMATIONS_PAGE_FAST_POLL_MS : false
     },
   })
 
@@ -327,8 +351,12 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
     const modelNeedsAttention = task.needsAttentionReason?.code === "model_access_lost"
       || task.needsAttentionReason?.code === "provider_unavailable"
     const runs = runsQuery.data?.items ?? []
-    const selectedReceipt = receiptQuery.data
+    const selectedReceipt = receiptQuery.data?.run.id === selectedRunId ? receiptQuery.data : undefined
+    const receiptIsLoading = receiptQuery.isLoading || (receiptQuery.isFetching && !selectedReceipt)
     const threadMatches = !selectedThreadId || selectedReceipt?.run.executionThread?.id === selectedThreadId
+    const localSessionRoute = selectedReceipt?.run.executionThread
+      ? automationLocalSessionRoute(selectedReceipt.run.executionThread)
+      : null
 
     if (editing && (detail.revision.executionTarget ?? "desktop") === "desktop") {
       return (
@@ -424,6 +452,21 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
             </Button>
           </div>
         </div>
+
+        {(detail.revision.executionTarget ?? "desktop") === "desktop"
+          && task.state === "active"
+          && noDesktopConnected ? (
+          <Alert variant="warning" data-automation-runner-offline>
+            <AlertCircle />
+            <AlertTitle>No desktop connected</AlertTitle>
+            <AlertDescription>
+              <p>
+                This Automation runs on your desktop, and Den cannot see one right now. Occurrences that
+                come due are recorded as missed unless a signed-in desktop is running by then.
+              </p>
+            </AlertDescription>
+          </Alert>
+        ) : null}
 
         {task.needsAttentionReason ? (
           <Alert variant="warning" data-automation-model-attention={modelNeedsAttention || undefined}>
@@ -538,7 +581,7 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
             <CardContent>
               {!selectedRunId ? (
                 <div className="py-10 text-center text-sm text-muted-foreground">No run selected.</div>
-              ) : receiptQuery.isLoading ? (
+              ) : receiptIsLoading ? (
                 <Skeleton className="h-48 rounded-xl" />
               ) : receiptQuery.error || !selectedReceipt ? (
                 <Alert variant="warning"><AlertCircle /><AlertDescription>{describeError(receiptQuery.error)}</AlertDescription></Alert>
@@ -555,6 +598,17 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
                     ) : (
                       <Badge variant="outline">{selectedReceipt.run.executionTarget === "cloud" ? <Cloud className="mr-1 h-3 w-3" /> : <Monitor className="mr-1 h-3 w-3" />}{selectedReceipt.run.executionTarget === "cloud" ? "OpenWork Cloud" : "Desktop"}</Badge>
                     )}
+                    {localSessionRoute ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        data-automation-run-id={selectedReceipt.run.id}
+                        onClick={() => navigate(localSessionRoute)}
+                      >
+                        Open local thread
+                      </Button>
+                    ) : null}
                   </div>
                   {selectedReceipt.run.error ? (
                     <Alert variant="destructive"><AlertCircle /><AlertTitle>{selectedReceipt.run.error.code}</AlertTitle><AlertDescription>{selectedReceipt.run.error.message}</AlertDescription></Alert>
@@ -629,6 +683,7 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
             <button
               key={item.automation.id}
               type="button"
+              data-automation-id={item.automation.id}
               {...(item.automation.state === "needs_attention" ? { "data-automation-needs-attention": true } : {})}
               className="rounded-2xl border border-border bg-card p-4 text-left transition-colors hover:bg-muted/40"
               onClick={() => openAutomation(item.automation.id)}

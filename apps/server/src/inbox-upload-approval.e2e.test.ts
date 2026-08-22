@@ -14,6 +14,7 @@ const stops: Array<() => void | Promise<void>> = [];
 const roots: string[] = [];
 
 afterEach(async () => {
+  globalThis.__openworkDesktopTelemetry = undefined;
   while (stops.length) await stops.pop()?.();
   while (roots.length) await rm(roots.pop()!, { recursive: true, force: true });
 });
@@ -45,6 +46,95 @@ async function startManualApprovalServer() {
 }
 
 describe("inbox uploads under manual approval mode", () => {
+  test("malformed multipart is a stable client error without unexpected telemetry", async () => {
+    const { base, token } = await startManualApprovalServer();
+    const captured: unknown[] = [];
+    globalThis.__openworkDesktopTelemetry = {
+      captureException: (error) => {
+        captured.push(error);
+        return true;
+      },
+    };
+
+    const response = await fetch(`${base}/workspace/ws_1/inbox`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "multipart/form-data; boundary=openwork-test",
+      },
+      body: "not a multipart body",
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      code: "invalid_payload",
+      message: "Malformed multipart/form-data",
+    });
+    expect(captured).toEqual([]);
+  });
+
+  test("rejects an oversized destination path component as invalid_path", async () => {
+    const { base, token } = await startManualApprovalServer();
+    const form = new FormData();
+    form.append("file", new File(["valid"], "valid.txt", { type: "text/plain" }));
+    const inboxPath = `chat-attachments/session-1/${"a".repeat(256)}.txt`;
+
+    const response = await fetch(
+      `${base}/workspace/ws_1/inbox?path=${encodeURIComponent(inboxPath)}`,
+      { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      code: "invalid_path",
+      message: "Path components must not exceed 255 UTF-8 bytes",
+    });
+  });
+
+  test("preserves a valid upload whose destination basename is exactly 255 bytes", async () => {
+    const { base, token, root } = await startManualApprovalServer();
+    const bytes = new TextEncoder().encode("boundary upload");
+    const form = new FormData();
+    form.append("file", new File([bytes], "valid.txt", { type: "text/plain" }));
+    const basename = `${"a".repeat(251)}.txt`;
+    const inboxPath = `chat-attachments/session-1/${basename}`;
+
+    const response = await fetch(
+      `${base}/workspace/ws_1/inbox?path=${encodeURIComponent(inboxPath)}`,
+      { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form },
+    );
+
+    expect(new TextEncoder().encode(basename).byteLength).toBe(255);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, path: inboxPath, bytes: bytes.length });
+    const dest = join(root, ".opencode", "openwork", "inbox", inboxPath);
+    expect(Array.from(new Uint8Array(await readFile(dest)))).toEqual(Array.from(bytes));
+  });
+
+  test("rejects Windows-unsafe destination segments before an approval-free upload", async () => {
+    const { base, token, root } = await startManualApprovalServer();
+    const inboxPaths = [
+      "chat-attachments/session-1/CON.txt",
+      "chat-attachments/session-1/screenshot.png:metadata",
+      "chat-attachments/session-1/screenshot.png.",
+      "chat-attachments/session-1/screenshot.png ",
+      "chat-attachments/session-1./screenshot.png",
+    ];
+
+    for (const inboxPath of inboxPaths) {
+      const form = new FormData();
+      form.append("file", new File(["unsafe"], "valid.txt", { type: "text/plain" }));
+      const response = await fetch(
+        `${base}/workspace/ws_1/inbox?path=${encodeURIComponent(inboxPath)}`,
+        { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form },
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ code: "invalid_path" });
+      await expect(stat(join(root, ".opencode", "openwork", "inbox", inboxPath))).rejects.toThrow();
+    }
+  });
+
   test("chat-attachment inbox upload succeeds immediately without host approval", async () => {
     const { base, token, root } = await startManualApprovalServer();
     const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]);

@@ -205,7 +205,7 @@ function startMockOpencode(input?: { invalidList?: boolean; holdCommand?: Promis
   return { server, requests };
 }
 
-async function startOpenworkServer(input: { workspaceRoot: string; opencodeBaseUrl: string; readOnly?: boolean }) {
+async function startOpenworkServer(input: { workspaceRoot: string; opencodeBaseUrl?: string; readOnly?: boolean }) {
   const config: ServerConfig = {
     host: "127.0.0.1",
     port: 0,
@@ -220,7 +220,7 @@ async function startOpenworkServer(input: { workspaceRoot: string; opencodeBaseU
         path: input.workspaceRoot,
         preset: "starter",
         workspaceType: "local",
-        baseUrl: input.opencodeBaseUrl,
+        ...(input.opencodeBaseUrl ? { baseUrl: input.opencodeBaseUrl } : {}),
       },
     ],
     authorizedRoots: [input.workspaceRoot],
@@ -513,6 +513,24 @@ describe("workspace session read APIs", () => {
       code: "opencode_invalid_response",
       message: "OpenCode returned invalid session list",
     });
+  });
 
+  test("returns a configured error instead of constructing an SDK request with a relative URL", async () => {
+    const workspaceRoot = await createWorkspaceRoot();
+    const openwork = await startOpenworkServer({ workspaceRoot });
+
+    const response = await fetch(`http://127.0.0.1:${openwork.server.port}/workspace/ws_1/sessions?limit=200`, {
+      headers: auth(openwork.token),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "opencode_unconfigured",
+      message: "OpenCode base URL is missing for this workspace",
+      details: {
+        workspaceId: "ws_1",
+        workspaceType: "local",
+      },
+    });
   });
 });

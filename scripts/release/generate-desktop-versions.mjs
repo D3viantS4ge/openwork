@@ -1,4 +1,14 @@
 #!/usr/bin/env node
+/**
+ * Refreshes den-api's COLD-START FALLBACK snapshot of published desktop
+ * versions (ee/apps/den-api/src/generated/desktop-versions.ts).
+ *
+ * At runtime den-api discovers published versions from the GitHub Releases
+ * API (src/desktop-releases.ts); this committed snapshot only serves
+ * air-gapped deployments and the window before the first successful fetch.
+ * It is no longer regenerated per release — refresh it occasionally via:
+ *   node scripts/release/generate-desktop-versions.mjs --version <latest>
+ */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -79,11 +89,6 @@ export function readGeneratedDesktopVersions(filePath = GENERATED_DESKTOP_VERSIO
   return versions;
 }
 
-function readCurrentVersion() {
-  const packageJson = JSON.parse(readFileSync(resolve(root, "apps/app/package.json"), "utf8"));
-  return packageJson.version;
-}
-
 function readStableTags() {
   return execFileSync("git", ["tag", "--list", "v*"], {
     cwd: root,
@@ -94,7 +99,12 @@ function readStableTags() {
 function main() {
   const args = process.argv.slice(2);
   const versionIndex = args.indexOf("--version");
-  const currentVersion = versionIndex >= 0 ? args[versionIndex + 1] : readCurrentVersion();
+  const currentVersion = versionIndex >= 0 ? args[versionIndex + 1] : null;
+  if (!currentVersion) {
+    throw new Error(
+      "Pass --version X.Y.Z (package.json holds the 0.0.0-dev placeholder; versions live in git tags).",
+    );
+  }
   const dryRun = args.includes("--dry-run");
   const existingVersions = existsSync(GENERATED_DESKTOP_VERSIONS_PATH)
     ? readGeneratedDesktopVersions()

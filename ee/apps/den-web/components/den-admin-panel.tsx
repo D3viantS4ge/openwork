@@ -35,9 +35,38 @@ type AdminUserOrganization = {
 };
 
 type AdminEntry = {
+  id: string;
   email: string;
   note: string | null;
+  createdAt: string;
 };
+
+type InferenceUsageWindow = {
+  bucketId: string;
+  windowType: string;
+  windowStartAt: string;
+  windowEndAt: string;
+  limitAmount: number;
+  organizationUsedAmount: number;
+  userUsedAmount: number;
+};
+
+type InferenceUsageOrganization = {
+  id: string;
+  name: string;
+  membershipId: string;
+  windows: InferenceUsageWindow[];
+};
+
+type InferenceUsagePayload = {
+  user: { id: string; email: string };
+  organizations: InferenceUsageOrganization[];
+};
+
+type InferenceUsageCacheEntry =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; data: InferenceUsagePayload };
 
 type ActivityPoint = {
   day: string;
@@ -101,7 +130,8 @@ type AdminUser = {
 type AdminOrganizationCapabilities = {
   installLinks: boolean;
   mcpConnections: boolean;
-  codemodeScripts: boolean;
+  workflows: boolean;
+  remoteMcpApps: boolean;
   cloud: boolean;
 };
 
@@ -347,13 +377,15 @@ function parseAdminPayload(payload: unknown): AdminPayload | null {
 
   const admins: AdminEntry[] = payload.admins
     .map((value) => {
-      if (!isRecord(value) || typeof value.email !== "string") {
+      if (!isRecord(value) || typeof value.id !== "string" || typeof value.email !== "string" || typeof value.createdAt !== "string") {
         return null;
       }
 
       return {
+        id: value.id,
         email: value.email,
-        note: toStringValue(value.note)
+        note: toStringValue(value.note),
+        createdAt: value.createdAt
       };
     })
     .filter((value): value is AdminEntry => value !== null);
@@ -387,7 +419,8 @@ function parseAdminPayload(payload: unknown): AdminPayload | null {
           capabilities: {
             installLinks: capabilities.installLinks === true,
             mcpConnections: capabilities.mcpConnections === true,
-            codemodeScripts: capabilities.codemodeScripts === true,
+            workflows: capabilities.workflows === true,
+            remoteMcpApps: capabilities.remoteMcpApps === true,
             cloud: capabilities.cloud === true
           }
         };
@@ -479,6 +512,38 @@ function parseAdminMetricsPayload(payload: unknown): AdminMetricsPayload | null 
     summary: parseAdminSummary(payload.summary, 0),
     generatedAt: toStringValue(payload.generatedAt)
   };
+}
+
+function parseInferenceUsagePayload(payload: unknown): InferenceUsagePayload | null {
+  if (!isRecord(payload) || !isRecord(payload.user) || typeof payload.user.id !== "string" || typeof payload.user.email !== "string" || !Array.isArray(payload.organizations)) {
+    return null;
+  }
+
+  const organizations: InferenceUsageOrganization[] = [];
+  for (const value of payload.organizations) {
+    if (!isRecord(value) || typeof value.id !== "string" || typeof value.name !== "string" || typeof value.membershipId !== "string" || !Array.isArray(value.windows)) {
+      return null;
+    }
+
+    const windows: InferenceUsageWindow[] = [];
+    for (const window of value.windows) {
+      if (!isRecord(window) || typeof window.bucketId !== "string" || typeof window.windowType !== "string" || typeof window.windowStartAt !== "string" || typeof window.windowEndAt !== "string") {
+        return null;
+      }
+      windows.push({
+        bucketId: window.bucketId,
+        windowType: window.windowType,
+        windowStartAt: window.windowStartAt,
+        windowEndAt: window.windowEndAt,
+        limitAmount: toNumberValue(window.limitAmount),
+        organizationUsedAmount: toNumberValue(window.organizationUsedAmount),
+        userUsedAmount: toNumberValue(window.userUsedAmount)
+      });
+    }
+    organizations.push({ id: value.id, name: value.name, membershipId: value.membershipId, windows });
+  }
+
+  return { user: { id: payload.user.id, email: payload.user.email }, organizations };
 }
 
 function clearPersistedAdminOverviewCache() {
@@ -726,7 +791,7 @@ function buildFixtureOrganization(index: number): AdminOrganization {
     freeSeatCount: target ? 25 : DEFAULT_FREE_SEAT_COUNT,
     seatsFreeAdditional: target ? 20 : 0,
     billableSeatCount: target ? 103 : 0,
-    capabilities: { installLinks: target, mcpConnections: target, codemodeScripts: false, cloud: false }
+    capabilities: { installLinks: target, mcpConnections: target, workflows: false, remoteMcpApps: false, cloud: false }
   };
 }
 
@@ -843,7 +908,7 @@ function adminScaleFixturePayload(path: string): unknown | null {
     const durationMs = Math.round(performance.now() - startedAt);
     return {
       viewer: { id: "user_admin_fixture", email: "admin@example.com", name: "Admin Fixture" },
-      admins: [{ email: "admin@example.com", note: "Eval fixture admin" }],
+      admins: [{ id: "admin_fixture", email: "admin@example.com", note: "Eval fixture admin", createdAt: generatedAt }],
       users: users.rows,
       organizations: [],
       userPage: fixturePageInfo(ADMIN_SCALE_FIXTURE_USERS, users.rows.length, 0, "", durationMs),
@@ -889,6 +954,25 @@ function adminScaleFixturePayload(path: string): unknown | null {
   return null;
 }
 
+const AUTH_TOKEN_STORAGE_KEY = "openwork:web:auth-token";
+
+// The den proxy strips cookies from requests whose Origin matches a cloud
+// instance origin (they are bearer-only by design), and browsers always send
+// an Origin header on mutating fetches. Cookie-only admin writes therefore
+// 401 when den-web itself is served from such an origin. Attach the stored
+// bearer token like den-flow's requestJson does; den-api accepts either
+// credential, so cookie-authenticated sessions keep working unchanged.
+function withStoredBearer(headers: Record<string, string>): Record<string, string> {
+  if (typeof window === "undefined") {
+    return headers;
+  }
+  const token = window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)?.trim();
+  if (!token) {
+    return headers;
+  }
+  return { ...headers, Authorization: `Bearer ${token}` };
+}
+
 async function requestJson(path: string, signal?: AbortSignal) {
   const fixturePayload = adminScaleFixturePayload(path);
   if (fixturePayload) {
@@ -899,9 +983,9 @@ async function requestJson(path: string, signal?: AbortSignal) {
     method: "GET",
     credentials: "include",
     signal,
-    headers: {
+    headers: withStoredBearer({
       Accept: "application/json"
-    }
+    })
   });
 
   const text = await response.text();
@@ -926,10 +1010,10 @@ async function patchJson(path: string, body: unknown) {
   const response = await fetch(`/api/den${path}`, {
     method: "PATCH",
     credentials: "include",
-    headers: {
+    headers: withStoredBearer({
       Accept: "application/json",
       "Content-Type": "application/json"
-    },
+    }),
     body: JSON.stringify(body)
   });
 
@@ -947,14 +1031,37 @@ async function patchJson(path: string, body: unknown) {
   return { response, payload };
 }
 
+async function postJson(path: string, body: unknown) {
+  const response = await fetch(`/api/den${path}`, {
+    method: "POST",
+    credentials: "include",
+    headers: withStoredBearer({
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    }),
+    body: JSON.stringify(body)
+  });
+
+  const text = await response.text();
+  let payload: unknown = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = text;
+    }
+  }
+  return { response, payload };
+}
+
 async function putJson(path: string, body: unknown) {
   const response = await fetch(`/api/den${path}`, {
     method: "PUT",
     credentials: "include",
-    headers: {
+    headers: withStoredBearer({
       Accept: "application/json",
       "Content-Type": "application/json"
-    },
+    }),
     body: JSON.stringify(body)
   });
 
@@ -976,9 +1083,9 @@ async function deleteJson(path: string) {
   const response = await fetch(`/api/den${path}`, {
     method: "DELETE",
     credentials: "include",
-    headers: {
+    headers: withStoredBearer({
       Accept: "application/json"
-    }
+    })
   });
 
   const text = await response.text();
@@ -1070,6 +1177,27 @@ function formatOptionalCount(value: number | null): string {
 
 function formatOptionalDetail(value: number | null, label: string): string {
   return value === null ? "Load analytics to calculate" : `${value} ${label}`;
+}
+
+function formatUsageAmount(value: number): string {
+  return new Intl.NumberFormat(undefined, {
+    notation: Math.abs(value) >= 10_000 ? "compact" : "standard",
+    maximumFractionDigits: Math.abs(value) >= 10_000 ? 2 : 3
+  }).format(value);
+}
+
+function formatWindowType(value: string): string {
+  const normalized = value.toLowerCase().replace(/[-_]/g, " ");
+  if (normalized.includes("five") || normalized.includes("5 hour") || normalized.includes("5h")) {
+    return "Five-hour";
+  }
+  if (normalized.includes("week")) {
+    return "Weekly";
+  }
+  if (normalized.includes("month")) {
+    return "Monthly";
+  }
+  return formatProvider(value);
 }
 
 function formatProvider(provider: string): string {
@@ -1305,6 +1433,13 @@ export function DenAdminPanel() {
   const [capabilityError, setCapabilityError] = useState<{ orgId: string; message: string } | null>(null);
   const [deleteUserDialog, setDeleteUserDialog] = useState<AdminUser | null>(null);
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
+  const [adminEmail, setAdminEmail] = useState("");
+  const [adminNote, setAdminNote] = useState("");
+  const [adminMutationId, setAdminMutationId] = useState<string | null>(null);
+  const [usageByUserId, setUsageByUserId] = useState<Record<string, InferenceUsageCacheEntry>>({});
+  const [resetUsageDialog, setResetUsageDialog] = useState<AdminUser | null>(null);
+  const [resettingUsageUserId, setResettingUsageUserId] = useState<string | null>(null);
+  const [resetSuccessByUserId, setResetSuccessByUserId] = useState<Record<string, number>>({});
   const mountedAtRef = useRef<number | null>(null);
   const overviewRequestIdRef = useRef(0);
   const userRequestIdRef = useRef(0);
@@ -1587,6 +1722,103 @@ export function DenAdminPanel() {
       setAnalyticsLoading(false);
     }
   }, []);
+
+  const loadInferenceUsage = useCallback(async (userId: string) => {
+    setUsageByUserId((current) => ({ ...current, [userId]: { status: "loading" } }));
+    try {
+      const { response, payload: nextPayload } = await requestJson(`/v1/admin/users/${encodeURIComponent(userId)}/inference-usage`);
+      if (!response.ok) {
+        const message = getErrorMessage(nextPayload, `Could not load model consumption (${response.status}).`);
+        setUsageByUserId((current) => ({ ...current, [userId]: { status: "error", message } }));
+        return;
+      }
+      const parsed = parseInferenceUsagePayload(nextPayload);
+      if (!parsed) {
+        setUsageByUserId((current) => ({ ...current, [userId]: { status: "error", message: "Model consumption payload was missing required fields." } }));
+        return;
+      }
+      setUsageByUserId((current) => ({ ...current, [userId]: { status: "ready", data: parsed } }));
+    } catch (nextError) {
+      const message = nextError instanceof Error ? nextError.message : "Unknown network error";
+      setUsageByUserId((current) => ({ ...current, [userId]: { status: "error", message } }));
+    }
+  }, []);
+
+  const addAdmin = useCallback(async () => {
+    const email = adminEmail.trim();
+    const note = adminNote.trim();
+    if (!email) {
+      setError("Enter an email address for the new platform admin.");
+      return;
+    }
+    setAdminMutationId("add");
+    setError(null);
+    try {
+      const { response, payload: nextPayload } = await postJson("/v1/admin/admins", note ? { email, note } : { email });
+      const admin = isRecord(nextPayload) && isRecord(nextPayload.admin) ? nextPayload.admin : null;
+      if (!response.ok || !admin || typeof admin.id !== "string" || typeof admin.email !== "string" || typeof admin.createdAt !== "string") {
+        setError(getErrorMessage(nextPayload, `Could not add ${email}.`));
+        return;
+      }
+      const entry: AdminEntry = { id: admin.id, email: admin.email, note: toStringValue(admin.note), createdAt: admin.createdAt };
+      setPayload((current) => current ? {
+        ...current,
+        admins: [...current.admins, entry],
+        summary: { ...current.summary, adminCount: current.summary.adminCount + 1 }
+      } : current);
+      setAdminEmail("");
+      setAdminNote("");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unknown network error");
+    } finally {
+      setAdminMutationId(null);
+    }
+  }, [adminEmail, adminNote]);
+
+  const removeAdmin = useCallback(async (admin: AdminEntry) => {
+    setAdminMutationId(admin.id);
+    setError(null);
+    try {
+      const { response, payload: nextPayload } = await deleteJson(`/v1/admin/admins/${encodeURIComponent(admin.id)}`);
+      if (!response.ok) {
+        setError(getErrorMessage(nextPayload, `Could not remove ${admin.email}.`));
+        return;
+      }
+      setPayload((current) => current ? {
+        ...current,
+        admins: current.admins.filter((entry) => entry.id !== admin.id),
+        summary: { ...current.summary, adminCount: Math.max(0, current.summary.adminCount - 1) }
+      } : current);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unknown network error");
+    } finally {
+      setAdminMutationId(null);
+    }
+  }, []);
+
+  const resetInferenceUsage = useCallback(async () => {
+    if (!resetUsageDialog) {
+      return;
+    }
+    const userId = resetUsageDialog.id;
+    setResettingUsageUserId(userId);
+    setError(null);
+    try {
+      const { response, payload: nextPayload } = await postJson(`/v1/admin/users/${encodeURIComponent(userId)}/inference-usage/reset`, {});
+      if (!response.ok || !isRecord(nextPayload) || typeof nextPayload.resetAmount !== "number") {
+        setError(getErrorMessage(nextPayload, `Could not reset consumption for ${resetUsageDialog.email}.`));
+        return;
+      }
+      const resetAmount = nextPayload.resetAmount;
+      setResetSuccessByUserId((current) => ({ ...current, [userId]: resetAmount }));
+      setResetUsageDialog(null);
+      await loadInferenceUsage(userId);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unknown network error");
+    } finally {
+      setResettingUsageUserId(null);
+    }
+  }, [loadInferenceUsage, resetUsageDialog]);
 
   useEffect(() => {
     const cachedPayload = readAdminOverviewCache();
@@ -1952,6 +2184,13 @@ export function DenAdminPanel() {
     return filteredUsers.find((user) => user.id === selectedUserId) ?? filteredUsers[0] ?? null;
   }, [filteredUsers, selectedUserId]);
 
+  useEffect(() => {
+    if (!selectedUser || usageByUserId[selectedUser.id]) {
+      return;
+    }
+    void loadInferenceUsage(selectedUser.id);
+  }, [loadInferenceUsage, selectedUser, usageByUserId]);
+
   if (accessState === "loading") {
     return <DenAdminLoadingShell />;
   }
@@ -2066,12 +2305,65 @@ export function DenAdminPanel() {
 
         <ActivityChart series={payload.summary.activitySeries} />
 
-        <div className="mt-5 flex flex-wrap gap-2">
-          {payload.admins.map((admin) => (
-            <span key={admin.email} className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700">
-              {admin.email}
-            </span>
-          ))}
+        <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-slate-950">Platform admins</p>
+              <p className="mt-1 text-xs leading-5 text-slate-500">Manage operator access to this backoffice.</p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-[minmax(12rem,1fr)_minmax(10rem,1fr)_auto]">
+              <input
+                type="email"
+                data-testid="admin-add-email"
+                value={adminEmail}
+                onChange={(event) => setAdminEmail(event.target.value)}
+                placeholder="Email"
+                aria-label="Admin email"
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+              />
+              <input
+                data-testid="admin-add-note"
+                value={adminNote}
+                onChange={(event) => setAdminNote(event.target.value)}
+                placeholder="Note (optional)"
+                aria-label="Admin note"
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+              />
+              <button
+                type="button"
+                data-testid="admin-add-action"
+                onClick={() => void addAdmin()}
+                disabled={adminMutationId !== null || !adminEmail.trim()}
+                className="rounded-full bg-slate-950 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {adminMutationId === "add" ? "Adding..." : "Add admin"}
+              </button>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {payload.admins.map((admin) => {
+              const isViewer = admin.email.toLowerCase() === payload.viewer.email?.toLowerCase();
+              return (
+                <div key={admin.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-slate-800">{admin.email}{isViewer ? " · You" : ""}</p>
+                    <p className="truncate text-xs text-slate-500">{admin.note ?? `Added ${formatDateTime(admin.createdAt)}`}</p>
+                  </div>
+                  {!isViewer ? (
+                    <button
+                      type="button"
+                      data-testid={`admin-remove-${admin.id}`}
+                      onClick={() => void removeAdmin(admin)}
+                      disabled={adminMutationId !== null}
+                      className="shrink-0 rounded-full border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {adminMutationId === admin.id ? "Removing..." : "Remove"}
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
 
@@ -2335,15 +2627,28 @@ export function DenAdminPanel() {
                       <label className="inline-flex items-center gap-2 text-sm text-slate-700">
                         <input
                           type="checkbox"
-                          data-testid="admin-capability-codemodeScripts"
-                          checked={org.capabilities.codemodeScripts}
+                          data-testid="admin-capability-workflows"
+                          checked={org.capabilities.workflows}
                           disabled={savingCapabilityOrgId === org.id}
                           onChange={(event) => {
-                            void saveOrganizationCapability(org, "codemodeScripts", event.target.checked);
+                            void saveOrganizationCapability(org, "workflows", event.target.checked);
                           }}
                           className="h-4 w-4 rounded border-slate-300"
                         />
                         Codemode scripts (alpha)
+                      </label>
+                      <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                        <input
+                          type="checkbox"
+                          data-testid="admin-capability-remoteMcpApps"
+                          checked={org.capabilities.remoteMcpApps}
+                          disabled={savingCapabilityOrgId === org.id}
+                          onChange={(event) => {
+                            void saveOrganizationCapability(org, "remoteMcpApps", event.target.checked);
+                          }}
+                          className="h-4 w-4 rounded border-slate-300"
+                        />
+                        Native MCP Apps (preview)
                       </label>
                       <label className="inline-flex items-center gap-2 text-sm text-slate-700">
                         <input
@@ -2367,6 +2672,7 @@ export function DenAdminPanel() {
                     <p className="mt-1 text-xs text-slate-400">On by default. Turn off to stop workspace admins from minting desktop install links for this organization.</p>
                     <p className="mt-1 text-xs text-slate-400">On by default. Turn off to hide member-facing org connections, marketplace capabilities on the agent rail, and the desktop Connect tab.</p>
                     <p className="mt-1 text-xs text-slate-400">Confined multi-tool scripts run server-side for this organization.</p>
+                    <p className="mt-1 text-xs text-slate-400">Off by default. Requires the deployment master switch and exposes native provider MCP Apps and imported Apps for this organization.</p>
                     <p className="mt-1 text-xs text-slate-400">Off by default. Turn on to show Cloud alpha access in this organization.</p>
                   </div>
 
@@ -2426,6 +2732,7 @@ export function DenAdminPanel() {
             </div>
           ) : filteredUsers.length > 0 ? filteredUsers.map((user) => {
             const isSelected = user.id === selectedUser?.id;
+            const usageEntry = usageByUserId[user.id];
 
             return (
               <div
@@ -2502,6 +2809,66 @@ export function DenAdminPanel() {
                           >
                             Load billing for page
                           </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div data-testid="admin-usage-section" className="rounded-2xl border border-slate-200 bg-white px-4 py-4 lg:col-span-2">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-slate-500">OpenWork model consumption</p>
+                          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
+                            Limits are shared by everyone in each organization. Reset only forgives this user&apos;s consumption in the current windows; it does not change shared limits or other members&apos; usage.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          data-testid="admin-usage-reset-open"
+                          onClick={() => setResetUsageDialog(user)}
+                          disabled={usageEntry?.status !== "ready" || usageEntry.data.organizations.length === 0}
+                          className="shrink-0 rounded-full border border-amber-200 bg-white px-4 py-2 text-sm font-semibold text-amber-800 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Reset consumption
+                        </button>
+                      </div>
+
+                      {resetSuccessByUserId[user.id] !== undefined ? (
+                        <p className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                          Reset complete. Forgave {formatUsageAmount(resetSuccessByUserId[user.id])} units from this user&apos;s current windows.
+                        </p>
+                      ) : null}
+
+                      {!usageEntry || usageEntry.status === "loading" ? (
+                        <p className="mt-4 text-sm text-slate-500" aria-busy="true">Loading model consumption…</p>
+                      ) : usageEntry.status === "error" ? (
+                        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900">
+                          <p>{usageEntry.message}</p>
+                          <button type="button" onClick={() => void loadInferenceUsage(user.id)} className="mt-2 font-semibold underline">Retry</button>
+                        </div>
+                      ) : usageEntry.data.organizations.length === 0 ? (
+                        <p className="mt-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-5 text-center text-sm text-slate-500">No organization consumption windows are available for this user.</p>
+                      ) : (
+                        <div className="mt-4 grid gap-3">
+                          {usageEntry.data.organizations.map((organization) => (
+                            <div key={organization.membershipId} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+                              <p className="text-sm font-semibold text-slate-950">{organization.name}</p>
+                              <p className="mt-0.5 truncate font-mono text-[0.68rem] text-slate-400">{organization.id}</p>
+                              {organization.windows.length === 0 ? (
+                                <p className="mt-3 text-sm text-slate-500">No current five-hour, weekly, or monthly windows.</p>
+                              ) : (
+                                <div className="mt-3 grid gap-2 md:grid-cols-3">
+                                  {organization.windows.map((window) => (
+                                    <div key={window.bucketId} className="rounded-xl border border-slate-200 bg-white p-3">
+                                      <p className="text-xs font-semibold text-slate-800">{formatWindowType(window.windowType)}</p>
+                                      <p className="mt-2 text-sm text-slate-700">User: <strong>{formatUsageAmount(window.userUsedAmount)}</strong></p>
+                                      <p className="mt-1 text-xs text-slate-500">Shared: {formatUsageAmount(window.organizationUsedAmount)} / {formatUsageAmount(window.limitAmount)}</p>
+                                      <p className="mt-2 text-xs leading-5 text-slate-400">Resets {formatDateTime(window.windowEndAt)}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          ))}
                         </div>
                       )}
                     </div>
@@ -2694,6 +3061,46 @@ export function DenAdminPanel() {
                 className="inline-flex items-center justify-center rounded-full bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {deletingUserId === deleteUserDialog.id ? "Deleting..." : "Delete user"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {resetUsageDialog ? (
+        <div
+          data-testid="admin-usage-reset-confirmation"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="reset-usage-dialog-title"
+          onClick={() => setResetUsageDialog(null)}
+        >
+          <div className="w-full max-w-md rounded-3xl border border-amber-100 bg-white p-6 shadow-xl" onClick={(event) => event.stopPropagation()}>
+            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-amber-600">Model consumption</p>
+            <h2 id="reset-usage-dialog-title" className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-slate-950">
+              Reset {resetUsageDialog.email}?
+            </h2>
+            <p className="mt-3 text-sm leading-7 text-slate-600">
+              This forgives only this user&apos;s consumption in the current five-hour, weekly, and monthly windows. Organization limits remain shared and other members&apos; consumption is unchanged.
+            </p>
+            <div className="mt-6 flex flex-wrap justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setResetUsageDialog(null)}
+                disabled={resettingUsageUserId === resetUsageDialog.id}
+                className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                data-testid="admin-usage-reset-action"
+                onClick={() => void resetInferenceUsage()}
+                disabled={resettingUsageUserId === resetUsageDialog.id}
+                className="rounded-full bg-amber-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {resettingUsageUserId === resetUsageDialog.id ? "Resetting..." : "Reset consumption"}
               </button>
             </div>
           </div>

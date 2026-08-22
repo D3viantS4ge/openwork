@@ -120,7 +120,7 @@ export type SessionModelControls = {
   modelVariantLabel: string;
   modelBehaviorOptions: BehaviorOption[] | undefined;
   hasSessionOverride: boolean;
-  setModel: (model: ModelRef) => void;
+  setModel: (model: ModelRef, variant?: string | null) => void;
   setVariant: (value: string | null) => void;
 };
 
@@ -143,7 +143,8 @@ export function useSessionModelSelection(input: UseSessionModelSelectionInput): 
   const selection = useSessionModelStore((state) => state.bySessionId[sessionId] ?? null);
 
   return useMemo(() => {
-    const setModel = (model: ModelRef) => useSessionModelStore.getState().setModel(sessionId, model);
+    const setModel = (model: ModelRef, variant?: string | null) =>
+      useSessionModelStore.getState().setModel(sessionId, model, variant);
     if (!selection) {
       return {
         selectedModel: fallbackModel,

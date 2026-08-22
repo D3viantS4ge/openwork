@@ -1,6 +1,45 @@
 ---
 title: "Changelog"
 ---
+<Update label="August 18th" tags={["🚀 New Features", "🐛 Bug Fixes", "🏗️ Refactoring"]}>
+
+  ## [v0.18.30](https://github.com/different-ai/openwork/compare/v0.18.29...v0.18.30): Queue follow-ups and simplify the session workspace
+
+  - Follow-up messages now run sequentially, so queued work stays ordered instead of competing with the active turn.
+  - The model picker is more compact and the session sidebar is denser, leaving more room for the conversation.
+  - Improved slow-spec coverage, LiteLLM provider proof, and runtime failure handling make releases easier to validate.
+
+  ## [v0.18.29](https://github.com/different-ai/openwork/compare/v0.18.28...v0.18.29): SSO setup respects verified domains
+
+  - SSO configuration is now gated on domain verification, preventing an organization from enabling an identity provider before its domain is trusted.
+  - Added the Okta SAML callback configuration and setup documentation.
+
+  ## [v0.18.28](https://github.com/different-ai/openwork/compare/v0.18.27...v0.18.28): Connections move into the Library
+
+  - Library and composer Connections now share one consistent experience for discovering and using organization capabilities.
+  - Added the foundation for hosting native MCP Apps in the desktop's private host.
+  - Improved Code Mode routing, public API proxying, and MCP synchronization reliability.
+
+  ## [v0.18.27](https://github.com/different-ai/openwork/compare/v0.18.26...v0.18.27): Safer organization setup and signed Windows releases
+
+  - Added the initial private-admin bootstrap flow for Den organizations.
+  - Added public cloud deployment guides and improved Okta SSO/SCIM setup.
+  - Windows builds are signed by default, and Sentry events now include the app version.
+
+</Update>
+
+<Update label="August 17th" tags={["🚀 New Features", "🐛 Bug Fixes"]}>
+
+  ## [v0.18.26](https://github.com/different-ai/openwork/compare/v0.18.13...v0.18.26): Automations graduate, MCP Apps come alive, and sessions stay resilient
+
+  - Automations are out of preview: propose recurring work from chat, choose a model and thinking level, review clearer receipts, restore earlier revisions, and run work on your desktop or in OpenWork Cloud.
+  - MCP Apps now bring interactive tools directly into conversations. Install external apps through Connect, open agent-generated views inline, and save reusable Code Mode Programs for future runs and Automations.
+  - Cloud setup is much smoother, with mobile and tablet support, automatic installer downloads, simpler organization sign-in, model-usage analytics, and a clearer dashboard organized around Work, Manage, Observability, and Team.
+  - Connect is more dependable: organization models appear automatically and refresh without restarting, OAuth works with more providers, and the Library clearly explains connection failures. Marketplace is now called Collections throughout OpenWork.
+  - Agent runs now survive provider updates, engine restarts, workspace switches, and intermittent cloud connection failures, alongside fixes for stuck uploads, startup failures, and interrupted sessions.
+
+</Update>
+
 <Update label="August 3rd" tags={["🚀 New Features", "🐛 Bug Fixes"]}>
 
   ## [v0.18.13](https://github.com/different-ai/openwork/compare/v0.18.12...v0.18.13): Extensions becomes the Library and skill sharing opens up

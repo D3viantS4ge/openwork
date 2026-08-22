@@ -22,6 +22,7 @@ const parentResource = apiOrigin + "/mcp"
 const tokenUseClaim = "https://openworklabs.com/token_use"
 const resourceClaim = "https://openworklabs.com/resource"
 const orgIdClaim = "https://openworklabs.com/org_id"
+const grantIdClaim = "https://openworklabs.com/grant_id"
 const userId = createDenTypeId("user")
 const organizationId = createDenTypeId("organization")
 const sessionId = createDenTypeId("session")
@@ -69,6 +70,7 @@ mock.module("./src/auth.js", () => ({
   DEN_MCP_OPAQUE_ACCESS_TOKEN_PREFIX: "ow_mcp_at_",
   DEN_MCP_FIRST_PARTY_CLIENT_ID: firstPartyClientId,
   DEN_MCP_FIRST_PARTY_RESOURCES: [parentResource, agentResource, parentResource + "/admin"],
+  DEN_MCP_GRANT_ID_CLAIM: grantIdClaim,
   DEN_MCP_ORG_ID_CLAIM: orgIdClaim,
   DEN_MCP_OAUTH_RESOURCE: agentResource,
   DEN_MCP_RESOURCE: parentResource,
@@ -107,7 +109,7 @@ const db = {
             return Promise.resolve([{ id: sessionId }])
           }
           if (table === schema.MemberTable) {
-            return Promise.resolve([{ id: memberId }])
+            return Promise.resolve([{ id: memberId, role: "member" }])
           }
           return Promise.resolve([])
         },

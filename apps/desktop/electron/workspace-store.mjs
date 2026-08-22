@@ -9,6 +9,7 @@ import path from "node:path";
 import {
   desktopBootstrapPath as resolveDesktopBootstrapPath,
   legacyDesktopBootstrapPath as resolveLegacyDesktopBootstrapPath,
+  normalizeWorkspaceRootPath,
   openworkServerConfigPath as resolveOpenworkServerConfigPath,
 } from "@openwork/paths";
 
@@ -525,25 +526,26 @@ export function createWorkspaceStore({
       : trimmed.startsWith("~/") || trimmed.startsWith("~\\")
         ? path.join(os.homedir(), trimmed.slice(2))
         : trimmed;
-    const resolved = path.resolve(expanded);
+    const normalized = normalizeWorkspaceRootPath(expanded, { platform: process.platform });
+    const resolved = path.resolve(normalized);
     return realpath(resolved).catch(() => resolved);
   }
 
   function normalizeWorkspacePathKey(value) {
-    const trimmed = String(value ?? "").trim();
-    return trimmed ? path.resolve(trimmed).replace(/\\/g, "/").toLowerCase() : "";
+    try {
+      const normalized = normalizeWorkspaceRootPath(value, { platform: process.platform });
+      return normalized ? path.resolve(normalized).replace(/\\/g, "/").toLowerCase() : "";
+    } catch {
+      return "";
+    }
   }
 
   function normalizeRecoveredWorkspacePath(value) {
-    const trimmed = String(value ?? "").trim();
-    if (!trimmed) return "";
-    if (process.platform !== "win32") return trimmed;
-    return trimmed
-      .replace(/^\\\\\?\\UNC\\/i, "\\\\")
-      .replace(/^\\\\\?\\/i, "")
-      .replace(/^\/\/\?\/UNC\//i, "//")
-      .replace(/^\/\/\?\//i, "")
-      .replace(/\//g, "\\");
+    try {
+      return normalizeWorkspaceRootPath(value, { platform: process.platform });
+    } catch {
+      return "";
+    }
   }
 
   function isRecord(value) {

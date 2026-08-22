@@ -9,6 +9,7 @@ const EnvSchema = z.object({
   RENDER_GIT_COMMIT: z.string().optional(),
   DEN_GATEWAY_WEB_ROOT: z.string().optional(),
   DEN_GATEWAY_RESOLVE_TTL_MS: z.string().optional(),
+  DEN_GATEWAY_UPSTREAM_CONNECT_TIMEOUT_MS: z.string().optional(),
   DEN_GATEWAY_LOG_REQUESTS: z.string().optional(),
 })
 
@@ -79,5 +80,10 @@ export const env = {
   }),
   webRoot: optionalString(parsed.DEN_GATEWAY_WEB_ROOT),
   resolveTtlMs: parsePositiveInteger("DEN_GATEWAY_RESOLVE_TTL_MS", parsed.DEN_GATEWAY_RESOLVE_TTL_MS, 15_000),
+  upstreamConnectTimeoutMs: parsePositiveInteger(
+    "DEN_GATEWAY_UPSTREAM_CONNECT_TIMEOUT_MS",
+    parsed.DEN_GATEWAY_UPSTREAM_CONNECT_TIMEOUT_MS,
+    3_000,
+  ),
   logRequests: parseBoolean(parsed.DEN_GATEWAY_LOG_REQUESTS, true),
 }

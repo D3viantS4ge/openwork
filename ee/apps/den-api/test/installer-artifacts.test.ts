@@ -36,6 +36,14 @@ test("builds the installer asset URL for the configured release", () => {
   })).toBe("https://github.com/different-ai/openwork/releases/download/v9.9.9%2Bbuild%202/openwork-enterprise-mac-arm64-9.9.9.dmg")
 })
 
+test("builds the installer asset URL from the resolved default release", async () => {
+  envModule.env.installerReleaseTag = "v9.9.9"
+  envModule.env.installerReleaseTagExplicit = true
+  await expect(installerReleaseAssetUrl("openwork-enterprise-win-x64-9.9.9.exe")).resolves.toBe(
+    "https://github.com/different-ai/openwork/releases/download/v9.9.9/openwork-enterprise-win-x64-9.9.9.exe",
+  )
+})
+
 test.each([
   ["mac-arm64", "v9.9.9", "openwork-mac-arm64-9.9.9.dmg"],
   ["mac-x64", "9.9.9", "openwork-mac-x64-9.9.9.dmg"],

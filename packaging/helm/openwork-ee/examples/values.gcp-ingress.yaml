@@ -50,6 +50,8 @@ secret:
     betterAuthSecret: "REPLACE_BETTER_AUTH_SECRET"
     # Generate separately with: openssl rand -base64 48
     denDbEncryptionKey: "REPLACE_DEN_DB_ENCRYPTION_KEY"
+    # One-time /setup code. Generate a unique value and keep it out of source control.
+    initialAdminBootstrapCode: "REPLACE_BOOTSTRAP_CODE"
 
 denApi:
   replicaCount: 1

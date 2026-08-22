@@ -9,6 +9,10 @@ import {
   DesktopHandoffGrantTable,
   ExternalIdentityTable,
   InvitationTable,
+  InferenceOrgLimitPolicyTable,
+  InferenceOrgUsageBucketTable,
+  InferenceUsageLedgerBucketChargeTable,
+  InferenceUsageLedgerEntryTable,
   MemberTable,
   OAuthAccessTokenTable,
   OAuthClientTable,
@@ -21,7 +25,7 @@ import {
   WorkerTable,
   AdminAllowlistTable,
 } from "@openwork-ee/den-db/schema"
-import { isDenTypeId } from "@openwork-ee/utils/typeid"
+import { createDenTypeId, isDenTypeId } from "@openwork-ee/utils/typeid"
 import type { Hono } from "hono"
 import { describeRoute } from "hono-openapi"
 import { z } from "zod"
@@ -32,7 +36,7 @@ import { adminRoute, queryValidator } from "../../middleware/index.js"
 import { denTypeIdSchema, forbiddenSchema, invalidRequestSchema, jsonResponse, unauthorizedSchema } from "../../openapi.js"
 import { appLogger } from "../../observability/logger.js"
 import { organizationCloudEnabled } from "../../capability-sources/cloud-rollout.js"
-import { codemodeScriptsEnabled } from "../../capability-sources/codemode-rollout.js"
+import { workflowsEnabled } from "../../capability-sources/workflow-rollout.js"
 import { memberFacingMcpConnectionsEnabled } from "../../capability-sources/external-mcp-rollout.js"
 import { organizationInstallLinksEnabled } from "../../capability-sources/install-links-rollout.js"
 import { normalizeOrganizationCapabilities, readOrganizationCapabilityOverrides } from "../../organization-capabilities.js"
@@ -85,9 +89,16 @@ const updateOrganizationCapabilitiesSchema = z.object({
   capabilities: z.object({
     installLinks: z.boolean().nullable().optional(),
     mcpConnections: z.boolean().nullable().optional(),
+    workflows: z.boolean().nullable().optional(),
     codemodeScripts: z.boolean().nullable().optional(),
+    remoteMcpApps: z.boolean().nullable().optional(),
     cloud: z.boolean().nullable().optional(),
   }),
+})
+
+const createAdminSchema = z.object({
+  email: z.string().trim().max(255).email().transform((email) => email.toLowerCase()),
+  note: z.string().max(255).nullable().optional(),
 })
 
 const adminActivityPointSchema = z.object({
@@ -270,7 +281,8 @@ function readAdminVisibleOrganizationCapabilities(metadata: Record<string, unkno
   return {
     installLinks: organizationInstallLinksEnabled(metadata, { gatingEnabled: false }),
     mcpConnections: memberFacingMcpConnectionsEnabled(metadata, { gatingEnabled: false }),
-    codemodeScripts: codemodeScriptsEnabled(metadata),
+    workflows: workflowsEnabled(metadata),
+    remoteMcpApps: normalizeOrganizationCapabilities(metadata).remoteMcpApps,
     cloud: organizationCloudEnabled(metadata, { orgMode: env.orgMode }),
   }
 }
@@ -280,7 +292,7 @@ function readUnmanagedCapabilityMetadata(metadata: Record<string, unknown>): Rec
   const capabilities: Record<string, unknown> = {}
 
   for (const [key, value] of Object.entries(raw)) {
-    if (key !== "installLinks" && key !== "mcpConnections" && key !== "codemodeScripts" && key !== "cloud") {
+    if (key !== "installLinks" && key !== "mcpConnections" && key !== "workflows" && key !== "codemodeScripts" && key !== "remoteMcpApps" && key !== "cloud") {
       capabilities[key] = value
     }
   }
@@ -302,6 +314,22 @@ function isOrganizationId(value: string): value is OrganizationId {
 
 function isUserId(value: string): value is UserId {
   return isDenTypeId("user", value)
+}
+
+function isDuplicateDatabaseEntry(error: unknown): boolean {
+  let current = error
+  const visited = new Set<object>()
+  while (typeof current === "object" && current !== null && !visited.has(current)) {
+    visited.add(current)
+    if ("code" in current && current.code === "ER_DUP_ENTRY") {
+      return true
+    }
+    if ("errno" in current && current.errno === 1062) {
+      return true
+    }
+    current = "cause" in current ? current.cause : null
+  }
+  return false
 }
 
 async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
@@ -1139,6 +1167,7 @@ export async function loadAdminInitialOverviewPayload(user: AdminOverviewViewer,
   const [admins, userPage, organizationTotal] = await Promise.all([
     db
       .select({
+        id: AdminAllowlistTable.id,
         email: AdminAllowlistTable.email,
         note: AdminAllowlistTable.note,
         createdAt: AdminAllowlistTable.created_at,
@@ -1168,6 +1197,235 @@ export async function loadAdminInitialOverviewPayload(user: AdminOverviewViewer,
 
 
 export function registerAdminRoutes<T extends { Variables: AuthContextVariables }>(app: Hono<T>) {
+  app.post(
+    "/v1/admin/admins",
+    adminRoute(),
+    async (c) => {
+      const body = createAdminSchema.safeParse(await c.req.json().catch(() => null))
+      if (!body.success) {
+        return c.json({ error: "invalid_request", message: body.error.issues[0]?.message ?? "Invalid admin request." }, 400)
+      }
+
+      const id = createDenTypeId("adminAllowlist")
+      const createdAt = new Date()
+      try {
+        await db.insert(AdminAllowlistTable).values({
+          id,
+          email: body.data.email,
+          note: body.data.note ?? null,
+          created_at: createdAt,
+        })
+      } catch (error) {
+        if (isDuplicateDatabaseEntry(error)) {
+          return c.json({ error: "conflict", message: `An admin with email ${body.data.email} already exists.` }, 409)
+        }
+        throw error
+      }
+
+      return c.json({
+        ok: true,
+        admin: { id, email: body.data.email, note: body.data.note ?? null, createdAt },
+      })
+    },
+  )
+
+  app.delete(
+    "/v1/admin/admins/:adminId",
+    adminRoute(),
+    async (c) => {
+      const adminId = c.req.param("adminId")
+      if (!isDenTypeId("adminAllowlist", adminId)) {
+        return c.json({ error: "invalid_request", message: "Invalid admin id." }, 400)
+      }
+
+      const viewerEmail = normalizeEmail(c.get("user").email)
+      const result = await db.transaction(async (tx) => {
+        const admins = await tx
+          .select({ id: AdminAllowlistTable.id, email: AdminAllowlistTable.email })
+          .from(AdminAllowlistTable)
+          .for("update")
+        const target = admins.find((admin) => admin.id === adminId)
+        if (!target) {
+          return "not_found"
+        }
+        if (normalizeEmail(target.email) === viewerEmail) {
+          return "current_viewer"
+        }
+        if (admins.length === 1) {
+          return "final_admin"
+        }
+        await tx.delete(AdminAllowlistTable).where(eq(AdminAllowlistTable.id, adminId))
+        return "deleted"
+      })
+
+      if (result === "not_found") {
+        return c.json({ error: "not_found", message: "Admin not found." }, 404)
+      }
+      if (result === "current_viewer") {
+        return c.json({ error: "invalid_request", message: "You cannot delete your own admin access." }, 400)
+      }
+      if (result === "final_admin") {
+        return c.json({ error: "invalid_request", message: "You cannot delete the final admin." }, 400)
+      }
+      return c.json({ ok: true })
+    },
+  )
+
+  app.get(
+    "/v1/admin/users/:userId/inference-usage",
+    adminRoute(),
+    async (c) => {
+      const userId = c.req.param("userId")
+      if (!isUserId(userId)) {
+        return c.json({ error: "invalid_request", message: "Invalid user id." }, 400)
+      }
+
+      const users = await db
+        .select({ id: AuthUserTable.id, email: AuthUserTable.email })
+        .from(AuthUserTable)
+        .where(eq(AuthUserTable.id, userId))
+        .limit(1)
+      const user = users[0]
+      if (!user) {
+        return c.json({ error: "not_found", message: "User not found." }, 404)
+      }
+
+      const rows = await db
+        .select({
+          organizationId: OrganizationTable.id,
+          organizationName: OrganizationTable.name,
+          membershipId: MemberTable.id,
+          bucketId: InferenceOrgUsageBucketTable.id,
+          windowType: InferenceOrgLimitPolicyTable.window_type,
+          windowStartAt: InferenceOrgUsageBucketTable.window_start_at,
+          windowEndAt: InferenceOrgUsageBucketTable.window_end_at,
+          limitAmount: InferenceOrgUsageBucketTable.limit_amount,
+          organizationUsedAmount: InferenceOrgUsageBucketTable.used_amount,
+          userUsedAmount: sql<number>`coalesce(sum(${InferenceUsageLedgerBucketChargeTable.amount}), 0)`,
+        })
+        .from(MemberTable)
+        .innerJoin(OrganizationTable, eq(MemberTable.organizationId, OrganizationTable.id))
+        .innerJoin(InferenceOrgLimitPolicyTable, eq(MemberTable.organizationId, InferenceOrgLimitPolicyTable.organization_id))
+        .innerJoin(InferenceOrgUsageBucketTable, eq(InferenceOrgLimitPolicyTable.current_bucket_id, InferenceOrgUsageBucketTable.id))
+        .leftJoin(InferenceUsageLedgerEntryTable, and(
+          eq(InferenceUsageLedgerEntryTable.org_membership_id, MemberTable.id),
+          eq(InferenceUsageLedgerEntryTable.organization_id, MemberTable.organizationId),
+        ))
+        .leftJoin(InferenceUsageLedgerBucketChargeTable, and(
+          eq(InferenceUsageLedgerBucketChargeTable.ledger_entry_id, InferenceUsageLedgerEntryTable.id),
+          eq(InferenceUsageLedgerBucketChargeTable.bucket_id, InferenceOrgUsageBucketTable.id),
+        ))
+        .where(and(eq(MemberTable.userId, userId), isNull(MemberTable.removedAt)))
+        .groupBy(
+          OrganizationTable.id,
+          OrganizationTable.name,
+          MemberTable.id,
+          InferenceOrgUsageBucketTable.id,
+          InferenceOrgLimitPolicyTable.window_type,
+          InferenceOrgUsageBucketTable.window_start_at,
+          InferenceOrgUsageBucketTable.window_end_at,
+          InferenceOrgUsageBucketTable.limit_amount,
+          InferenceOrgUsageBucketTable.used_amount,
+        )
+        .orderBy(asc(OrganizationTable.name), asc(InferenceOrgLimitPolicyTable.window_type))
+
+      const organizations = new Map<typeof MemberTable.$inferSelect.id, {
+        id: OrganizationId
+        name: string
+        membershipId: typeof MemberTable.$inferSelect.id
+        windows: Array<{
+          bucketId: typeof InferenceOrgUsageBucketTable.$inferSelect.id
+          windowType: typeof InferenceOrgLimitPolicyTable.$inferSelect.window_type
+          windowStartAt: Date
+          windowEndAt: Date
+          limitAmount: number
+          organizationUsedAmount: number
+          userUsedAmount: number
+        }>
+      }>()
+      for (const row of rows) {
+        const organization = organizations.get(row.membershipId) ?? {
+          id: row.organizationId,
+          name: row.organizationName,
+          membershipId: row.membershipId,
+          windows: [],
+        }
+        organization.windows.push({
+          bucketId: row.bucketId,
+          windowType: row.windowType,
+          windowStartAt: row.windowStartAt,
+          windowEndAt: row.windowEndAt,
+          limitAmount: toNumber(row.limitAmount),
+          organizationUsedAmount: toNumber(row.organizationUsedAmount),
+          userUsedAmount: toNumber(row.userUsedAmount),
+        })
+        organizations.set(row.membershipId, organization)
+      }
+
+      return c.json({ user, organizations: Array.from(organizations.values()) })
+    },
+  )
+
+  app.post(
+    "/v1/admin/users/:userId/inference-usage/reset",
+    adminRoute(),
+    async (c) => {
+      const userId = c.req.param("userId")
+      if (!isUserId(userId)) {
+        return c.json({ error: "invalid_request", message: "Invalid user id." }, 400)
+      }
+
+      const users = await db.select({ id: AuthUserTable.id }).from(AuthUserTable).where(eq(AuthUserTable.id, userId)).limit(1)
+      if (!users[0]) {
+        return c.json({ error: "not_found", message: "User not found." }, 404)
+      }
+
+      const resetAmount = await db.transaction(async (tx) => {
+        const charges = await tx
+          .select({
+            id: InferenceUsageLedgerBucketChargeTable.id,
+            bucketId: InferenceUsageLedgerBucketChargeTable.bucket_id,
+            amount: InferenceUsageLedgerBucketChargeTable.amount,
+          })
+          .from(InferenceUsageLedgerBucketChargeTable)
+          .innerJoin(InferenceUsageLedgerEntryTable, eq(InferenceUsageLedgerBucketChargeTable.ledger_entry_id, InferenceUsageLedgerEntryTable.id))
+          .innerJoin(MemberTable, and(
+            eq(InferenceUsageLedgerEntryTable.org_membership_id, MemberTable.id),
+            eq(InferenceUsageLedgerEntryTable.organization_id, MemberTable.organizationId),
+          ))
+          .innerJoin(InferenceOrgLimitPolicyTable, and(
+            eq(InferenceUsageLedgerEntryTable.organization_id, InferenceOrgLimitPolicyTable.organization_id),
+            eq(InferenceUsageLedgerBucketChargeTable.bucket_id, InferenceOrgLimitPolicyTable.current_bucket_id),
+          ))
+          .where(and(eq(MemberTable.userId, userId), isNull(MemberTable.removedAt)))
+          .for("update")
+
+        const amountByBucket = new Map<typeof InferenceOrgUsageBucketTable.$inferSelect.id, number>()
+        let total = 0
+        for (const charge of charges) {
+          const amount = toNumber(charge.amount)
+          amountByBucket.set(charge.bucketId, (amountByBucket.get(charge.bucketId) ?? 0) + amount)
+          total += amount
+        }
+        for (const [bucketId, amount] of amountByBucket) {
+          await tx
+            .update(InferenceOrgUsageBucketTable)
+            .set({ used_amount: sql`greatest(${InferenceOrgUsageBucketTable.used_amount} - ${amount}, 0)` })
+            .where(eq(InferenceOrgUsageBucketTable.id, bucketId))
+        }
+        if (charges.length > 0) {
+          await tx.delete(InferenceUsageLedgerBucketChargeTable).where(inArray(
+            InferenceUsageLedgerBucketChargeTable.id,
+            charges.map((charge) => charge.id),
+          ))
+        }
+        return total
+      })
+
+      return c.json({ ok: true, resetAmount })
+    },
+  )
+
   app.delete(
     "/v1/admin/users/:userId",
     adminRoute(),
@@ -1199,12 +1457,20 @@ export function registerAdminRoutes<T extends { Variables: AuthContextVariables 
         .where(eq(MemberTable.userId, userId))
       const activeMembershipRows = membershipRows.filter((member) => !member.removedAt)
       const sessionRows = await db
-        .select({ token: AuthSessionTable.token })
+        .select({ id: AuthSessionTable.id, token: AuthSessionTable.token })
         .from(AuthSessionTable)
         .where(eq(AuthSessionTable.userId, userId))
-
-      await db.transaction(async (tx) => {
+      // Grant tombstones must cover exactly the deleted consent set. Snapshot
+      // the ids inside the transaction with a locking read so a concurrently
+      // authorized consent cannot slip between the snapshot and the delete
+      // (Warden RUD-WDK).
+      const oauthConsentRows = await db.transaction(async (tx) => {
         const removedAt = new Date()
+        const consentRows = await tx
+          .select({ id: OAuthConsentTable.id })
+          .from(OAuthConsentTable)
+          .where(eq(OAuthConsentTable.userId, userId))
+          .for("update")
 
         await tx.delete(OAuthAccessTokenTable).where(eq(OAuthAccessTokenTable.userId, userId))
         await tx.delete(OAuthRefreshTokenTable).where(eq(OAuthRefreshTokenTable.userId, userId))
@@ -1225,10 +1491,18 @@ export function registerAdminRoutes<T extends { Variables: AuthContextVariables 
         await tx.update(MemberTable).set({ removedAt }).where(eq(MemberTable.userId, userId))
         await tx.update(WorkerTable).set({ created_by_user_id: null }).where(eq(WorkerTable.created_by_user_id, userId))
         await tx.delete(AuthUserTable).where(eq(AuthUserTable.id, userId))
+        return consentRows
       })
-      await Promise.all(sessionRows.map((session) => cache.auth.deleteSession(session.token)))
+      // Auth session cache hits intentionally avoid a DB liveness check; user deletion must clear
+      // both token and session-id cache entries for every deleted session instead.
+      await Promise.all(sessionRows.flatMap((session) => [
+        cache.auth.revokeSession(session.token),
+        cache.auth.revokeSessionId(session.id),
+      ]))
+      await Promise.all(oauthConsentRows.map((consent) => cache.auth.revokeGrant(consent.id)))
 
       const organizationIds = Array.from(new Set(activeMembershipRows.map((row) => row.organizationId).filter(isOrganizationId)))
+      // Admin user deletion soft-removes memberships; clear affected org membership caches.
       await Promise.all(organizationIds.map((organizationId) => cache.org.deleteMembers(organizationId)))
       for (const organizationId of organizationIds) {
         const seatCounts = await getOrganizationSeatBillingCounts({ organizationId })
@@ -1400,12 +1674,22 @@ export function registerAdminRoutes<T extends { Variables: AuthContextVariables 
           capabilities.mcpConnections = mcpConnections
         }
       }
-      const codemodeScripts = body.data.capabilities.codemodeScripts
-      if (codemodeScripts !== undefined) {
-        if (codemodeScripts === null) {
-          delete capabilities.codemodeScripts
+      const workflows = body.data.capabilities.workflows !== undefined
+        ? body.data.capabilities.workflows
+        : body.data.capabilities.codemodeScripts
+      if (workflows !== undefined) {
+        if (workflows === null) {
+          delete capabilities.workflows
         } else {
-          capabilities.codemodeScripts = codemodeScripts
+          capabilities.workflows = workflows
+        }
+      }
+      const remoteMcpApps = body.data.capabilities.remoteMcpApps
+      if (remoteMcpApps !== undefined) {
+        if (remoteMcpApps === null) {
+          delete capabilities.remoteMcpApps
+        } else {
+          capabilities.remoteMcpApps = remoteMcpApps
         }
       }
       const cloud = body.data.capabilities.cloud

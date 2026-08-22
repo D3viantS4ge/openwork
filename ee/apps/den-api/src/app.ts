@@ -29,14 +29,14 @@ import { registerDevRoutes } from "./routes/dev/index.js"
 import { registerMcpTokenRoutes } from "./routes/mcp/index.js"
 import { registerMemoryRoutes } from "./routes/memory/index.js"
 import { registerAutomationRoutes } from "./routes/automations/index.js"
-import { configureCloudAgentExecutor, configureCloudSavedScriptExecutor } from "./automations/service.js"
+import { configureCloudAgentExecutor, configureCloudWorkflowExecutor } from "./automations/service.js"
 import { cloudAgentRuntimeAvailable, executeCloudAgent } from "./automations/cloud-agent-executor.js"
 import { getCatalog } from "./mcp/index.js"
 import { buildCapabilityToolTree, createCapabilityRegistryContext } from "./mcp/capability-registry.js"
 import { executeMarketplaceCapability } from "./mcp/marketplace-capabilities.js"
 import { resolveMcpMemberIdentity } from "./mcp/external-capabilities.js"
 import { DEN_MCP_REQUESTED_SCOPES } from "./mcp/scopes.js"
-import { codemodeScriptsEnabled } from "./capability-sources/codemode-rollout.js"
+import { workflowsEnabled } from "./capability-sources/workflow-rollout.js"
 import { registerMeRoutes } from "./routes/me/index.js"
 import { registerOrgRoutes } from "./routes/org/index.js"
 import { registerTelemetryRoutes } from "./routes/telemetry/index.js"
@@ -129,7 +129,7 @@ if (env.corsOrigins.length > 0) {
       cors({
         origin: env.corsOrigins,
         credentials: true,
-        allowHeaders: ["Content-Type", "Authorization", "X-Api-Key", "X-Request-Id", "X-OpenWork-Legacy-Org-Id"],
+        allowHeaders: ["Content-Type", "Authorization", "X-Api-Key", "X-Request-Id", "X-OpenWork-Legacy-Org-Id", "X-OpenWork-Org-Id"],
         allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         exposeHeaders: ["Content-Length"],
         maxAge: 600,
@@ -228,7 +228,7 @@ registerTelemetryRoutes(app)
 
 configureCloudAgentExecutor({ execute: executeCloudAgent, runtimeAvailable: cloudAgentRuntimeAvailable })
 
-configureCloudSavedScriptExecutor(async ({ organizationId, ownerMemberId, automationRunId, action }) => {
+configureCloudWorkflowExecutor(async ({ organizationId, ownerMemberId, automationRunId, action }) => {
   const normalizedOrganizationId = normalizeDenTypeId("organization", organizationId)
   const normalizedOwnerMemberId = normalizeDenTypeId("member", ownerMemberId)
   const members = await db.select({ userId: MemberTable.userId }).from(MemberTable).where(and(
@@ -242,9 +242,9 @@ configureCloudSavedScriptExecutor(async ({ organizationId, ownerMemberId, automa
     eq(OrganizationTable.id, normalizedOrganizationId),
   ).limit(1)
   const organizationMetadata = organizations[0]?.metadata
-  const codemodeEnabled = codemodeScriptsEnabled(organizationMetadata)
+  const codemodeEnabled = workflowsEnabled(organizationMetadata)
   if (!codemodeEnabled) {
-    return { ok: false, message: "Code Mode scripts are disabled for this organization.", retryable: false }
+    return { ok: false, message: "Workflows are disabled for this organization.", retryable: false }
   }
   const member = await resolveMcpMemberIdentity({ userId, organizationId })
   if (!member) return { ok: false, message: "The Automation owner is no longer active.", retryable: false }
@@ -259,6 +259,7 @@ configureCloudSavedScriptExecutor(async ({ organizationId, ownerMemberId, automa
     member,
     redirectUriBase: env.apiPublicUrl ?? "http://127.0.0.1",
     codemodeEnabled,
+    generatedArtifactViewsEnabled: env.generatedArtifactViewsEnabled,
     organizationMetadata,
     mcpConnectionsGatingEnabled: env.mcpConnectionsGatingEnabled,
   })
@@ -281,10 +282,10 @@ configureCloudSavedScriptExecutor(async ({ organizationId, ownerMemberId, automa
     ...("receiptId" in result ? { receiptId: result.receiptId ?? null } : {}),
   }
   if (result.result.status !== "executed") {
-    return { ok: false, message: result.result.hint ?? "The saved Script could not execute.", retryable: false }
+    return { ok: false, message: result.result.hint ?? "The Workflow could not execute.", retryable: false }
   }
   if (!result.result.receiptId) {
-    return { ok: false, message: "The Script ran, but its durable artifact receipt could not be recorded.", retryable: true }
+    return { ok: false, message: "The Workflow ran, but its durable artifact receipt could not be recorded.", retryable: true }
   }
   return {
     ok: true,

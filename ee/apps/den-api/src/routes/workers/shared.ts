@@ -21,6 +21,7 @@ import { appLogger } from "../../observability/logger.js"
 import type { AuthContextVariables } from "../../session.js"
 import { materializeCloudWorkerProviders } from "../../llm/cloud-provider-materialization.js"
 import { deprovisionWorker, provisionWorker } from "../../workers/provisioner.js"
+import { withProvisionDeadline } from "../../workers/provision-deadline.js"
 import { customDomainForWorker } from "../../workers/vanity-domain.js"
 
 const logger = appLogger.child({ component: "worker_routes" })
@@ -77,6 +78,7 @@ type ContinueCloudProvisioningOptions = {
   provisionWorker?: ProvisionWorker
   store?: CloudProvisioningStore
   materializeProviders?: typeof materializeCloudWorkerProviders
+  deadlineMs?: number
 }
 
 export const token = () => randomBytes(32).toString("hex")
@@ -385,14 +387,19 @@ async function runCloudProvisioning(input: {
   const provision = options.provisionWorker ?? provisionWorker
   const store = options.store ?? databaseCloudProvisioningStore
   const materializeProviders = options.materializeProviders ?? materializeCloudWorkerProviders
+  const deadlineMs = options.deadlineMs ?? env.cloudProvisionDeadlineMs
 
   try {
-    const provisioned = await provision({
-      workerId: input.workerId,
-      name: input.name,
-      hostToken: input.hostToken,
-      clientToken: input.clientToken,
-      activityToken: input.activityToken,
+    const provisioned = await withProvisionDeadline({
+      promise: provision({
+        workerId: input.workerId,
+        name: input.name,
+        hostToken: input.hostToken,
+        clientToken: input.clientToken,
+        activityToken: input.activityToken,
+      }),
+      deadlineMs,
+      label: `cloud provisioning for ${input.workerId}`,
     })
 
     if (provisioned.status === "healthy" && input.orgId) {

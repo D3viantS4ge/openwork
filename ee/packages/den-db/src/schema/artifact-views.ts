@@ -1,4 +1,4 @@
-import { index, int, mysqlEnum, mysqlTable, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core"
+import { index, int, mysqlEnum, mysqlTable, timestamp, varchar } from "drizzle-orm/mysql-core"
 import { compatJsonColumn, denTypeIdColumn, encryptedColumn, encryptedMediumTextColumn, timestamps } from "../columns"
 
 const encryptedJsonColumn = <TData>(name: string) => encryptedColumn<TData>(name, {
@@ -68,20 +68,5 @@ export const ArtifactViewRevisionTable = mysqlTable(
   (table) => [
     index("artifact_view_revision_view_created").on(table.artifact_view_id, table.created_at),
     index("artifact_view_revision_org_status").on(table.organization_id, table.build_status),
-  ],
-)
-
-export const ProgramAgentSelectionTable = mysqlTable(
-  "program_agent_selection",
-  {
-    organization_id: denTypeIdColumn("organization", "organization_id").notNull(),
-    org_membership_id: denTypeIdColumn("member", "org_membership_id").notNull(),
-    program_id: denTypeIdColumn("configObject", "program_id").notNull(),
-    selected_at: timestamp("selected_at", { fsp: 3 }).notNull().defaultNow(),
-    ...timestamps,
-  },
-  (table) => [
-    uniqueIndex("program_agent_selection_org_member").on(table.organization_id, table.org_membership_id),
-    index("program_agent_selection_program").on(table.organization_id, table.program_id),
   ],
 )

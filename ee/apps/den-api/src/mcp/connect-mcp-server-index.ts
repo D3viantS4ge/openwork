@@ -3,6 +3,15 @@ import type { ExternalMcpConnectionRow } from "../capability-sources/external-mc
 
 export const CONNECT_MCP_SERVER_INDEX_URI = "openwork://connect/mcp-servers/index.json"
 export const CONNECT_MCP_SERVER_INDEX_SCHEMA_VERSION = "openwork.connect/mcp-servers/1"
+export const CONNECT_MCP_APP_HOST_CAPABILITY_HEADER = "x-openwork-mcp-client-capabilities"
+export const CONNECT_MCP_APP_HOST_CAPABILITY = "mcp-app-host-v1"
+
+export function supportsConnectMcpAppHost(value: string | undefined): boolean {
+  return value
+    ?.split(",")
+    .map((capability) => capability.trim())
+    .includes(CONNECT_MCP_APP_HOST_CAPABILITY) ?? false
+}
 
 export type ConnectMcpServerIndexEntry = {
   connectionId: string
@@ -12,12 +21,13 @@ export type ConnectMcpServerIndexEntry = {
 }
 
 export function buildConnectMcpServerIndex(input: {
+  enabled: boolean
   connections: ExternalMcpConnectionRow[]
   publicOrigin: string
 }) {
   return {
     schemaVersion: CONNECT_MCP_SERVER_INDEX_SCHEMA_VERSION,
-    servers: input.connections
+    servers: (input.enabled ? input.connections : [])
       .map((connection): ConnectMcpServerIndexEntry => ({
         connectionId: connection.id,
         name: connection.name,
@@ -30,6 +40,7 @@ export function buildConnectMcpServerIndex(input: {
 
 export function registerConnectMcpServerIndex(input: {
   server: McpServer
+  enabled: boolean
   connections: ExternalMcpConnectionRow[]
   publicOrigin: string
 }) {

@@ -65,6 +65,14 @@ function InvitationDetails({
   );
 }
 
+function InvitationSummary({ preview }: { preview: DenInvitationPreview }) {
+  return (
+    <span data-testid="join-org-invitation-summary">
+      You&apos;ve been invited as <span className="font-medium text-slate-950">{preview.invitation.email}</span>
+    </span>
+  );
+}
+
 function InvitationHeading({
   title,
   copy,
@@ -129,7 +137,7 @@ function LoadingState({
   copy?: string;
 }) {
   return (
-    <OnboardingShell state="loading" width="wide">
+    <OnboardingShell state="loading" width="wide" background="surface">
       <OnboardingCard organization={getCardOrganization(preview)}>
         <div className="grid gap-5" aria-busy="true">
           <InvitationHeading title={title} copy={copy} />
@@ -201,7 +209,7 @@ function InviteAuthPanel({
     <div data-testid="join-org-auth">
       <AuthPanel
         bare
-        eyebrow="Invite"
+        hideIntro
         prefilledEmail={preview.invitation.email}
         prefillKey={preview.invitation.id}
         initialMode={initialMode}
@@ -213,9 +221,7 @@ function InviteAuthPanel({
         emailFirstInvitationId={preview.invitation.id}
         resolveEmailFirstOnPrefill
         signUpContent={{
-          title: "Create your account.",
-          copy: `Choose a name and a password. Your email stays locked to ${preview.invitation.email}.`,
-          submitLabel: `Join ${preview.organization.name}`,
+          submitLabel: "Create account",
         }}
         signInContent={{
           title: "Sign in to continue.",
@@ -381,7 +387,7 @@ export function JoinOrgScreen({ invitationId }: { invitationId: string }) {
           return;
         }
 
-        router.replace(getOrgDashboardRoute(nextJoinedOrg.slug));
+        router.replace("/install");
       } catch {
         // Transient transport failure: allow a later effect run to retry.
         acceptedInvitationResolutionRef.current = null;
@@ -426,7 +432,12 @@ export function JoinOrgScreen({ invitationId }: { invitationId: string }) {
       }
 
       clearPendingInvitation();
-      setJoinedOrg(getJoinedOrgFromPayload(payload, preview));
+      const nextJoinedOrg = getJoinedOrgFromPayload(payload, preview);
+      if (desktopAuthRequested) {
+        setJoinedOrg(nextJoinedOrg);
+      } else {
+        router.replace("/install");
+      }
     } catch (error) {
       setJoinError(error instanceof Error ? error.message : "Could not join the organization.");
     } finally {
@@ -461,7 +472,7 @@ export function JoinOrgScreen({ invitationId }: { invitationId: string }) {
 
   if (!preview) {
     return (
-      <OnboardingShell state="invalid" width="wide">
+      <OnboardingShell state="invalid" width="wide" background="surface">
         <OnboardingCard organization={getCardOrganization(preview)}>
           <InvitationHeading title="This invite can't be opened." copy={previewError ?? "This invite could not be loaded."} />
           <ActionGroup>
@@ -493,7 +504,7 @@ export function JoinOrgScreen({ invitationId }: { invitationId: string }) {
 
   if (preview.invitation.status === "accepted" && user && invitedEmailMatches && acceptedAutoResolveFailureForPreview?.reason === "membership_removed") {
     return (
-      <OnboardingShell state="membership-removed" width="wide">
+      <OnboardingShell state="membership-removed" width="wide" background="surface">
         <OnboardingCard organization={getCardOrganization(preview)}>
           <InvitationHeading
             title="Your access was removed."
@@ -511,7 +522,7 @@ export function JoinOrgScreen({ invitationId }: { invitationId: string }) {
 
   if (preview.invitation.status === "accepted" && !user) {
     return (
-      <OnboardingShell state="accepted-signed-out" width="wide">
+      <OnboardingShell state="accepted-signed-out" width="wide" background="surface">
         <OnboardingCard organization={getCardOrganization(preview)}>
           <div className="grid gap-4">
             <InvitationHeading
@@ -533,7 +544,7 @@ export function JoinOrgScreen({ invitationId }: { invitationId: string }) {
 
   if (preview.invitation.status === "accepted" && user && !invitedEmailMatches) {
     return (
-      <OnboardingShell state="accepted-wrong-account" width="wide">
+      <OnboardingShell state="accepted-wrong-account" width="wide" background="surface">
         <OnboardingCard organization={getCardOrganization(preview)}>
           <InvitationHeading
             title="Use the invited account."
@@ -558,7 +569,7 @@ export function JoinOrgScreen({ invitationId }: { invitationId: string }) {
 
   if (preview.invitation.status !== "pending") {
     return (
-      <OnboardingShell state="unavailable" width="wide">
+      <OnboardingShell state="unavailable" width="wide" background="surface">
         <OnboardingCard organization={getCardOrganization(preview)}>
           <InvitationHeading title="This invite can't be used." copy={statusMessage(preview)} />
           <InvitationDetails preview={preview} account={account} roleLabel={roleLabel} />
@@ -574,7 +585,7 @@ export function JoinOrgScreen({ invitationId }: { invitationId: string }) {
 
   if (!invitedEmailAllowed) {
     return (
-      <OnboardingShell state="domain-blocked" width="wide">
+      <OnboardingShell state="domain-blocked" width="wide" background="surface">
         <OnboardingCard organization={getCardOrganization(preview)}>
           <InvitationHeading
             title="This invite needs a different email domain."
@@ -593,11 +604,13 @@ export function JoinOrgScreen({ invitationId }: { invitationId: string }) {
 
   if (!user) {
     return (
-      <OnboardingShell state="signed-out" width="wide">
+      <OnboardingShell state="signed-out" width="wide" background="surface">
         <OnboardingCard organization={getCardOrganization(preview)}>
           <div className="grid gap-4">
-            <InvitationHeading title={`Join ${preview.organization.name}.`} copy="Your invitation is ready. Review the details, then sign in or create an account to join." />
-            <InvitationDetails preview={preview} account={account} roleLabel={roleLabel} />
+            <InvitationHeading
+              title={`Join ${preview.organization.name}`}
+              copy={<InvitationSummary preview={preview} />}
+            />
             {preview.organization.allowedEmailDomains?.length ? (
               <p className="m-0 text-[15px] leading-[23px] text-slate-600">
                 This workspace only accepts {allowedDomainsLabel} accounts.
@@ -616,7 +629,7 @@ export function JoinOrgScreen({ invitationId }: { invitationId: string }) {
   }
 
   return (
-    <OnboardingShell state="signed-in" width="wide">
+    <OnboardingShell state="signed-in" width="wide" background="surface">
       <OnboardingCard organization={getCardOrganization(preview)}>
         <InvitationHeading title={`Join ${preview.organization.name}.`} copy="Review the invitation and continue with the right account." />
         <InvitationDetails preview={preview} account={account} roleLabel={roleLabel} />

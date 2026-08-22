@@ -8,10 +8,23 @@ export function firstForwardedValue(value: string | null): string | null {
 }
 
 function isTrustedOrigin(origin: string, trustedOrigins: readonly string[]): boolean {
+  let candidate: URL
+  try {
+    candidate = new URL(origin)
+  } catch {
+    return false
+  }
   return trustedOrigins.some((entry) => {
     if (!entry || entry === "*") return false
     try {
-      return new URL(entry).origin === origin
+      const trusted = new URL(entry)
+      if (trusted.hostname.startsWith("*.")) {
+        const suffix = trusted.hostname.slice(1).toLowerCase()
+        return trusted.protocol === candidate.protocol
+          && trusted.port === candidate.port
+          && candidate.hostname.toLowerCase().endsWith(suffix)
+      }
+      return trusted.origin === candidate.origin
     } catch {
       return false
     }

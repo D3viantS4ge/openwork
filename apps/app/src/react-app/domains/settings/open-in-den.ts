@@ -1,7 +1,25 @@
+import type { LibraryAddKind } from "./library";
+
 export type DenLibraryTarget = {
   id: string;
   pluginId?: string;
 };
+
+/** Same create routes the Cloud dashboard already uses. */
+export const DEN_ADD_PATHS: Record<LibraryAddKind, string> = {
+  skill: "/dashboard/plugins/new",
+  command: "/dashboard/plugins/new",
+  agent: "/dashboard/plugins/new",
+  plugin: "/dashboard/plugins/import",
+  connection: "/dashboard/mcp-connections",
+  mcp: "/dashboard/library",
+};
+
+export function denAddUrl(baseUrl: string, kind: LibraryAddKind): string | null {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) return null;
+  return new URL(DEN_ADD_PATHS[kind], trimmed).toString();
+}
 
 export function denLibraryFocus(target: DenLibraryTarget): string | null {
   if (target.id.startsWith("org-mcp:")) {

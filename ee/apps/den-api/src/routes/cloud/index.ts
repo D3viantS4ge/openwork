@@ -14,6 +14,7 @@ import { materializeCloudWorkerProviders } from "../../llm/cloud-provider-materi
 import { currentDaytonaSandboxName, flushWorkerCheckpointOnDaytona, getDaytonaSandboxRecord, inspectDaytonaSandbox, refreshDaytonaSignedPreview, stopWorkerOnDaytona } from "../../workers/daytona.js"
 import { CLOUD_INSTANCE_BACKEND, CLOUD_INSTANCE_NAME } from "../../workers/cloud-constants.js"
 import { wakeCloudWorker as defaultWakeCloudWorker } from "../../workers/cloud-lifecycle.js"
+import { fetchWithConnectRetry, previewFetch } from "../../workers/preview-fetch.js"
 import { appLogger } from "../../observability/logger.js"
 import type { OrgRouteVariables } from "../org/shared.js"
 import { continueCloudProvisioning, token } from "../workers/shared.js"
@@ -226,9 +227,13 @@ function healthUrlForPreview(signedPreviewUrl: string) {
 
 async function probeSignedPreview(signedPreviewUrl: string) {
   try {
-    const response = await fetch(healthUrlForPreview(signedPreviewUrl), {
-      method: "GET",
-      signal: AbortSignal.timeout(signedPreviewProbeTimeoutMs),
+    const response = await fetchWithConnectRetry({
+      fetchImpl: previewFetch(),
+      url: healthUrlForPreview(signedPreviewUrl),
+      init: {
+        method: "GET",
+        signal: AbortSignal.timeout(signedPreviewProbeTimeoutMs),
+      },
     })
     return response.ok
   } catch {

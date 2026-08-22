@@ -1,10 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDown, Settings2 } from "lucide-react";
-import { useNavigate } from "react-router";
+import { Check, ChevronDown, ChevronRight, Settings2 } from "lucide-react";
 
-import type { ModelOption, ModelRef } from "@/app/types";
+import type { ModelBehaviorOption, ModelOption, ModelRef } from "@/app/types";
+import { getModelBehaviorSummary } from "@/app/lib/model-behavior";
 import { ProviderIcon } from "@/react-app/design-system/provider-icon";
 import {
   Popover,
@@ -17,19 +17,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useWorkspace } from "@/react-app/shell/workspace-provider";
-import { usePlatform } from "@/react-app/kernel/platform";
 import { useCheckDesktopRestriction } from "@/react-app/domains/cloud/desktop-config-provider";
 import { useDenAuth } from "@/react-app/domains/cloud/den-auth-provider";
 import {
-  getOpenWorkModelsActionUrl,
-  hasOpenWorkModelsProvider,
-  hideOpenWorkModelsPromo,
-  useOpenWorkModelsPromoEligibility,
-  isOpenWorkModelsPromoHidden,
-  OPENWORK_MODEL_PREVIEWS,
   OPENWORK_MODELS_PROVIDER_ID,
   OPENWORK_MODELS_PROVIDER_NAME,
-  openWorkModelsPromoChangedEvent,
 } from "@/react-app/domains/cloud/openwork-models-promo";
 import { getConnectedProviderItems, useProviderListQuery } from "@/react-app/infra/provider-list-query";
 import { filterEntitledModelOptions } from "@/react-app/domains/connections/provider-auth/provider-policy";
@@ -51,13 +43,6 @@ import {
 } from "@/components/ui/command";
 import { openModelPickerEvent, openProviderAuthEvent } from "@/react-app/shell/new-providers-listener";
 import { newProvidersEvent } from "@/app/lib/provider-events";
-
-/** Shown with their logos when no keys are connected yet. */
-const SUGGESTED_KEY_PROVIDERS = [
-  { id: "anthropic", name: "Anthropic" },
-  { id: "openai", name: "OpenAI" },
-  { id: "google", name: "Google" },
-];
 
 function getProviderDisplayName(providerId: string) {
   return providerId
@@ -107,17 +92,21 @@ function useModelOptions(
 
     const options = getConnectedProviderItems(data)
       .flatMap((provider) =>
-        Object.entries(provider.models).map(([id, model]) => ({
-          providerID: provider.id,
-          modelID: id,
-          title: model.name,
-          description: provider.name,
-          behaviorTitle: "Reasoning",
-          behaviorLabel: "Default",
-          behaviorDescription: "",
-          behaviorValue: null,
-          isFree: false,
-        })),
+        Object.entries(provider.models).map(([id, model]) => {
+          const summary = getModelBehaviorSummary(provider.id, model, null, provider.name);
+          return {
+            providerID: provider.id,
+            modelID: id,
+            title: model.name,
+            description: provider.name,
+            behaviorTitle: summary.title,
+            behaviorLabel: summary.label,
+            behaviorDescription: summary.description,
+            behaviorValue: summary.value,
+            behaviorOptions: summary.options,
+            isFree: false,
+          };
+        }),
       );
 
     return filterEntitledModelOptions(filterCloudManagedModelOptions(
@@ -130,34 +119,22 @@ function useModelOptions(
   }, [checkDesktopRestriction, cloudProvidersEnabled, data, fallbackOptions]);
 }
 
-type ModelSelectModelItem = {
-  kind: "model";
+type ModelSelectItem = {
   id: string;
   option: ModelOption;
 };
 
-type ModelSelectOpenWorkItem = {
-  kind: "openwork";
-  id: string;
-  title: string;
-  subtitle: string;
-};
-
-type ModelSelectItem = ModelSelectModelItem | ModelSelectOpenWorkItem;
-
 type ModelSelectGroup = {
   value: string;
   items: ModelSelectItem[];
-  promo: boolean;
 };
 
 function groupByProvider(modelOptions: ModelOption[]): ModelSelectGroup[] {
-  const groups = new Map<string, ModelSelectModelItem[]>();
+  const groups = new Map<string, ModelSelectItem[]>();
 
   for (const option of modelOptions) {
     const providerLabel = option.description ?? getProviderDisplayName(option.providerID);
-    const item: ModelSelectModelItem = {
-      kind: "model",
+    const item: ModelSelectItem = {
       id: `${option.providerID}:${option.modelID}`,
       option,
     };
@@ -175,26 +152,43 @@ function groupByProvider(modelOptions: ModelOption[]): ModelSelectGroup[] {
     .map(([providerLabel, options]) => ({
       value: providerLabel,
       items: [...options].sort((a, b) => a.option.title.localeCompare(b.option.title)),
-      promo: false,
     }))
     .sort((a, b) => a.value.localeCompare(b.value));
 }
 
-function openWorkModelsGroup(): ModelSelectGroup {
-  return {
-    value: OPENWORK_MODELS_PROVIDER_NAME,
-    promo: true,
-    items: OPENWORK_MODEL_PREVIEWS.map((model) => ({
-      kind: "openwork",
-      id: model.id,
-      title: model.title,
-      subtitle: model.subtitle,
-    })),
-  };
-}
-
 function isSameModel(a: ModelRef, b: ModelRef) {
   return a.providerID === b.providerID && a.modelID === b.modelID;
+}
+
+function thinkingOptionsFor(option: ModelOption): ModelBehaviorOption[] {
+  return (option.behaviorOptions ?? []).filter((item) => item.value != null);
+}
+
+function overlaySelectedBehavior(
+  options: readonly ModelOption[],
+  value: ModelRef,
+  behavior: {
+    value: string | null;
+    label?: string;
+    options: { value: string | null; label: string }[];
+  },
+): ModelOption[] {
+  return options.map((option) => {
+    if (!isSameModel(value, option)) return option;
+    const fallbackOptions: ModelBehaviorOption[] = behavior.options.map((item) => ({
+      value: item.value,
+      label: item.label,
+      description: "",
+    }));
+    return {
+      ...option,
+      behaviorValue: behavior.value ?? option.behaviorValue,
+      behaviorLabel: behavior.label ?? option.behaviorLabel,
+      behaviorOptions: (option.behaviorOptions?.length ?? 0) > 0
+        ? option.behaviorOptions
+        : fallbackOptions,
+    };
+  });
 }
 
 interface ModelSelectProps {
@@ -202,16 +196,20 @@ interface ModelSelectProps {
   value: ModelRef;
   hideValue?: boolean;
   onOpenChange: (open: boolean) => void;
-  onChange: (model: ModelRef) => void;
+  onChange: (model: ModelRef, variant?: string | null) => void;
   disabled?: boolean;
   /** When set, "All models" opens the full picker scoped to this session. */
   sessionId?: string;
-  /** Den/import includes OpenWork Models — never show Subscribe while true. */
+  /** Den/import includes OpenWork Models. Kept for callers; picker no longer upsells here. */
   openWorkModelsEntitled?: boolean;
   /** The server is waiting to reload this workspace with OpenWork Models. */
   openWorkModelsSyncing?: boolean;
   /** Member-scoped models available before a workspace OpenCode client exists. */
   fallbackOptions?: readonly ModelOption[];
+  behaviorValue?: string | null;
+  behaviorLabel?: string;
+  behaviorOptions?: { value: string | null; label: string }[];
+  onBehaviorChange?: (value: string | null) => void;
 }
 
 export function ModelSelect({
@@ -222,26 +220,28 @@ export function ModelSelect({
   onChange,
   disabled = false,
   sessionId,
-  openWorkModelsEntitled = false,
   openWorkModelsSyncing = false,
   fallbackOptions = [],
+  behaviorValue = null,
+  behaviorLabel,
+  behaviorOptions = [],
+  onBehaviorChange,
 }: ModelSelectProps) {
   const [search, setSearch] = React.useState("");
-  const [promoHidden, setPromoHidden] = React.useState(isOpenWorkModelsPromoHidden);
+  const [thinkingFor, setThinkingFor] = React.useState<ModelOption | null>(null);
   const searchInputRef = React.useRef<HTMLInputElement>(null);
   const denAuth = useDenAuth();
-  const modelOptions = useModelOptions(open, fallbackOptions, denAuth.isSignedIn);
-  const navigate = useNavigate();
-  const platform = usePlatform();
-  const openWorkModelsPromoEligible = useOpenWorkModelsPromoEligibility();
+  const catalogOptions = useModelOptions(open, fallbackOptions, denAuth.isSignedIn);
+  const modelOptions = React.useMemo(
+    () => overlaySelectedBehavior(catalogOptions, value, {
+      value: behaviorValue,
+      label: behaviorLabel,
+      options: behaviorOptions,
+    }),
+    [behaviorLabel, behaviorOptions, behaviorValue, catalogOptions, value],
+  );
   const checkDesktopRestriction = useCheckDesktopRestriction();
   const canAddProviders = !checkDesktopRestriction({ restriction: "allowCustomProviders" });
-
-  React.useEffect(() => {
-    const handlePromoChanged = () => setPromoHidden(isOpenWorkModelsPromoHidden());
-    window.addEventListener(openWorkModelsPromoChangedEvent, handlePromoChanged);
-    return () => window.removeEventListener(openWorkModelsPromoChangedEvent, handlePromoChanged);
-  }, []);
 
   const focusSearchInput = React.useCallback(() => {
     window.requestAnimationFrame(() => {
@@ -261,8 +261,12 @@ export function ModelSelect({
       return;
     }
 
+    if (thinkingFor) {
+      return;
+    }
+
     focusSearchInput();
-  }, [focusSearchInput, open]);
+  }, [focusSearchInput, open, thinkingFor]);
 
   const selectedOption = modelOptions?.find((option) =>
     isSameModel(value, {
@@ -271,65 +275,32 @@ export function ModelSelect({
     }),
   );
 
-  const openWorkModelsAvailable = React.useMemo(
-    () => hasOpenWorkModelsProvider(modelOptions.map((option) => option.providerID)),
-    [modelOptions],
-  );
-  const showOpenWorkModelsPromo = React.useMemo(
-    () =>
-      openWorkModelsPromoEligible &&
-      !promoHidden &&
-      !openWorkModelsAvailable &&
-      !openWorkModelsEntitled,
-    [openWorkModelsAvailable, openWorkModelsEntitled, openWorkModelsPromoEligible, promoHidden],
-  );
+  const groups = React.useMemo(() => groupByProvider(modelOptions), [modelOptions]);
 
-  const groups = React.useMemo(() => {
-    const providerGroups = groupByProvider(modelOptions);
-    return showOpenWorkModelsPromo
-      ? [openWorkModelsGroup(), ...providerGroups]
-      : providerGroups;
-  }, [modelOptions, showOpenWorkModelsPromo]);
-
-  const handleSelect = (option: ModelOption) => {
-    onChange({ providerID: option.providerID, modelID: option.modelID });
+  const applyModel = (option: ModelOption, behavior?: string | null) => {
+    onChange({ providerID: option.providerID, modelID: option.modelID }, behavior);
+    if (behavior !== undefined) {
+      onBehaviorChange?.(behavior);
+    }
     setSearch("");
+    setThinkingFor(null);
     onOpenChange(false);
   };
 
-  const handleOpenWorkModels = React.useCallback(() => {
-    onOpenChange(false);
-    setSearch("");
-    if (!denAuth.isSignedIn) {
-      navigate("/settings/cloud-account");
+  const handleSelect = (option: ModelOption) => {
+    const thinking = thinkingOptionsFor(option);
+    if (thinking.length > 0 && onBehaviorChange) {
+      setThinkingFor(option);
+      return;
     }
-    window.setTimeout(() => {
-      platform.openLink(getOpenWorkModelsActionUrl(denAuth.isSignedIn));
-    }, 0);
-  }, [denAuth.isSignedIn, navigate, onOpenChange, platform]);
+    applyModel(option);
+  };
 
-  const handleHideOpenWorkModels = React.useCallback(() => {
-    hideOpenWorkModelsPromo();
-    setPromoHidden(true);
-  }, []);
-
-  // Providers the user connected with their own key — OpenCode Zen and
-  // OpenWork Models are managed for them, so they never count as "your keys".
-  const keyProviders = React.useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const option of modelOptions) {
-      const id = option.providerID.trim().toLowerCase();
-      if (!id || id === "opencode" || id === OPENWORK_MODELS_PROVIDER_ID) continue;
-      if (seen.has(id)) continue;
-      seen.set(id, option.description ?? getProviderDisplayName(option.providerID));
-    }
-    return [...seen].map(([id, name]) => ({ id, name }));
-  }, [modelOptions]);
-
-  const hasKeyProviders = keyProviders.length > 0;
-  const keyProviderPreview = hasKeyProviders
-    ? keyProviders.slice(0, 3)
-    : SUGGESTED_KEY_PROVIDERS;
+  const thinkingOptions = thinkingFor ? thinkingOptionsFor(thinkingFor) : [];
+  const thinkingValue =
+    thinkingFor && isSameModel(value, thinkingFor)
+      ? (behaviorValue ?? thinkingFor.behaviorValue)
+      : (thinkingFor?.behaviorValue ?? null);
 
   const handleConnectProvider = React.useCallback(() => {
     onOpenChange(false);
@@ -345,6 +316,7 @@ export function ModelSelect({
 
         if (!nextOpen) {
           setSearch("");
+          setThinkingFor(null);
         }
       }}
     >
@@ -356,7 +328,7 @@ export function ModelSelect({
               disabled={disabled}
               aria-label="Change model"
               aria-keyshortcuts="Meta+Alt+/"
-              className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12 disabled:pointer-events-none disabled:opacity-60"
+              className="flex h-9 max-h-9 items-center gap-1.5 rounded-md px-2.5 text-sm text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12 disabled:pointer-events-none disabled:opacity-60"
             />
           }
         >
@@ -372,10 +344,11 @@ export function ModelSelect({
         </TooltipContent>
       </Tooltip>
       <PopoverContent
-        className="h-80 max-h-(--available-height) w-72 gap-0 overflow-hidden p-px **:data-[slot=scroll-area-viewport]:data-has-overflow-y:pe-0.5"
+        className="flex h-80 max-h-(--available-height) w-auto flex-row gap-1.5 overflow-visible bg-transparent p-0 shadow-none ring-0"
         align="start"
         initialFocus={false}
       >
+        <div className="flex h-full w-72 min-w-72 flex-col overflow-hidden rounded-3xl bg-popover shadow-lg ring-1 ring-foreground/5 dark:ring-foreground/10">
         <Command items={groups} value={search} onValueChange={setSearch}>
           <CommandHeader>
             <CommandInput
@@ -408,42 +381,14 @@ export function ModelSelect({
                 key={group.value}
                 items={group.items}
               >
-                <CommandGroupLabel className={group.promo ? "flex items-baseline justify-between gap-2" : undefined}>
-                  {group.promo ? (
-                    <>
-                      <span>{group.value}</span>
-                      <span className="shrink-0 font-normal text-muted-foreground">hosted · no API keys</span>
-                    </>
-                  ) : (
-                    group.value
-                  )}
+                <CommandGroupLabel>
+                  {group.value}
                 </CommandGroupLabel>
                 <CommandCollection>
                   {(item: ModelSelectItem) => {
-                    if (item.kind === "openwork") {
-                      return (
-                        <CommandItem
-                          className="gap-2"
-                          key={item.id}
-                          value={`${OPENWORK_MODELS_PROVIDER_NAME} ${item.title} ${item.id} sign in subscribe`}
-                          onClick={handleOpenWorkModels}
-                        >
-                          <ProviderIcon
-                            providerId={OPENWORK_MODELS_PROVIDER_ID}
-                            providerName={OPENWORK_MODELS_PROVIDER_NAME}
-                            className="size-3.5 opacity-70"
-                            size={14}
-                          />
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-foreground">
-                              {item.title}
-                            </span>
-                          </span>
-                        </CommandItem>
-                      );
-                    }
-
                     const option = item.option;
+                    const hasThinking =
+                      Boolean(onBehaviorChange) && thinkingOptionsFor(option).length > 0;
                     return (
                       <CommandItem
                         className="gap-2"
@@ -451,6 +396,7 @@ export function ModelSelect({
                         value={`${option.providerID}:${option.modelID} ${option.title} ${option.description ?? ""}`}
                         onClick={() => handleSelect(option)}
                         data-checked={isSameModel(value, option)}
+                        data-open={thinkingFor ? isSameModel(thinkingFor, option) : undefined}
                       >
                         <ProviderIcon
                           providerId={option.providerID}
@@ -467,87 +413,72 @@ export function ModelSelect({
                               getProviderDisplayName(option.providerID)}
                           </span>
                         </span>
+                        {hasThinking ? (
+                          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                        ) : null}
                       </CommandItem>
                     );
                   }}
                 </CommandCollection>
-                {group.promo ? (
-                  <button
-                    type="button"
-                    className="mx-1 mb-1.5 mt-1 flex w-[calc(100%-0.5rem)] items-center gap-2 rounded-md bg-blue-2 px-3 py-2 text-left transition-colors hover:bg-blue-3"
-                    onClick={handleOpenWorkModels}
-                  >
-                    <span className="min-w-0 flex-1 text-xs leading-4 text-foreground">
-                      One subscription unlocks these in every workspace.
-                    </span>
-                    <span className="shrink-0 text-xs font-semibold text-blue-11">
-                      {denAuth.isSignedIn ? "Enable →" : "Sign in →"}
-                    </span>
-                  </button>
-                ) : null}
               </CommandGroup>
             )}
           </CommandList>
-          {/* Your API keys → provider configuration. One slot, one action: the
-              label reflects whether any keys are connected yet. */}
           {canAddProviders ? (
-            <div className="border-t border-border p-1">
-              <div className="flex items-baseline px-2 pb-0.5 pt-1 text-xs text-muted-foreground">
-                Your API keys
-              </div>
+            <div className="border-t border-border px-2 py-1.5">
               <button
                 type="button"
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                 onClick={handleConnectProvider}
               >
-                <span className="flex shrink-0 items-center">
-                  {keyProviderPreview.map((provider, index) => (
-                    <span
-                      key={provider.id}
-                      className="flex size-[18px] items-center justify-center overflow-hidden rounded-[6px] border border-border bg-background"
-                      style={index === 0 ? undefined : { marginLeft: "-5px" }}
-                    >
-                      <ProviderIcon providerId={provider.id} providerName={provider.name} size={12} />
-                    </span>
-                  ))}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-foreground">
-                  {keyProviderPreview.map((provider) => provider.name).join(", ")}
-                  {!hasKeyProviders || keyProviders.length > keyProviderPreview.length ? "…" : ""}
-                </span>
-                <span className="shrink-0 text-xs font-medium text-muted-foreground">
-                  {hasKeyProviders ? "Connect more providers" : "Add your keys"}
-                </span>
+                Connect more providers
               </button>
             </div>
           ) : null}
           {/* Link to full model picker */}
           <div className="border-t border-border px-2 py-1.5">
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                className="flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                onClick={() => {
-                  onOpenChange(false);
-                  setSearch("");
-                  window.dispatchEvent(new CustomEvent(openModelPickerEvent, sessionId ? { detail: { sessionId } } : undefined));
-                }}
-              >
-                <Settings2 className="size-3.5" />
-                All models
-              </button>
-              {showOpenWorkModelsPromo ? (
-                <button
-                  type="button"
-                  className="shrink-0 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                  onClick={handleHideOpenWorkModels}
-                >
-                  Hide
-                </button>
-              ) : null}
-            </div>
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+              onClick={() => {
+                onOpenChange(false);
+                setSearch("");
+                window.dispatchEvent(new CustomEvent(openModelPickerEvent, sessionId ? { detail: { sessionId } } : undefined));
+              }}
+            >
+              <Settings2 className="size-3.5" />
+              All models
+            </button>
           </div>
         </Command>
+        </div>
+        {thinkingFor ? (
+          <div
+            data-slot="model-thinking-submenu"
+            className="flex h-full w-44 min-w-44 flex-col overflow-hidden rounded-3xl bg-popover shadow-lg ring-1 ring-foreground/5 dark:ring-foreground/10"
+          >
+            <div className="border-b border-border px-3 py-2">
+              <span className="block truncate text-sm font-medium">{thinkingFor.title}</span>
+              <span className="block truncate text-xs text-muted-foreground">Thinking</span>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-1">
+              {thinkingOptions.map((option) => {
+                const selected = option.value === thinkingValue
+                  || (thinkingValue == null && option.value === thinkingOptions[0]?.value);
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+                    onClick={() => applyModel(thinkingFor, option.value)}
+                  >
+                    <span className="min-w-0 flex-1 truncate text-foreground">{option.label}</span>
+                    {selected ? <Check className="size-3.5 shrink-0 text-muted-foreground" /> : null}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
       </PopoverContent>
     </Popover>
   );

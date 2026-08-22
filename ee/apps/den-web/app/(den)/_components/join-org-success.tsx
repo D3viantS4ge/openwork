@@ -231,7 +231,7 @@ export function JoinOrgSuccess({
   }
 
   return (
-    <OnboardingShell state="joined" width="wide">
+    <OnboardingShell state="joined" width="wide" background="surface">
       <section data-testid="join-org-success">
         <OnboardingCard organization={{ name: organizationName, brand }}>
           <div className="grid gap-3">

@@ -20,7 +20,7 @@
  * repo checkout at /workspace in the Daytona eval sandbox).
  */
 const PLUG_BUTTON = 'button[title="Commands, skills, and MCPs"]';
-const SKILL_MARKERS = ["/browser-automation", "/agent-first-screenshots"];
+const SKILL_MARKERS = ["/browser-automation"];
 
 const DEN_KEYS_CLEANUP = `(() => {
   localStorage.removeItem("openwork.den.authToken");

@@ -271,7 +271,8 @@ if (process.env.OPENWORK_ELECTRON_SKIP_NATIVE_REBUILD === "1") {
 const cdpPortRaw = process.env.OPENWORK_ELECTRON_REMOTE_DEBUG_PORT?.trim() ?? "";
 const cdpPort = cdpPortRaw === "" || cdpPortRaw === "0" ? "" : cdpPortRaw;
 
-electronChild = run(pnpmCmd, ["exec", "electron", "./electron/main.mjs"], {
+const blankSlateArgs = process.argv.includes("--blank-slate") ? ["--blank-slate"] : [];
+electronChild = run(pnpmCmd, ["exec", "electron", "./electron/main.mjs", ...blankSlateArgs], {
   cwd: desktopRoot,
   env: {
     ...process.env,

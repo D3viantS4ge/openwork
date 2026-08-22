@@ -144,7 +144,8 @@ async function listOpenSessions(config: ServerConfig): Promise<readonly unknown[
   const result = await opencode.session.list({ limit: 200 });
   if (result.data != null) return result.data;
   if (result.error === undefined) throw new Error("opencode_empty_response");
-  throw new Error(`opencode_request_failed:${result.response.status}`);
+  const upstreamStatus = result.response?.status;
+  throw new Error(upstreamStatus === undefined ? "opencode_request_failed" : `opencode_request_failed:${upstreamStatus}`);
 }
 
 function errorMessage(error: unknown): string {

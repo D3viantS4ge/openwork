@@ -3,43 +3,26 @@ import { fileURLToPath } from "node:url";
 import { expect } from "vitest";
 import { test } from "@openwork/testkit";
 import {
-  buildInstallDownloadHref,
-  detectedInstallPlatform,
-  downloadCtaLabel,
-  installerApiUrlFromConfig,
-  installTokenFromPageUrl,
+  buildAuthenticatedInstallDownloadHref,
 } from "../../ee/apps/den-web/app/(den)/_lib/install-download";
 
-const joinOrgSuccessPath = fileURLToPath(
-  new URL("../../ee/apps/den-web/app/(den)/_components/join-org-success.tsx", import.meta.url),
+const joinOrgScreenPath = fileURLToPath(
+  new URL("../../ee/apps/den-web/app/(den)/_components/join-org-screen.tsx", import.meta.url),
 );
 
-test("You're in downloads for the detected OS instead of opening /install", async ({ evidence }) => {
-  const source = readFileSync(joinOrgSuccessPath, "utf8");
-  const minted = "https://den.example.test/install?token=invite-success-token";
-  const href = buildInstallDownloadHref(
-    installerApiUrlFromConfig({ apiUrl: "https://api.example.test/den" }) ?? "",
-    detectedInstallPlatform({ os: "macos", arch: "arm64" }) ?? "mac-arm64",
-    installTokenFromPageUrl(minted) ?? "",
-  );
+test("joining opens clean authenticated installation except for desktop handoff requests", async ({ evidence }) => {
+  const source = readFileSync(joinOrgScreenPath, "utf8");
+  const href = buildAuthenticatedInstallDownloadHref("https://api.example.test/den", "mac-arm64");
 
-  expect(downloadCtaLabel("macos")).toBe("Download for macOS");
-  expect(downloadCtaLabel("windows")).toBe("Download for Windows");
-  expect(downloadCtaLabel("linux")).toBe("Download for Linux");
-  expect(href).toBe("https://api.example.test/den/v1/install/mac-arm64?token=invite-success-token");
-  expect(href).not.toContain("/install?");
-  expect(source).toContain("downloadCtaLabel");
-  expect(source).toContain("startInstallerDownload");
-  expect(source).toContain('data-download-href={downloadHref ?? undefined}');
-  expect(source).toContain("Already have OpenWork? Open it.");
-  expect(source).toContain('data-testid="join-org-open-app"');
-  expect(source).not.toContain("Get the desktop app");
-  expect(source).not.toContain("window.location.assign(await createOrganizationInstallLink");
-  expect(installTokenFromPageUrl("https://den.example.test/join-org")).toBeNull();
+  expect(href).toBe("https://api.example.test/den/v1/me/install/mac-arm64");
+  expect(href).not.toContain("token=");
+  expect(source).toContain('router.replace("/install")');
+  expect(source).toContain("if (desktopAuthRequested)");
+  expect(source).toContain("setJoinedOrg(nextJoinedOrg)");
 
-  evidence.fact(
-    "The joined welcome screen starts the OS installer instead of opening /install",
-    "You're in labels Download for the detected OS, writes the org-served /v1/install href onto the CTA, and never assigns the guided /install page.",
+  evidence.recordAssertionEvidence(
+    "Post-invite onboarding opens token-free installation while desktop-auth requests keep their handoff",
+    "Normal acceptance and accepted-invite resolution replace the route with /install; desktopAuthRequested still selects JoinOrgSuccess for the existing desktop handoff.",
     true,
   );
 });

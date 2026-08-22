@@ -185,7 +185,7 @@ function installProviderSyncFetch(
     statusProviders?: Array<Record<string, unknown>>;
     statusReloadPending?: boolean;
     statusSkipped?: Array<Record<string, unknown>>;
-    onRun?: () => void;
+    onRun?: (runIndex: number) => void | Promise<void>;
   } = {},
 ) {
   let runIndex = 0;
@@ -213,7 +213,7 @@ function installProviderSyncFetch(
         return new Response(null, { status: 204 });
       }
       if (url.origin === "https://server.example" && url.pathname === "/cloud-provider-sync/run" && method === "POST") {
-        options.onRun?.();
+        await options.onRun?.(runIndex);
         const statuses = options.runStatuses ?? [{ status: "noop" }];
         const result = statuses[Math.min(runIndex, statuses.length - 1)];
         runIndex += 1;
@@ -392,6 +392,51 @@ describe("cloud provider sync in server-capability mode", () => {
     expect(await store.runCloudProviderSync("settings_cloud_opened")).toEqual({ outcome: "handled_server_side" });
     expect(requests.filter((request) => new URL(request.url).pathname === "/cloud-provider-sync/run")).toHaveLength(1);
     expect(requests.filter((request) => request.url.includes("/v1/llm-providers"))).toHaveLength(0);
+  });
+
+  test("shares same-context runs and coalesces a changed context into one trailing request", async () => {
+    const storage = installWindow({ origin: "https://self-hosted.example" });
+    installCloudSession(storage);
+    const requests: RecordedRequest[] = [];
+    let markFirstRunReached: () => void = () => undefined;
+    const firstRunReached = new Promise<void>((resolve) => {
+      markFirstRunReached = resolve;
+    });
+    let releaseFirstRun: () => void = () => undefined;
+    const firstRunReleased = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
+    installProviderSyncFetch(requests, {
+      onRun: async (runIndex) => {
+        if (runIndex !== 0) return;
+        markFirstRunReached();
+        await firstRunReleased;
+      },
+    });
+    const { store } = createProviderAuthTestStore({ read: true, write: true, providerSync: true });
+    const { store: strictModeRemountStore } = createProviderAuthTestStore({ read: true, write: true, providerSync: true });
+
+    const first = store.runCloudProviderSync("app_launch");
+    await firstRunReached;
+    const sameContext = [
+      store.runCloudProviderSync("sign_in"),
+      strictModeRemountStore.runCloudProviderSync("app_resume"),
+    ];
+    await Bun.sleep(10);
+    expect(requests.filter((request) => new URL(request.url).pathname === "/cloud-provider-sync/run")).toHaveLength(1);
+
+    storage.setItem("openwork.den.activeOrgId", "org_changed");
+    const changedContext = [
+      store.runCloudProviderSync("sign_in"),
+      strictModeRemountStore.runCloudProviderSync("app_resume"),
+    ];
+    await Bun.sleep(10);
+    expect(requests.filter((request) => new URL(request.url).pathname === "/cloud-provider-sync/run")).toHaveLength(1);
+
+    releaseFirstRun();
+    const outcomes = await Promise.all([first, ...sameContext, ...changedContext]);
+    expect(outcomes).toEqual(Array.from({ length: 5 }, () => ({ outcome: "handled_server_side" })));
+    expect(requests.filter((request) => new URL(request.url).pathname === "/cloud-provider-sync/run")).toHaveLength(2);
   });
 
   test("resolves noop as handled server-side", async () => {

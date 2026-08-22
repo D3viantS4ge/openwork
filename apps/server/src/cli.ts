@@ -13,8 +13,10 @@ import {
   reapOrphanEngineInstances,
 } from "./engine-registry.js";
 import { createManagedOpencodeServer, type ManagedOpencodeServer } from "./managed-opencode.js";
+import { clearEnginePoolForConfig, computeEngineConfigFingerprint, type EnginePool, type EngineSpawnTemplate } from "./engine-pool.js";
 import {
   clearTrustedOpencodeProcess,
+  createEnginePoolForConfig,
   createServerLogger,
   registerTrustedOpencodeProcess,
   startServer,
@@ -59,6 +61,7 @@ const logger = createServerLogger(config);
 let managedOpencode: ManagedOpencodeServer | null = null;
 let managedOpencodeIdentity: string | null = null;
 let managedEngineRecordId: string | null = null;
+let enginePool: EnginePool | null = null;
 
 if (!config.readOnly) {
   await ensureLocalWorkspaceFiles(config.workspaces);
@@ -94,19 +97,30 @@ if (!config.opencodeBaseUrl && process.env.OPENWORK_MANAGE_OPENCODE === "1") {
     // strips OPENWORK_*/OPENCODE_* keys, so runtime wiring below cannot be
     // shadowed.
     const userEnv = await EnvService.readForInjection();
+    const engineEnv: Record<string, string | undefined> = {
+      ...userEnv,
+      ...(process.env.OPENWORK_DEV_MODE ? { OPENWORK_DEV_MODE: process.env.OPENWORK_DEV_MODE } : {}),
+      ...(process.env.OPENWORK_UI_CONTROL_DISCOVERY ? { OPENWORK_UI_CONTROL_DISCOVERY: process.env.OPENWORK_UI_CONTROL_DISCOVERY } : {}),
+      OPENWORK_SERVER_URL: serverUrl,
+      OPENWORK_SERVER_TOKEN: config.token,
+      OPENCODE_CONFIG: runtimeConfigPath,
+      OPENCODE_MODELS_URL: opencodeModelsUrl,
+    };
+    const engineSpawnTemplate: EngineSpawnTemplate = {
+      bin: process.env.OPENWORK_OPENCODE_BIN?.trim() || defaultManagedOpencodeBin(),
+      cwd: managedOpencodeCwd,
+      runtimeConfigPath,
+      env: engineEnv,
+      reservedPorts: () => {
+        const poolPorts = enginePool?.connections().map((connection) => Number(new URL(connection.baseUrl).port) || 0) ?? [];
+        return [...new Set([config.port, ...poolPorts].filter((port) => port > 0))];
+      },
+    };
     managedOpencode = await createManagedOpencodeServer({
       bin: process.env.OPENWORK_OPENCODE_BIN?.trim() || defaultManagedOpencodeBin(),
       cwd: managedOpencodeCwd,
       excludedPorts: [config.port],
-      env: {
-        ...userEnv,
-        ...(process.env.OPENWORK_DEV_MODE ? { OPENWORK_DEV_MODE: process.env.OPENWORK_DEV_MODE } : {}),
-        ...(process.env.OPENWORK_UI_CONTROL_DISCOVERY ? { OPENWORK_UI_CONTROL_DISCOVERY: process.env.OPENWORK_UI_CONTROL_DISCOVERY } : {}),
-        OPENWORK_SERVER_URL: serverUrl,
-        OPENWORK_SERVER_TOKEN: config.token,
-        OPENCODE_CONFIG: runtimeConfigPath,
-        OPENCODE_MODELS_URL: opencodeModelsUrl,
-      },
+      env: engineEnv,
     });
     config.opencodeBaseUrl = managedOpencode.url;
     config.opencodeUsername = managedOpencode.username;
@@ -144,6 +158,14 @@ if (!config.opencodeBaseUrl && process.env.OPENWORK_MANAGE_OPENCODE === "1") {
         bin: process.env.OPENWORK_OPENCODE_BIN?.trim() || defaultManagedOpencodeBin(),
       }).catch(() => undefined);
     }
+    enginePool = createEnginePoolForConfig({
+      config,
+      template: engineSpawnTemplate,
+      handle: managedOpencode,
+      fingerprint: await computeEngineConfigFingerprint(engineSpawnTemplate),
+      registryId: managedEngineRecordId,
+      trustedIdentity: managedOpencodeIdentity,
+    });
     logger.log("info", `Managed OpenCode listening on ${managedOpencode.url}`);
   }
 }
@@ -156,10 +178,7 @@ if (!config.opencodeBaseUrl && process.env.OPENWORK_MANAGE_OPENCODE === "1") {
 // re-POSTing every entry would spawn a duplicate, idle process tree per
 // server (see #3325).
 if (managedOpencode) {
-  const workspace = findManagedEngineWorkspace(config.workspaces);
-  void syncAllWorkspacesRuntimeMcpToEngine(config, {
-    configCoveredWorkspaceId: workspace?.id,
-  });
+  void syncAllWorkspacesRuntimeMcpToEngine(config);
 }
 
 const url = `http://${config.host}:${server.port}`;
@@ -191,18 +210,23 @@ if (args.verbose) {
 
 const shutdown = async () => {
   workerActivityHeartbeat?.stop();
-  if (managedOpencodeIdentity) {
+  if (managedOpencodeIdentity && !enginePool) {
     clearTrustedOpencodeProcess(config, managedOpencodeIdentity);
   }
   // Await the engine teardown (SIGTERM → 1s → SIGKILL, bounded ~1.5s): a
   // synchronous process.exit here used to skip the escalation entirely and
   // orphan the OpenCode child to init.
   try {
-    await managedOpencode?.close();
+    if (enginePool) {
+      clearEnginePoolForConfig(config);
+      await enginePool.disposeAll();
+    } else {
+      await managedOpencode?.close();
+    }
   } catch {
     // Engine already exited.
   }
-  if (managedEngineRecordId) {
+  if (managedEngineRecordId && !enginePool) {
     await removeEngineInstance(config, managedEngineRecordId).catch(() => undefined);
   }
   (server as { stop?: (closeActiveConnections?: boolean) => void }).stop?.(true);

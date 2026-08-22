@@ -1,5 +1,6 @@
 import { stat } from "node:fs/promises"
 import path from "node:path"
+import { resolveInstallerReleaseTag } from "../desktop-releases.js"
 import { env } from "../env.js"
 
 export type ConfiguredInstallerArtifact = {
@@ -10,13 +11,22 @@ export type ConfiguredInstallerArtifact = {
 
 export const DEFAULT_INSTALLER_RELEASE_REPO = "different-ai/openwork"
 
+type InstallerReleaseAssetOptions = { releaseRepo?: string; releaseTag?: string }
+type ExplicitInstallerReleaseAssetOptions = InstallerReleaseAssetOptions & { releaseTag: string }
+
+export function installerReleaseAssetUrl(fileName: string, options: ExplicitInstallerReleaseAssetOptions): string
+export function installerReleaseAssetUrl(fileName: string, options?: InstallerReleaseAssetOptions): Promise<string>
 export function installerReleaseAssetUrl(
   fileName: string,
-  options: { releaseRepo?: string; releaseTag?: string } = {},
+  options: InstallerReleaseAssetOptions = {},
 ) {
   const releaseRepo = options.releaseRepo ?? env.installerReleaseRepo
-  const releaseTag = options.releaseTag ?? env.installerReleaseTag
-  return `https://github.com/${releaseRepo}/releases/download/${encodeURIComponent(releaseTag)}/${encodeURIComponent(fileName)}`
+  if (options.releaseTag !== undefined) {
+    return `https://github.com/${releaseRepo}/releases/download/${encodeURIComponent(options.releaseTag)}/${encodeURIComponent(fileName)}`
+  }
+  return resolveInstallerReleaseTag().then((releaseTag) =>
+    `https://github.com/${releaseRepo}/releases/download/${encodeURIComponent(releaseTag)}/${encodeURIComponent(fileName)}`
+  )
 }
 
 export function installerLatestReleaseAssetUrl(

@@ -3,6 +3,11 @@ import { create } from "zustand";
 import type { ComposerAttachment, ComposerDraft } from "../../../../app/types";
 import type { ComposerMentionKind } from "./composer/mention-encoding";
 
+export type QueuedComposerItem = {
+  id: string;
+  draft: ComposerDraft;
+};
+
 export type ComposerPastePart = {
   id: string;
   label: string;
@@ -20,7 +25,7 @@ export type ComposerSessionState = {
 
 export type ComposerStateStore = {
   sessions: Record<string, ComposerSessionState>;
-  queuedDrafts: Record<string, ComposerDraft[]>;
+  queuedDrafts: Record<string, QueuedComposerItem[]>;
   /**
    * Sent-prompt history per session, oldest first. Kept outside
    * `sessions` because `clearSession` resets the composer after every
@@ -35,9 +40,11 @@ export type ComposerStateStore = {
   setPasteParts: (sessionId: string, pasteParts: ComposerPastePart[]) => void;
   appendHistory: (sessionId: string, text: string) => void;
   appendQueuedDraft: (sessionId: string, draft: ComposerDraft) => void;
-  removeQueuedDraft: (sessionId: string, index: number) => void;
+  removeQueuedDraft: (sessionId: string, id: string) => void;
+  updateQueuedDraft: (sessionId: string, id: string, draft: ComposerDraft) => void;
+  reorderQueuedDrafts: (sessionId: string, ids: string[]) => void;
   clearQueuedDrafts: (sessionId: string) => void;
-  prependQueuedDrafts: (sessionId: string, drafts: ComposerDraft[]) => void;
+  prependQueuedDrafts: (sessionId: string, items: QueuedComposerItem[]) => void;
   clearSession: (sessionId: string) => void;
 };
 
@@ -45,7 +52,7 @@ const EMPTY_ATTACHMENTS: ComposerAttachment[] = [];
 const EMPTY_MENTIONS: Record<string, ComposerMentionKind> = {};
 const EMPTY_PASTE_PARTS: ComposerPastePart[] = [];
 const EMPTY_HISTORY: string[] = [];
-const EMPTY_QUEUED_DRAFTS: ComposerDraft[] = [];
+const EMPTY_QUEUED_DRAFTS: QueuedComposerItem[] = [];
 const HISTORY_LIMIT = 50;
 
 function createEmptyComposerSession(): ComposerSessionState {
@@ -60,6 +67,10 @@ function createEmptyComposerSession(): ComposerSessionState {
 
 function getWritableSession(state: ComposerStateStore, sessionId: string): ComposerSessionState {
   return state.sessions[sessionId] ?? createEmptyComposerSession();
+}
+
+function createQueuedItem(draft: ComposerDraft, id?: string): QueuedComposerItem {
+  return { id: id ?? crypto.randomUUID(), draft };
 }
 
 export const useComposerStateStore = create<ComposerStateStore>((set) => ({
@@ -115,17 +126,42 @@ export const useComposerStateStore = create<ComposerStateStore>((set) => ({
   }),
   appendQueuedDraft: (sessionId, draft) => set((state) => {
     const current = state.queuedDrafts[sessionId] ?? EMPTY_QUEUED_DRAFTS;
-    return { queuedDrafts: { ...state.queuedDrafts, [sessionId]: [...current, draft] } };
+    return { queuedDrafts: { ...state.queuedDrafts, [sessionId]: [...current, createQueuedItem(draft)] } };
   }),
-  removeQueuedDraft: (sessionId, index) => set((state) => {
+  removeQueuedDraft: (sessionId, id) => set((state) => {
     const current = state.queuedDrafts[sessionId];
     if (!current) return state;
-    const next = current.filter((_, itemIndex) => itemIndex !== index);
+    const next = current.filter((item) => item.id !== id);
     if (next.length === current.length) return state;
     if (next.length > 0) return { queuedDrafts: { ...state.queuedDrafts, [sessionId]: next } };
     const queuedDrafts = { ...state.queuedDrafts };
     delete queuedDrafts[sessionId];
     return { queuedDrafts };
+  }),
+  updateQueuedDraft: (sessionId, id, draft) => set((state) => {
+    const current = state.queuedDrafts[sessionId];
+    if (!current) return state;
+    let changed = false;
+    const next = current.map((item) => {
+      if (item.id !== id) return item;
+      changed = true;
+      return { ...item, draft };
+    });
+    if (!changed) return state;
+    return { queuedDrafts: { ...state.queuedDrafts, [sessionId]: next } };
+  }),
+  reorderQueuedDrafts: (sessionId, ids) => set((state) => {
+    const current = state.queuedDrafts[sessionId];
+    if (!current || current.length === 0) return state;
+    if (ids.length !== current.length) return state;
+    const byId = new Map(current.map((item) => [item.id, item]));
+    const next: QueuedComposerItem[] = [];
+    for (const id of ids) {
+      const item = byId.get(id);
+      if (!item) return state;
+      next.push(item);
+    }
+    return { queuedDrafts: { ...state.queuedDrafts, [sessionId]: next } };
   }),
   clearQueuedDrafts: (sessionId) => set((state) => {
     if (!state.queuedDrafts[sessionId]) return state;
@@ -133,10 +169,10 @@ export const useComposerStateStore = create<ComposerStateStore>((set) => ({
     delete queuedDrafts[sessionId];
     return { queuedDrafts };
   }),
-  prependQueuedDrafts: (sessionId, drafts) => set((state) => {
-    if (drafts.length === 0) return state;
+  prependQueuedDrafts: (sessionId, items) => set((state) => {
+    if (items.length === 0) return state;
     const current = state.queuedDrafts[sessionId] ?? EMPTY_QUEUED_DRAFTS;
-    return { queuedDrafts: { ...state.queuedDrafts, [sessionId]: [...drafts, ...current] } };
+    return { queuedDrafts: { ...state.queuedDrafts, [sessionId]: [...items, ...current] } };
   }),
   clearSession: (sessionId) => set((state) => {
     if (!state.sessions[sessionId]) return state;
@@ -166,7 +202,7 @@ export function getComposerHistory(state: ComposerStateStore, sessionId: string)
   return state.history[sessionId] ?? EMPTY_HISTORY;
 }
 
-export function getComposerQueuedDrafts(state: ComposerStateStore, sessionId: string): ComposerDraft[] {
+export function getComposerQueuedDrafts(state: ComposerStateStore, sessionId: string): QueuedComposerItem[] {
   return state.queuedDrafts[sessionId] ?? EMPTY_QUEUED_DRAFTS;
 }
 

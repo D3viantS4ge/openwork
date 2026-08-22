@@ -463,6 +463,76 @@
       "when": 1786661029943,
       "tag": "0066_lying_rawhide_kid",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "5",
+      "when": 1786803358248,
+      "tag": "0067_loving_the_santerians",
+      "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "5",
+      "when": 1786805740962,
+      "tag": "0068_glamorous_virginia_dare",
+      "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "5",
+      "when": 1786982272166,
+      "tag": "0069_wooden_shotgun",
+      "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "5",
+      "when": 1786982448445,
+      "tag": "0070_white_madelyne_pryor",
+      "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "5",
+      "when": 1786982612757,
+      "tag": "0071_shocking_namorita",
+      "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "5",
+      "when": 1787053634255,
+      "tag": "0072_huge_avengers",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "5",
+      "when": 1787160055312,
+      "tag": "0073_young_scrambler",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "5",
+      "when": 1787161128102,
+      "tag": "0074_superb_tiger_shark",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "5",
+      "when": 1787207444143,
+      "tag": "0075_brief_lenny_balinger",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "5",
+      "when": 1787212243629,
+      "tag": "0076_abnormal_mongu",
+      "breakpoints": true
     }
   ]
 }

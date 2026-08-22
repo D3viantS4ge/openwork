@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import type { DenExternalMcpConnection } from "../src/app/lib/den";
 import {
   clearCloudInventoryCache,
+  loadConnectCapabilities,
   loadOrgMcpConnections,
   readCachedOrgMcpConnections,
   type OrgMcpConnectionClient,
 } from "../src/react-app/domains/connections/cloud-inventory-cache";
+import type { ConnectCapabilityClient } from "../src/react-app/domains/session/surface/connect-capability-inventory";
 
 const scope = { baseUrl: "https://den.example", organizationId: "org_1" };
 
@@ -89,5 +91,56 @@ describe("cloud inventory cache", () => {
     await expect(loadOrgMcpConnections({ client: failing, scope, maxAgeMs: 0 })).rejects.toThrow("den is down");
 
     expect(readCachedOrgMcpConnections(scope)?.map((entry) => entry.id)).toEqual(["notion"]);
+  });
+
+  test("does not keep an empty Connect inventory as fresh", async () => {
+    let libraryRound = 0;
+    const client: ConnectCapabilityClient = {
+      listAssignedMarketplaceCapabilities: async () => [],
+      listMeLibraryPlugins: async () => {
+        libraryRound += 1;
+        return libraryRound === 1
+          ? []
+          : [{ id: "plugin_mine", name: "Mine", description: null }];
+      },
+      listOrgMarketplaces: async () => [],
+      getOrgMarketplaceResolved: async () => {
+        throw new Error("unused");
+      },
+      getOrgPluginResolved: async (_organizationId, plugin) => ({
+        plugin,
+        memberships: [
+          {
+            id: "membership_1",
+            pluginId: plugin.id,
+            configObjectId: "skill_1",
+            configObject: {
+              id: "skill_1",
+              objectType: "skill",
+              title: "Mine skill",
+              description: null,
+              currentFileName: "SKILL.md",
+              currentFileExtension: "md",
+              currentRelativePath: "skills/mine/SKILL.md",
+              status: "active",
+              updatedAt: null,
+              latestVersion: {
+                id: "version_1",
+                rawSourceText: "# Mine",
+                normalizedPayloadJson: null,
+                sourceRevisionRef: null,
+                createdAt: null,
+              },
+            },
+          },
+        ],
+      }),
+    };
+
+    await loadConnectCapabilities({ client, scope });
+    const second = await loadConnectCapabilities({ client, scope });
+
+    expect(libraryRound).toBe(2);
+    expect(second.plugins.map((plugin) => plugin.pluginId)).toEqual(["plugin_mine"]);
   });
 });

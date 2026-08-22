@@ -128,6 +128,29 @@ function isScimResource(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
 }
 
+async function readScimDeactivation(request: Request): Promise<boolean> {
+  const body: unknown = await request.clone().json().catch(() => null)
+  if (!isScimResource(body)) {
+    return false
+  }
+
+  if (request.method.toUpperCase() === "PUT") {
+    return body.active === false
+  }
+  if (request.method.toUpperCase() !== "PATCH" || !Array.isArray(body.Operations)) {
+    return false
+  }
+
+  return body.Operations.some((operation: unknown) => {
+    if (!isScimResource(operation) || typeof operation.op !== "string" || operation.op.toLowerCase() !== "replace") {
+      return false
+    }
+    const value = operation.value
+    return (isScimResource(value) && value.active === false)
+      || (operation.path === "active" && (value === false || value === "False"))
+  })
+}
+
 async function getScimResponsePayload(response: Response) {
   const payload: unknown = await response.clone().json().catch(() => null)
   return isScimResource(payload) ? payload : null
@@ -555,6 +578,45 @@ export function registerScimAuthRoutes<T extends { Variables: AuthContextVariabl
 
   const handleScimMutation = async (c: { req: { raw: Request; param: (key: string) => string } }) => {
     const bearerToken = readBearerToken(c.req.raw.headers)
+    const userIdParam = c.req.param("userId")
+    const method = c.req.raw.method.toUpperCase()
+    if (
+      bearerToken
+      && userIdParam
+      && (method === "PATCH" || method === "PUT")
+      && await readScimDeactivation(c.req.raw)
+    ) {
+      // Den owns deactivation because the better-auth admin plugin is not loaded.
+      const provider = await resolveScimProviderFromBearerToken(bearerToken)
+      if (!provider) {
+        return scimError("Invalid SCIM token", 401)
+      }
+      const normalizedUserId = maybeNormalizeUserId(userIdParam)
+      if (!normalizedUserId) {
+        return scimError("User not found", 404)
+      }
+      const resource = { id: normalizedUserId, active: false }
+      const synced = await syncExternalIdentityFromScimResource({ bearerToken, resource })
+      if (!synced) {
+        await recordScimFailureSafely(() =>
+          recordScimSyncFailure({
+            provider,
+            action: "sync_resource",
+            userId: normalizedUserId,
+            payloadJson: resource,
+            error: "SCIM deactivation sync failed",
+          }),
+        )
+        return scimJson({
+          schemas: ["urn:ietf:params:scim:api:messages:2.0:Error"],
+          detail: "SCIM deactivation sync failed; retry later.",
+          status: "500",
+          action: "sync_resource",
+        }, 500)
+      }
+      return new Response(null, { status: 204 })
+    }
+
     const response = await auth.handler(c.req.raw)
     if (!bearerToken) {
       return response
@@ -563,16 +625,16 @@ export function registerScimAuthRoutes<T extends { Variables: AuthContextVariabl
     const syncResult = await syncScimMutationFromResponse({
       bearerToken,
       response,
-      fallbackUserId: c.req.param("userId") || undefined,
+      fallbackUserId: userIdParam || undefined,
     })
     if (!syncResult.ok) {
       await recordScimFailureSafely(async () =>
         recordScimSyncFailureFromBearerToken({
           bearerToken,
           action: syncResult.action,
-          userId: maybeNormalizeUserId(c.req.param("userId")),
+          userId: maybeNormalizeUserId(userIdParam),
           payloadJson: response.status === 204
-            ? { userId: c.req.param("userId") }
+            ? { userId: userIdParam }
             : await getScimResponsePayload(response),
           error: syncResult.message,
         }),

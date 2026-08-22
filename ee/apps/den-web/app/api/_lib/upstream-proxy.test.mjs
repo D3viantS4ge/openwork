@@ -337,6 +337,24 @@ describe("Den upstream proxy", () => {
     expect(observed.forwarded).toBeNull();
   });
 
+  test("preserves a rotating public ingress origin when the server request URL is internal", async () => {
+    const { proxyUpstream } = await import("./upstream-proxy.ts");
+    for (const internalHost of ["127.0.0.1", "0.0.0.0"]) {
+      const request = new NextRequest(`http://${internalHost}:3005/api/den/v1/me`, {
+        headers: {
+          "x-forwarded-host": "3005-rotated.daytonaproxy01.net",
+          "x-forwarded-proto": "https",
+        },
+      });
+
+      await proxyUpstream(request, [], { routePrefix: "/api/den" });
+
+      expect(observed.forwardedHost).toBe("3005-rotated.daytonaproxy01.net");
+      expect(observed.forwardedPrefix).toBe("/api/den");
+      expect(observed.forwardedProto).toBe("https");
+    }
+  });
+
   test("injects the active W3C trace context into upstream requests", async () => {
     const { proxyUpstream } = await import("./upstream-proxy.ts");
     const request = new NextRequest("https://app.example.com/api/den/v1/me");

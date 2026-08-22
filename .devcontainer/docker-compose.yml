@@ -58,6 +58,7 @@ services:
       BETTER_AUTH_SECRET: local-dev-secret-not-for-production-use!!
       BETTER_AUTH_URL: http://localhost:3005
       OPENWORK_DEV_MODE: "1"
+      DEN_PASSWORD_BREACH_SCREENING_ENABLED: "false"
       PORT: "8788"
       PROVISIONER_MODE: stub
       # Den Web config

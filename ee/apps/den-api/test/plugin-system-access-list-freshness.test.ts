@@ -32,3 +32,19 @@ test("access mutations retain the default fresh-session requirement", () => {
   expect(mutations).toContain("export async function deleteResourceAccessGrant")
   expect(mutations).not.toContain("requireFreshSession: false")
 })
+
+test("routine plugin and config-object mutations derive freshness from audience exposure", () => {
+  for (const functionName of [
+    "createConfigObject",
+    "createConfigObjectVersion",
+    "setConfigObjectLifecycle",
+    "updatePlugin",
+    "setPluginLifecycle",
+  ]) {
+    const start = storeSource.indexOf(`export async function ${functionName}`)
+    expect(start).toBeGreaterThan(-1)
+    const nextExport = storeSource.indexOf("export async function ", start + 1)
+    const source = storeSource.slice(start, nextExport === -1 ? undefined : nextExport)
+    expect(source).toContain("pluginArchResourceHasExpandedAudience")
+  }
+})

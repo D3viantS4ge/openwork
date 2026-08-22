@@ -10,7 +10,7 @@ Every expedited path below has a compensating control and leaves evidence. No un
 
 | Path | When | Compensating control | Evidence |
 | --- | --- | --- | --- |
-| Tag-first release (`pnpm release:prepare` + `pnpm release:ship` off a branch, admins only) | A release must go out now | The `v*` tag ruleset limits this path to admins. Only already-reviewed `dev` commits plus the version-bump commit ship. A backfill PR is reviewed afterward. | Auto-opened `Post-hoc review` issue from the expedited release audit workflow, plus the backfill PR |
+| Tag-first release (manual `git tag vX.Y.Z <sha> && git push origin vX.Y.Z`, admins only) | A release must go out now from a commit not yet on `dev` | The `v*` tag ruleset limits this path to admins. Versions live in tags only — no version-bump commit exists; the tag names exactly the code that ships. | Auto-opened `Post-hoc review` issue from the expedited release audit workflow when the tagged commit is not on `dev` |
 | Published-release rollback (`pnpm release:rollback`) | A bad version is live | The script is non-destructive: it re-points Latest and demotes the bad release, but never deletes it. It redeploys only previously reviewed artifacts. | GitHub audit log, release timeline, and a note in the post-hoc issue |
 | Clean-revert fast lane (auto-approved revert PRs) | A reviewed change must be undone immediately | A machine verifies that the PR tree is the exact inverse of a commit that already passed review. Approval inherits the original review. | Bot approval with the verified SHA on the PR |
 

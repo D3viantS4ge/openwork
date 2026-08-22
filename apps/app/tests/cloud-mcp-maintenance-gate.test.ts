@@ -41,7 +41,9 @@ const context = {
 
 const token: DenMcpToken = {
   token: "owt_mcp_secret_token",
+  appHostToken: "owt_mcp_private_app_host_token",
   expiresAt: new Date(NOW + 7 * 24 * 60 * 60 * 1000).toISOString(),
+  appHostExpiresAt: new Date(NOW + 7 * 24 * 60 * 60 * 1000).toISOString(),
   organizationId: scope.orgId,
   scopes: ["mcp:read", "mcp:write"],
   resource: "https://api.openwork.test/mcp",

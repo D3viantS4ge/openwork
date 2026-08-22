@@ -4,6 +4,7 @@ import { isSupportedWorkspaceTextFilePath, normalizeWorkspaceRelativePath } from
 describe("normalizeWorkspaceRelativePath", () => {
   test("accepts a plain workspace-relative path", () => {
     expect(normalizeWorkspaceRelativePath("notes.md", { allowSubdirs: true })).toBe("notes.md");
+    expect(normalizeWorkspaceRelativePath("  notes.md\n", { allowSubdirs: true })).toBe("notes.md");
   });
 
   test("strips workspace/ prefix", () => {
@@ -37,6 +38,53 @@ describe("normalizeWorkspaceRelativePath", () => {
   test("treats workspace/ with no file as invalid", () => {
     expect(() => normalizeWorkspaceRelativePath("workspace/", { allowSubdirs: true })).toThrow();
     expect(() => normalizeWorkspaceRelativePath("/workspace/", { allowSubdirs: true })).toThrow();
+  });
+
+  test("rejects Windows reserved device names in any segment", () => {
+    for (const path of [
+      "CON",
+      "reports/con.txt",
+      "reports/NUL.json",
+      "PRN.csv",
+      "AUX",
+      "COM1.log",
+      "reports/com9",
+      "LPT1.txt",
+      "reports/lpt9.json",
+      "CLOCK$",
+      "CONIN$.txt",
+      "CONOUT$",
+    ]) {
+      expect(() => normalizeWorkspaceRelativePath(path, { allowSubdirs: true }))
+        .toThrow("Path components must not use Windows reserved device names");
+    }
+  });
+
+  test("rejects alternate data stream colons in any segment", () => {
+    for (const path of ["reports/summary.txt:secret", "reports:secret/summary.txt", "C:/summary.txt"]) {
+      expect(() => normalizeWorkspaceRelativePath(path, { allowSubdirs: true }))
+        .toThrow("Path components must not contain colons");
+    }
+  });
+
+  test("rejects path segments with trailing dots or spaces", () => {
+    for (const path of ["reports/summary.txt.", "reports/summary.txt ", "reports./summary.txt", "reports /summary.txt"]) {
+      expect(() => normalizeWorkspaceRelativePath(path, { allowSubdirs: true }))
+        .toThrow("Path components must not end with a dot or space");
+    }
+  });
+
+  test("retains ordinary names that merely resemble Windows devices", () => {
+    for (const path of [
+      "reports/console.txt",
+      "reports/auxiliary.txt",
+      "reports/com0.txt",
+      "reports/com10.txt",
+      "reports/lpt10.txt",
+      "reports/revenue report.v1.txt",
+    ]) {
+      expect(normalizeWorkspaceRelativePath(path, { allowSubdirs: true })).toBe(path);
+    }
   });
 });
 

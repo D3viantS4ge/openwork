@@ -42,6 +42,27 @@ let failInstallLinkInsert = false
 let sessionCreatedAt = new Date()
 let organizationMetadata = defaultOrganizationMetadata()
 
+mock.module("../src/auth.js", () => ({
+  DEN_MCP_FIRST_PARTY_CLIENT_ID: "openwork-desktop",
+  DEN_MCP_FIRST_PARTY_RESOURCES: [],
+  DEN_MCP_LEGACY_PARENT_RESOURCES: [],
+  DEN_MCP_OAUTH_RESOURCE: "http://127.0.0.1:8790/mcp/agent",
+  DEN_MCP_OAUTH_VALID_AUDIENCES: [],
+  DEN_MCP_OPAQUE_ACCESS_TOKEN_PREFIX: "ow_mcp_at_",
+  DEN_MCP_ORG_ID_CLAIM: "org_id",
+  DEN_MCP_RESOURCE: "http://127.0.0.1:8790/mcp",
+  DEN_MCP_RESOURCE_CLAIM: "resource",
+  DEN_MCP_RESOURCES: [],
+  DEN_MCP_TOKEN_USE_CLAIM: "token_use",
+  auth: {
+    api: {
+      setActiveOrganization: () => Promise.resolve(),
+    },
+  },
+  getRawBetterAuthMutationDenial: () => null,
+  normalizeMcpOAuthResource: () => null,
+}))
+
 mock.module("../src/db.js", () => ({
   db: {
     insert: (_table: unknown) => ({
@@ -111,6 +132,9 @@ function organizationContextMetadata() {
 }
 
 mock.module("../src/orgs.js", () => ({
+  OrganizationEmailDomainRestrictionError: class OrganizationEmailDomainRestrictionError extends Error {},
+  acceptInvitationForUser: () => Promise.resolve(null),
+  createOrganizationForUser: () => Promise.resolve(null),
   getOrganizationContextForUser: (input: { organizationId: string; userId: string }) => Promise.resolve(
     input.organizationId === organizationId && input.userId === userId
       ? {
@@ -136,9 +160,32 @@ mock.module("../src/orgs.js", () => ({
         }
       : null,
   ),
+  getInvitationPreview: () => Promise.resolve(null),
+  getSingletonOrganization: () => Promise.resolve(null),
+  getSingletonSsoStatus: () => Promise.resolve(null),
   listTeamsForMember: () => Promise.resolve([]),
-  resolveUserOrganizations: () => Promise.resolve({ orgs: [], activeOrgId: null, activeOrgSlug: null }),
+  ensureUserOrgAccess: () => Promise.resolve(organizationId),
+  isEmailAllowedForOrganization: () => true,
+  listAssignableRoles: () => Promise.resolve([]),
+  normalizeAllowedEmailDomains: () => null,
+  reconcilePendingInvitationsForUser: () => Promise.resolve(),
+  removeOrganizationMember: () => Promise.resolve(null),
+  resolveUserOrganizations: (input: { activeOrganizationId: string | null; userId: string }) => {
+    const hasActiveMembership = input.userId === userId && input.activeOrganizationId === organizationId
+    return Promise.resolve(hasActiveMembership
+      ? {
+          orgs: [{ id: organizationId, name: "Acme Robotics", slug: "acme-robotics", logo: null }],
+          activeOrgId: organizationId,
+          activeOrgSlug: "acme-robotics",
+        }
+      : { orgs: [], activeOrgId: null, activeOrgSlug: null })
+  },
+  seedDefaultOrganizationRoles: () => Promise.resolve(),
+  serializeMemberFacingOrganizationMetadata: (metadata: unknown) => metadata,
   setSessionActiveOrganization: () => Promise.resolve(),
+  updateOrganizationSettings: () => Promise.resolve(null),
+  validateOrganizationMemberRemovalForHook: () => Promise.resolve({ ok: true }),
+  validateOrganizationMemberRoleUpdate: () => Promise.resolve({ ok: true }),
 }))
 
 let installLinkModule: typeof import("../src/routes/org/install-links.js")
@@ -180,23 +227,27 @@ function createApp(options: {
   configuredArtifact?: { filePath: string; size: number }
   artifactFileNames?: string[]
   grantOverrides?: Partial<Pick<InstallExperienceDependencies, "mintConnectGrant" | "previewConnectGrant" | "inspectConnectGrant" | "consumeConnectGrant">>
+  authenticated?: boolean
+  activeOrganizationId?: string
 } = {}) {
   const app = new Hono()
   app.use("*", async (c, next) => {
-    c.set("user", {
-      id: userId,
-      email: "riley@acme.test",
-      emailVerified: true,
-      name: "Riley",
-      image: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    })
-    c.set("session", {
-      id: createDenTypeId("session"),
-      activeOrganizationId: organizationId,
-      createdAt: sessionCreatedAt,
-    })
+    if (options.authenticated !== false) {
+      c.set("user", {
+        id: userId,
+        email: "riley@acme.test",
+        emailVerified: true,
+        name: "Riley",
+        image: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      c.set("session", {
+        id: createDenTypeId("session"),
+        activeOrganizationId: options.activeOrganizationId ?? organizationId,
+        createdAt: sessionCreatedAt,
+      })
+    }
     await next()
   })
   const shouldResolveConfiguredArtifact = options.configuredArtifact !== undefined || options.artifactFileNames !== undefined
@@ -340,6 +391,55 @@ test("members cannot mint an install link for another organization", async () =>
 
   expect(response.status).toBe(404)
   await expect(response.json()).resolves.toEqual({ error: "organization_not_found" })
+  expect(insertedInstallLinks()).toHaveLength(0)
+})
+
+test("authenticated install config resolves branding, distribution, and approved version from the active organization without minting a token", async () => {
+  organizationMetadata = {
+    ...defaultOrganizationMetadata(),
+    allowedDesktopVersions: ["0.18.4", "0.18.6", "0.18.5"],
+  }
+
+  const response = await createApp().request("http://127.0.0.1:8790/v1/me/install-config")
+
+  expect(response.status).toBe(200)
+  await expect(response.json()).resolves.toMatchObject({
+    appName: "Acme Work",
+    clientName: "Acme Robotics",
+    logoUrl: "https://assets.northwind.test/wordmark.svg",
+    iconUrl: "https://assets.northwind.test/icon.png",
+    desktopVersion: "0.18.6",
+    distribution: "enterprise",
+  })
+  expect(insertedInstallLinks()).toHaveLength(0)
+})
+
+test("authenticated install config requires an active organization membership", async () => {
+  const otherOrganizationId = createDenTypeId("organization")
+  const unauthenticated = await createApp({ authenticated: false }).request("http://den.local/v1/me/install-config")
+  const nonMember = await createApp({ activeOrganizationId: otherOrganizationId }).request("http://den.local/v1/me/install-config")
+
+  expect(unauthenticated.status).toBe(401)
+  expect(nonMember.status).toBe(404)
+  expect(insertedInstallLinks()).toHaveLength(0)
+})
+
+test("authenticated installer download uses active-organization version and distribution without a token", async () => {
+  envModule.env.orgMode = "multi_org"
+  organizationMetadata = {
+    ...defaultOrganizationMetadata(),
+    allowedDesktopVersions: ["0.18.4", "0.18.6"],
+  }
+
+  const response = await createApp().request("http://den.local/v1/me/install/win-x64", {
+    redirect: "manual",
+  })
+
+  expect(response.status).toBe(302)
+  expect(response.headers.get("location")).toBe(
+    "https://github.com/different-ai/openwork/releases/download/v0.18.6/openwork-cloud-win-x64-0.18.6.exe",
+  )
+  expect(response.headers.get("location")).not.toContain("token=")
   expect(insertedInstallLinks()).toHaveLength(0)
 })
 

@@ -1,5 +1,6 @@
 /** @jsxImportSource react */
-import type { ComponentType, ReactNode } from "react";
+import type { ReactNode } from "react";
+import type { LucideIcon } from "lucide-react";
 
 import {
   SidebarMenuButton,
@@ -8,7 +9,7 @@ import {
 
 type SidebarDestinationProps = {
   active: boolean;
-  icon: ComponentType<{ className?: string }>;
+  icon: LucideIcon;
   label: string;
   labelContent?: ReactNode;
   onSelect: () => void;
@@ -26,7 +27,7 @@ export function SidebarDestination({ active, icon: Icon, label, labelContent, on
         className="text-sidebar-foreground/70"
         onClick={onSelect}
       >
-        <Icon />
+        <Icon className="size-4" />
         {labelContent ?? <span>{label}</span>}
       </SidebarMenuButton>
     </SidebarMenuItem>

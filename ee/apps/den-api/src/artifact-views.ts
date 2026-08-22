@@ -1,9 +1,9 @@
 import { and, desc, eq, isNull } from "@openwork-ee/den-db/drizzle"
 import { ArtifactViewRevisionTable, ArtifactViewTable } from "@openwork-ee/den-db/schema"
 import { createDenTypeId, normalizeDenTypeId, type DenTypeId } from "@openwork-ee/utils/typeid"
-import type { GeneratedArtifactView, GeneratedArtifactViewRevision } from "@openwork/types/dynamic-artifacts"
+import type { GeneratedArtifactView, GeneratedArtifactViewRevision } from "@openwork/types/workflows"
 import { db } from "./db.js"
-import { getCodemodeScriptDetail } from "./codemode-scripts.js"
+import { getWorkflowDetail } from "./workflows.js"
 import { buildGeneratedArtifactView } from "./generated-artifact-view-builder.js"
 import type { PluginArchActorContext } from "./routes/org/plugin-system/access.js"
 import { artifactViewResourceUri } from "./artifact-view-resource.js"
@@ -70,7 +70,7 @@ async function accessibleView(input: {
   )).limit(1)
   const row = rows[0]
   if (!row) throw new Error("artifact_view_not_found")
-  const script = await getCodemodeScriptDetail({ context: input.context, configObjectId: row.config_object_id })
+  const script = await getWorkflowDetail({ context: input.context, configObjectId: row.config_object_id })
   if (input.role === "manager" && !script.canManage) throw new Error("artifact_view_not_found")
   return row
 }
@@ -97,7 +97,7 @@ export async function listArtifactViews(input: {
     .limit(ARTIFACT_VIEW_LIST_LIMIT)
   const accessible = await Promise.all(rows.map(async (row) => {
     try {
-      await getCodemodeScriptDetail({ context: input.context, configObjectId: row.config_object_id })
+      await getWorkflowDetail({ context: input.context, configObjectId: row.config_object_id })
       return serializeView(row, await revisionRows(row.id))
     } catch {
       return null
@@ -110,7 +110,7 @@ export async function listArtifactViewsForScript(input: {
   context: PluginArchActorContext
   configObjectId: string
 }): Promise<GeneratedArtifactView[]> {
-  const script = await getCodemodeScriptDetail({ context: input.context, configObjectId: input.configObjectId })
+  const script = await getWorkflowDetail({ context: input.context, configObjectId: input.configObjectId })
   const rows = await db.select().from(ArtifactViewTable).where(and(
     eq(ArtifactViewTable.organization_id, input.context.organizationContext.organization.id),
     eq(ArtifactViewTable.config_object_id, normalizeDenTypeId("configObject", script.configObjectId)),
@@ -159,7 +159,7 @@ export async function saveArtifactViewRevision(input: {
   reactSource: string
   cssSource?: string
 }): Promise<GeneratedArtifactView> {
-  const script = await getCodemodeScriptDetail({ context: input.context, configObjectId: input.configObjectId })
+  const script = await getWorkflowDetail({ context: input.context, configObjectId: input.configObjectId })
   if (!script.canManage) throw new Error("artifact_view_not_found")
   if (!script.currentVersion.outputSchema || !script.currentVersion.outputSchemaDigest) {
     throw new Error("artifact_view_output_schema_required")
@@ -251,7 +251,7 @@ export async function activateArtifactViewRevision(input: {
   )).limit(1)
   const revision = revisions[0]
   if (!revision || !revision.compiled_html || !revision.resource_digest) throw new Error("artifact_view_revision_not_ready")
-  const script = await getCodemodeScriptDetail({ context: input.context, configObjectId: view.config_object_id })
+  const script = await getWorkflowDetail({ context: input.context, configObjectId: view.config_object_id })
   if (script.currentVersion.outputSchemaDigest !== revision.output_schema_digest) {
     throw new Error("artifact_view_schema_incompatible")
   }

@@ -106,3 +106,26 @@ test("removed grants are ignored during resolution", () => {
     teamIds: [],
   })).toBeNull()
 })
+
+test("audience expansion excludes only the caller's private direct grant", () => {
+  expect(accessModule.pluginArchGrantExpandsAudience({
+    orgMembershipId: "member_current",
+    orgWide: false,
+    teamId: null,
+  }, "member_current")).toBe(false)
+  expect(accessModule.pluginArchGrantExpandsAudience({
+    orgMembershipId: "member_other",
+    orgWide: false,
+    teamId: null,
+  }, "member_current")).toBe(true)
+  expect(accessModule.pluginArchGrantExpandsAudience({
+    orgMembershipId: null,
+    orgWide: false,
+    teamId: "team_alpha",
+  }, "member_current")).toBe(true)
+  expect(accessModule.pluginArchGrantExpandsAudience({
+    orgMembershipId: null,
+    orgWide: true,
+    teamId: null,
+  }, "member_current")).toBe(true)
+})

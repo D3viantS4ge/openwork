@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { buildInstallDownloadHref, cloudInstallerFileName, detectedInstallPlatform, downloadCtaLabel, installerApiUrlFromConfig, installerFileName, installTokenFromPageUrl } from "../app/(den)/_lib/install-download";
+import { buildAuthenticatedInstallDownloadHref, buildInstallDownloadHref, cloudInstallerFileName, detectedInstallPlatform, downloadCtaLabel, installerApiUrlFromConfig, installerFileName, installTokenFromPageUrl } from "../app/(den)/_lib/install-download";
 
 test("organization installer downloads preserve a prefixed public API path", () => {
   expect(buildInstallDownloadHref(
@@ -27,6 +27,13 @@ test("organization installer downloads still support a root API origin", () => {
     "mac-arm64",
     "opaque-token",
   )).toBe("https://api.openwork.example.test/v1/install/mac-arm64?token=opaque-token");
+});
+
+test("authenticated installer downloads preserve a prefixed API path without a token", () => {
+  expect(buildAuthenticatedInstallDownloadHref(
+    "https://on-prem.example.test/api/den/",
+    "linux-arm64",
+  )).toBe("https://on-prem.example.test/api/den/v1/me/install/linux-arm64");
 });
 
 test("Cloud installer filenames match release artifacts without a hardcoded version", () => {

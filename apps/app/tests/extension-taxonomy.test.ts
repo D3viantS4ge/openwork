@@ -35,6 +35,10 @@ describe("extension taxonomy", () => {
     expect(matchesExtensionFilter("connection", "mcp")).toBe(false);
     expect(matchesExtensionFilter("skill", "app")).toBe(false);
     expect(matchesExtensionFilter("skill", "connection", "mcp")).toBe(false);
+    expect(matchesExtensionFilter("command", "command")).toBe(true);
+    expect(matchesExtensionFilter("command", "skill")).toBe(false);
+    expect(matchesExtensionFilter("agent", "agent")).toBe(true);
+    expect(matchesExtensionFilter("agent", "command")).toBe(false);
   });
 
   test("the MCP filter includes MCP-backed connections but excludes native connections", () => {

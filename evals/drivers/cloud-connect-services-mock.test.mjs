@@ -4,7 +4,6 @@ import test from "node:test";
 import {
   createCloudConnectMockServer,
   MOCK_MICROSOFT_ACCESS_TOKEN,
-  MOCK_TELEGRAM_BOT_TOKEN,
   MOCK_WORKER_CLIENT_TOKEN,
   MOCK_WORKER_HOST_TOKEN,
 } from "./cloud-connect-services-mock.mjs";
@@ -12,30 +11,6 @@ import {
 async function json(response) {
   return response.json();
 }
-
-test("Telegram Bot API validates the bot and captures outbound messages", async (context) => {
-  const mock = createCloudConnectMockServer();
-  const { origin } = await mock.start();
-  context.after(() => mock.stop());
-
-  const meResponse = await fetch(`${origin}/telegram/bot${encodeURIComponent(MOCK_TELEGRAM_BOT_TOKEN)}/getMe`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: "{}",
-  });
-  assert.equal(meResponse.status, 200);
-  assert.equal((await json(meResponse)).result.username, "openwork_test_bot");
-
-  const sendResponse = await fetch(`${origin}/telegram/bot${encodeURIComponent(MOCK_TELEGRAM_BOT_TOKEN)}/sendMessage`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ chat_id: 42001, text: "Cloud connection ready" }),
-  });
-  assert.equal(sendResponse.status, 200);
-
-  const state = await json(await fetch(`${origin}/__mock/state`));
-  assert.equal(state.telegram.sentMessages[0].text, "Cloud connection ready");
-});
 
 test("Microsoft OAuth redirects with state and Graph serves deterministic mail, calendar, and files", async (context) => {
   const mock = createCloudConnectMockServer();
@@ -88,7 +63,7 @@ test("worker mock rejects partial credentials and completes a prompt after a bus
   const session = await json(await fetch(`${origin}/worker/workspace/ws_mock_cloud/opencode/session`, {
     method: "POST",
     headers: { ...headers, "content-type": "application/json" },
-    body: JSON.stringify({ title: "Telegram chat" }),
+    body: JSON.stringify({ title: "Cloud connect session" }),
   }));
 
   const prompt = await fetch(`${origin}/worker/workspace/ws_mock_cloud/opencode/session/${session.id}/prompt_async`, {

@@ -59,7 +59,10 @@ describe("openwork runtime config file", () => {
     const { config } = await setup();
     await writeRuntimeOpencodeConfig(config, "ws_1", (current) => ({
       ...current,
-      mcp: { posthog: { type: "remote", url: "https://mcp.posthog.com/mcp", enabled: true } },
+      mcp: {
+        posthog: { type: "remote", url: "https://mcp.posthog.com/mcp", enabled: true },
+        "openwork-connect-stale": { type: "remote", url: "https://cloud.example/stale", enabled: true },
+      },
     }));
 
     const { path } = await writeOpenworkRuntimeConfigFile(config, "ws_1");
@@ -68,6 +71,7 @@ describe("openwork runtime config file", () => {
     const parsed = await readConfigFile(config);
     const mcp = parsed.mcp as Record<string, Record<string, unknown>>;
     expect(mcp.posthog?.enabled).toBe(true);
+    expect(mcp["openwork-connect-stale"]).toBeUndefined();
     expect(parsed.default_agent).toBe("openwork");
     expect(Array.isArray(parsed.plugin)).toBe(true);
     expect(parsed.agent).toMatchObject({

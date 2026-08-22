@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { startServer } from "./server.js";
+import { writeRuntimeOpencodeConfig } from "./runtime-opencode-config-store.js";
 import type { ServerConfig } from "./types.js";
 
 type Served = {
@@ -76,10 +77,15 @@ function startMockOpencode() {
   const busyDirectories = new Set<string>();
   const abortedDirectories = new Set<string>();
   const heldStatus = new Map<string, Promise<void>>();
+  let heldMcpRegistration: {
+    markReached: () => void;
+    released: Promise<void>;
+    markCompleted: () => void;
+  } | null = null;
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
-    fetch(request) {
+    async fetch(request) {
       const url = new URL(request.url);
       const directory = request.headers.get("x-opencode-directory");
       requests.push({ method: request.method, pathname: url.pathname, search: url.search, directory });
@@ -107,6 +113,20 @@ function startMockOpencode() {
         if (target && busyDirectories.has(target)) abortedDirectories.add(target);
         if (target) busyDirectories.delete(target);
         return Response.json({ disposed: true });
+      }
+
+      if (url.pathname === "/mcp" && request.method === "POST") {
+        const hold = heldMcpRegistration;
+        heldMcpRegistration = null;
+        if (hold) {
+          hold.markReached();
+          try {
+            await hold.released;
+          } finally {
+            hold.markCompleted();
+          }
+        }
+        return Response.json({ posthog: { status: "connected" } });
       }
 
       return Response.json({ code: "not_found", message: "Not found" }, { status: 404 });
@@ -141,6 +161,22 @@ function startMockOpencode() {
         }),
         release,
       };
+    },
+    holdNextMcpRegistration() {
+      let markReached: () => void = () => undefined;
+      const reached = new Promise<void>((resolve) => {
+        markReached = resolve;
+      });
+      let release: () => void = () => undefined;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let markCompleted: () => void = () => undefined;
+      const completed = new Promise<void>((resolve) => {
+        markCompleted = resolve;
+      });
+      heldMcpRegistration = { markReached, released, markCompleted };
+      return { reached, release, completed };
     },
   };
 }
@@ -202,7 +238,7 @@ async function startOpenworkServerWithWorkspaces(input: {
   };
   const server = await startServer(config) as Served;
   stops.push(() => server.stop(true));
-  return { server, token: config.token, hostToken: config.hostToken };
+  return { server, token: config.token, hostToken: config.hostToken, config };
 }
 
 describe("workspace activation", () => {
@@ -265,6 +301,64 @@ describe("workspace activation", () => {
 
     expect(sameWorkspaceResponse.status).toBe(200);
     expect(disposeCount()).toBe(1);
+  });
+
+  test("returns after dispose without waiting for post-refresh MCP registration", async () => {
+    const firstRoot = await createWorkspaceRoot();
+    const secondRoot = await createWorkspaceRoot();
+    const previousDb = process.env.OPENWORK_RUNTIME_DB;
+    process.env.OPENWORK_RUNTIME_DB = join(firstRoot, "runtime.sqlite");
+    const mock = startMockOpencode();
+    const opencodeBaseUrl = `http://127.0.0.1:${mock.server.port}`;
+    const workspaces: ServerConfig["workspaces"] = [
+      { id: "ws_1", name: "One", path: firstRoot, preset: "starter", workspaceType: "local", baseUrl: opencodeBaseUrl },
+      { id: "ws_2", name: "Two", path: secondRoot, preset: "starter", workspaceType: "local", baseUrl: opencodeBaseUrl },
+    ];
+    const heldRegistration = mock.holdNextMcpRegistration();
+    try {
+      const openwork = await startOpenworkServerWithWorkspaces({
+        configPath: join(firstRoot, "server.json"),
+        workspaces,
+        authorizedRoots: [firstRoot, secondRoot],
+      });
+      await writeRuntimeOpencodeConfig(openwork.config, "ws_2", (current) => ({
+        ...current,
+        mcp: {
+          posthog: { type: "remote", url: "https://mcp.posthog.com/mcp", enabled: true },
+        },
+      }));
+
+      const activation = fetch(`http://127.0.0.1:${openwork.server.port}/workspaces/ws_2/activate`, {
+        method: "POST",
+        headers: hostAuth(openwork.hostToken),
+      });
+      expect(await Promise.race([
+        heldRegistration.reached.then(() => true),
+        Bun.sleep(1_000).then(() => false),
+      ])).toBe(true);
+
+      try {
+        const response = await Promise.race([
+          activation,
+          Bun.sleep(250).then(() => null),
+        ]);
+        expect(response?.status).toBe(200);
+        expect(mock.requests.findIndex((request) => request.pathname === "/instance/dispose"))
+          .toBeLessThan(mock.requests.findIndex((request) => request.pathname === "/mcp"));
+        expect(await Promise.race([
+          heldRegistration.completed.then(() => true),
+          Bun.sleep(25).then(() => false),
+        ])).toBe(false);
+      } finally {
+        heldRegistration.release();
+      }
+      await heldRegistration.completed;
+      expect((await activation).status).toBe(200);
+    } finally {
+      heldRegistration.release();
+      if (previousDb === undefined) delete process.env.OPENWORK_RUNTIME_DB;
+      else process.env.OPENWORK_RUNTIME_DB = previousDb;
+    }
   });
 
   test("does not dispose the target directory after its prompt was admitted before activation completes", async () => {

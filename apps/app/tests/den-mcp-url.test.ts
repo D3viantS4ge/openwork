@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   getDenMcpUrl,
   isLegacyWebAppMcpUrl,
+  parseDenMcpToken,
   resolveCloudMcpResourceUrl,
   resolveDenBaseUrls,
 } from "../src/app/lib/den";
@@ -91,5 +92,39 @@ describe("resolveCloudMcpResourceUrl", () => {
     expect(resolveCloudMcpResourceUrl("   ")).toBeNull();
     expect(resolveCloudMcpResourceUrl("not a url")).toBeNull();
     expect(resolveCloudMcpResourceUrl("ftp://app.openworklabs.com/mcp")).toBeNull();
+  });
+});
+
+describe("parseDenMcpToken", () => {
+  test("accepts an older Den response while leaving the private App host closed", () => {
+    expect(parseDenMcpToken({
+      token: "central-token",
+      expiresAt: "2026-08-18T00:00:00.000Z",
+      organizationId: "org_1",
+      scopes: ["mcp:read", "mcp:write"],
+      resource: "https://api.openwork.test/mcp",
+    })).toEqual({
+      token: "central-token",
+      expiresAt: "2026-08-18T00:00:00.000Z",
+      organizationId: "org_1",
+      scopes: ["mcp:read", "mcp:write"],
+      resource: "https://api.openwork.test/mcp",
+    });
+  });
+
+  test("keeps the App-host token pair only when both fields are present", () => {
+    const base = {
+      token: "central-token",
+      expiresAt: "2026-08-18T00:00:00.000Z",
+      organizationId: "org_1",
+      scopes: ["mcp:read", "mcp:write"],
+      resource: "https://api.openwork.test/mcp",
+    };
+    expect(parseDenMcpToken({ ...base, appHostToken: "private-token" })?.appHostToken).toBeUndefined();
+    expect(parseDenMcpToken({
+      ...base,
+      appHostToken: "private-token",
+      appHostExpiresAt: "2026-08-18T00:00:00.000Z",
+    })?.appHostToken).toBe("private-token");
   });
 });

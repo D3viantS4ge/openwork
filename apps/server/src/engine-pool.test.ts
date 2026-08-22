@@ -7,12 +7,13 @@ import {
   clearEnginePoolForConfig,
   EnginePool,
   computeEngineConfigFingerprint,
+  isEngineConnectionFailure,
   setEnginePoolForConfig,
   type EnginePoolHooks,
   type EngineSpawnTemplate,
 } from "./engine-pool.js";
 import { createManagedOpencodeServer, type ManagedOpencodeServer } from "./managed-opencode.js";
-import { proxyOpencodeRequest } from "./server.js";
+import { proxyOpencodeRequest, startServer } from "./server.js";
 import type { ServerConfig, WorkspaceInfo } from "./types.js";
 
 const ENV_NAMES = [
@@ -258,6 +259,19 @@ async function createPool(fixture: Fixture): Promise<{ pool: EnginePool; primary
 }
 
 describe("engine pool", () => {
+  test("classifies undici header timeouts as engine connection failures", () => {
+    const error = new TypeError("fetch failed", {
+      cause: { code: "UND_ERR_HEADERS_TIMEOUT", message: "Headers Timeout Error" },
+    });
+
+    expect(isEngineConnectionFailure(error)).toBe(true);
+  });
+
+  test("classifies a cause-less fetch failure only in the engine transport classifier", () => {
+    expect(isEngineConnectionFailure(new TypeError("fetch failed"))).toBe(true);
+    expect(isEngineConnectionFailure(new Error("fetch failed"))).toBe(false);
+  });
+
   test("skips entirely when nothing the engine reads at build time changed", async () => {
     const fixture = await createFixture();
     const { pool } = await createPool(fixture);
@@ -288,6 +302,110 @@ describe("engine pool", () => {
     expect(await pool.requestRollover({ reason: "repeat", workspace: fixture.workspace }))
       .toEqual({ action: "skipped", reason: "unchanged" });
     expect(fixture.hookCalls.reloadInPlace).toBe(1);
+  });
+
+  test("provider sync holds the serving primary until a standby is healthy and keeps it on spawn failure", async () => {
+    const fixture = await createFixture();
+    const { pool, primary } = await createPool(fixture);
+    const oldPort = portOf(primary.url);
+    let markStandbyHealthReached: () => void = () => undefined;
+    const standbyHealthReached = new Promise<void>((resolve) => {
+      markStandbyHealthReached = resolve;
+    });
+    let releaseStandbyHealth: () => void = () => undefined;
+    const standbyHealthReleased = new Promise<void>((resolve) => {
+      releaseStandbyHealth = resolve;
+    });
+    let standbyHealthChecks = 0;
+    fixture.hooks.waitForHealthy = async () => {
+      standbyHealthChecks += 1;
+      markStandbyHealthReached();
+      await standbyHealthReleased;
+    };
+    await fixture.setRuntimeConfig(JSON.stringify({ generation: 2 }));
+
+    const rollover = pool.requestRollover({
+      reason: "cloud_provider_sync",
+      workspace: fixture.workspace,
+      forceStandby: true,
+    });
+    await standbyHealthReached;
+
+    const url = new URL("http://127.0.0.1/opencode/config");
+    const oldPrimaryRead = await proxyOpencodeRequest({
+      config: fixture.config,
+      request: new Request(url),
+      url,
+      workspace: fixture.workspace,
+      proxyPath: "/config",
+    });
+    expect(await oldPrimaryRead.json()).toMatchObject({ port: oldPort });
+    expect(pool.primaryUrl()).toBe(primary.url);
+    expect(fixture.hookCalls.reloadInPlace).toBe(0);
+    expect((await fixture.logLines()).filter((line) => line === `${oldPort} POST /instance/dispose`)).toEqual([]);
+
+    releaseStandbyHealth();
+    expect((await rollover).action).toBe("rolled_over");
+    const replacementUrl = pool.primaryUrl();
+    expect(replacementUrl).not.toBe(primary.url);
+    expect(standbyHealthChecks).toBe(1);
+
+    expect(await pool.requestRollover({
+      reason: "cloud_provider_sync_unchanged",
+      workspace: fixture.workspace,
+      forceStandby: true,
+    })).toEqual({ action: "skipped", reason: "unchanged" });
+    expect(standbyHealthChecks).toBe(1);
+
+    expect(await waitUntil(() => pool.snapshot().generations.length === 1, 5_000)).toBe(true);
+    await fixture.setRuntimeConfig(JSON.stringify({ generation: 3 }));
+    fixture.hooks.spawn = async () => {
+      throw new Error("standby spawn failed");
+    };
+    await expect(pool.requestRollover({
+      reason: "cloud_provider_sync_failed",
+      workspace: fixture.workspace,
+      forceStandby: true,
+    })).rejects.toThrow("standby spawn failed");
+
+    expect(pool.primaryUrl()).toBe(replacementUrl);
+    expect(pool.snapshot().generations).toEqual([expect.objectContaining({ role: "primary" })]);
+    expect((await fixture.logLines()).some((line) => line.endsWith("POST /instance/dispose"))).toBe(false);
+  });
+
+  test("forwards detached post-refresh policy without returning before the in-place switch", async () => {
+    const fixture = await createFixture();
+    let markReloadStarted: () => void = () => undefined;
+    const reloadStarted = new Promise<void>((resolve) => {
+      markReloadStarted = resolve;
+    });
+    let releaseReload: () => void = () => undefined;
+    const reloadReleased = new Promise<void>((resolve) => {
+      releaseReload = resolve;
+    });
+    let awaitPostRefreshSync: boolean | undefined;
+    fixture.hooks.reloadInPlace = async (_config, _workspace, options) => {
+      awaitPostRefreshSync = options?.awaitPostRefreshSync;
+      markReloadStarted();
+      await reloadReleased;
+    };
+    const { pool } = await createPool(fixture);
+    await fixture.setRuntimeConfig(JSON.stringify({ generation: 2 }));
+
+    const rollover = pool.requestRollover({
+      reason: "workspace_activation",
+      workspace: fixture.workspace,
+      awaitPostRefreshSync: false,
+    });
+    await reloadStarted;
+    expect(await Promise.race([
+      rollover.then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 25)),
+    ])).toBe(false);
+
+    releaseReload();
+    expect(await rollover).toEqual({ action: "reloaded_in_place" });
+    expect(awaitPostRefreshSync).toBe(false);
   });
 
   test("rolls over to a standby when the engine is busy, then closes the drained engine", async () => {
@@ -401,6 +519,58 @@ describe("engine pool", () => {
     const events = await (await proxy("/event")).text();
     expect(events).toContain('"sessionID":"ses_live"');
     expect(events).toContain(`"sessionID":"ses_${newPort}"`);
+  });
+
+  test("returns a controlled 502 when the selected engine is unreachable", async () => {
+    const fixture = await createFixture();
+    const { primary } = await createPool(fixture);
+    await primary.close();
+    const url = new URL("http://127.0.0.1/opencode/config");
+
+    await expect(proxyOpencodeRequest({
+      config: fixture.config,
+      request: new Request(url, { method: "GET" }),
+      url,
+      workspace: fixture.workspace,
+      proxyPath: "/config",
+    })).rejects.toMatchObject({
+      status: 502,
+      code: "opencode_unreachable",
+    });
+  });
+
+  test.serial("returns an uncaptured 502 for a cause-less loopback proxy fetch failure", async () => {
+    const fixture = await createFixture();
+    await createPool(fixture);
+    const originalFetch = globalThis.fetch;
+    const originalTelemetry = globalThis.__openworkDesktopTelemetry;
+    const captured: unknown[] = [];
+    const server = await startServer(fixture.config);
+    globalThis.__openworkDesktopTelemetry = {
+      captureException(error) {
+        captured.push(error);
+        return true;
+      },
+    };
+    globalThis.fetch = Object.assign(
+      async () => {
+        throw new TypeError("fetch failed");
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    try {
+      const response = await originalFetch(`http://127.0.0.1:${server.port}/opencode/config`, {
+        headers: { Authorization: `Bearer ${fixture.config.token}` },
+      });
+      expect(response.status).toBe(502);
+      expect(await response.json()).toMatchObject({ code: "opencode_unreachable" });
+      expect(captured).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      globalThis.__openworkDesktopTelemetry = originalTelemetry;
+      await server.stop();
+    }
   });
 
   test("ends existing event fan-in leases when a generation flips", async () => {

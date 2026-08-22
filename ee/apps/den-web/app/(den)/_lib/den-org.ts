@@ -168,6 +168,8 @@ export type DenOrgSsoConnection = {
   acsUrl: string | null;
   metadataUrl: string | null;
   domainVerified: boolean;
+  domainVerificationHost: string;
+  domainVerificationDnsName: string;
   oidc: {
     clientId: string | null;
     scopes: string[];
@@ -240,7 +242,8 @@ export type DenOrgEntitlements = {
 export type DenOrgCapabilities = {
   installLinks: boolean;
   mcpConnections: boolean;
-  codemodeScripts: boolean;
+  workflows: boolean;
+  remoteMcpApps: boolean;
   cloud: boolean;
 };
 
@@ -528,8 +531,8 @@ export function getBackgroundAgentsRoute(orgSlug?: string | null): string {
   return `${getOrgDashboardRoute(orgSlug)}/background-agents`;
 }
 
-export function getScriptRunsRoute(orgSlug?: string | null): string {
-  return `${getOrgDashboardRoute(orgSlug)}/script-runs`;
+export function getWorkflowRunsRoute(orgSlug?: string | null): string {
+  return `${getOrgDashboardRoute(orgSlug)}/workflow-runs`;
 }
 
 export function getAutomationsRoute(orgSlug?: string | null): string {
@@ -612,10 +615,6 @@ export function getPluginRoute(orgSlug: string | null | undefined, pluginId: str
   return `${getPluginsRoute(orgSlug)}/${encodeURIComponent(pluginId)}`;
 }
 
-export function getRemoteMcpAppRoute(orgSlug: string | null | undefined, appId: string): string {
-  return `${getOrgDashboardRoute(orgSlug)}/apps/${encodeURIComponent(appId)}`;
-}
-
 export function getPluginSkillRoute(orgSlug: string | null | undefined, pluginId: string, skillId: string): string {
   return `${getPluginRoute(orgSlug, pluginId)}/skills/${encodeURIComponent(skillId)}`;
 }
@@ -666,6 +665,10 @@ export function getToolTesterRoute(orgSlug?: string | null): string {
 
 export function getLibraryRoute(orgSlug?: string | null): string {
   return `${getOrgDashboardRoute(orgSlug)}/library`;
+}
+
+export function getLibraryPluginRoute(orgSlug: string | null | undefined, pluginId: string): string {
+  return `${getLibraryRoute(orgSlug)}/plugins/${encodeURIComponent(pluginId)}`;
 }
 
 export function getGithubIntegrationSetupRoute(orgSlug: string | null | undefined, connectorInstanceId: string): string {
@@ -936,13 +939,14 @@ function parseOrgAuthMethods(value: unknown): DenOrgAuthMethods {
 
 function parseOrgCapabilities(value: unknown): DenOrgCapabilities {
   if (!isRecord(value)) {
-    return { installLinks: false, mcpConnections: false, codemodeScripts: false, cloud: false };
+    return { installLinks: false, mcpConnections: false, workflows: false, remoteMcpApps: false, cloud: false };
   }
 
   return {
     installLinks: value.installLinks === true,
     mcpConnections: value.mcpConnections === true,
-    codemodeScripts: value.codemodeScripts === true,
+    workflows: value.workflows === true,
+    remoteMcpApps: value.remoteMcpApps === true,
     cloud: value.cloud === true,
   };
 }
@@ -1158,11 +1162,13 @@ export function parseOrgSsoPayload(payload: unknown): {
         const signInPath = asString(rawConnection.signInPath);
         const signInUrl = asString(rawConnection.signInUrl);
         const redirectUrl = asString(rawConnection.redirectUrl);
+        const domainVerificationHost = asString(rawConnection.domainVerificationHost);
+        const domainVerificationDnsName = asString(rawConnection.domainVerificationDnsName);
         const rawOidc = isRecord(rawConnection.oidc) ? rawConnection.oidc : null;
         const rawSaml = isRecord(rawConnection.saml) ? rawConnection.saml : null;
         const tokenEndpointAuthentication = asString(rawOidc?.tokenEndpointAuthentication);
 
-        if (!id || !providerId || !issuer || !domain || !status || !signInPath || !signInUrl || !redirectUrl || (kind !== "oidc" && kind !== "saml")) {
+        if (!id || !providerId || !issuer || !domain || !status || !signInPath || !signInUrl || !redirectUrl || !domainVerificationHost || !domainVerificationDnsName || (kind !== "oidc" && kind !== "saml")) {
           return null;
         }
 
@@ -1179,6 +1185,8 @@ export function parseOrgSsoPayload(payload: unknown): {
           acsUrl: asString(rawConnection.acsUrl),
           metadataUrl: asString(rawConnection.metadataUrl),
           domainVerified: asBoolean(rawConnection.domainVerified),
+          domainVerificationHost,
+          domainVerificationDnsName,
           oidc: rawOidc
             ? {
                 clientId: asString(rawOidc.clientId),

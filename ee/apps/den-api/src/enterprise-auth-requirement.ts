@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from "@openwork-ee/den-db/drizzle"
+import { and, eq, isNull } from "@openwork-ee/den-db/drizzle"
 import {
   AuthAccountTable,
   AuthUserTable,
@@ -78,6 +78,7 @@ async function findEnterpriseAuthRequirement(where: ReturnType<typeof and>) {
     .innerJoin(SsoProviderTable, and(
       eq(SsoConnectionTable.providerId, SsoProviderTable.providerId),
       eq(OrganizationTable.id, SsoProviderTable.organizationId),
+      eq(SsoProviderTable.domainVerified, true),
     ))
     .where(and(
       where,
@@ -94,7 +95,7 @@ export async function findEnterpriseAuthRequirementForEmail(email: string) {
     return null
   }
 
-  return findEnterpriseAuthRequirement(sql`lower(${AuthUserTable.email}) = ${normalizedEmail}`)
+  return findEnterpriseAuthRequirement(eq(AuthUserTable.email, normalizedEmail))
 }
 
 export async function findEnterpriseAuthRequirementForEmailDomain(email: string) {
@@ -140,7 +141,7 @@ export async function resolveNonSsoSignInMethodForEmail(email: string): Promise<
     })
     .from(AuthUserTable)
     .innerJoin(AuthAccountTable, eq(AuthUserTable.id, AuthAccountTable.userId))
-    .where(sql`lower(${AuthUserTable.email}) = ${normalizedEmail}`)
+    .where(eq(AuthUserTable.email, normalizedEmail))
 
   if (rows.length === 0) {
     return "signup"

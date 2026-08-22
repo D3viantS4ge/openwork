@@ -137,6 +137,23 @@ type CloudProviderSyncLogger = {
   error: (message: string, metadata?: JsonRecord) => void;
 };
 
+type CloudProviderSyncRequest = {
+  contextKey: string;
+  session: CloudProviderDenSession;
+  reason?: string;
+};
+
+type CloudProviderSyncRun = {
+  contextKey: string;
+  promise: Promise<CloudProviderSyncRunResult>;
+};
+
+type CloudProviderSyncTrailingRun = CloudProviderSyncRun & {
+  request: CloudProviderSyncRequest;
+  resolve: (result: CloudProviderSyncRunResult) => void;
+  reject: (error: unknown) => void;
+};
+
 export type CloudProviderSyncOptions = {
   config: ServerConfig;
   env: EnvService;
@@ -545,6 +562,8 @@ export class CloudProviderSync {
   private importedAtByCloudProviderId = new Map<string, number>();
   private reloadPending = false;
   private queue: Promise<void> = Promise.resolve();
+  private activeRun: CloudProviderSyncRun | null = null;
+  private trailingRun: CloudProviderSyncTrailingRun | null = null;
   private interval: ReturnType<typeof setInterval> | null = null;
   private pendingReloadRetry: ReturnType<typeof setTimeout> | null = null;
   private readonly reloadRetryMs: number;
@@ -561,6 +580,8 @@ export class CloudProviderSync {
   }
 
   setSession(session: CloudProviderDenSession): void {
+    const contextKey = this.sessionContextKey(session);
+    if (this.session && this.sessionContextKey(this.session) === contextKey) return;
     this.session = session;
     this.startInterval();
     void this.run("den_session_updated");
@@ -569,6 +590,9 @@ export class CloudProviderSync {
   async clearSession(): Promise<void> {
     this.session = null;
     this.stopInterval();
+    const trailing = this.trailingRun;
+    this.trailingRun = null;
+    trailing?.resolve({ status: "no_session" });
     await this.enqueue(async () => {
       try {
         await this.sweep();
@@ -589,8 +613,30 @@ export class CloudProviderSync {
   }
 
   run(reason?: string): Promise<CloudProviderSyncRunResult> {
-    if (!this.session) return Promise.resolve({ status: "no_session" });
-    return this.enqueue(() => this.runPass(reason));
+    const session = this.session;
+    if (!session) return Promise.resolve({ status: "no_session" });
+    const request = {
+      contextKey: this.sessionContextKey(session),
+      session,
+      reason,
+    };
+    if (this.activeRun?.contextKey === request.contextKey) {
+      const trailing = this.trailingRun;
+      if (trailing && trailing.contextKey !== request.contextKey) {
+        this.trailingRun = null;
+        void this.activeRun.promise.then(trailing.resolve, trailing.reject);
+      }
+      return this.activeRun.promise;
+    }
+    if (this.trailingRun) {
+      if (this.trailingRun.contextKey !== request.contextKey) {
+        this.trailingRun.contextKey = request.contextKey;
+        this.trailingRun.request = request;
+      }
+      return this.trailingRun.promise;
+    }
+    if (this.activeRun) return this.createTrailingRun(request);
+    return this.startRun(request);
   }
 
   status(): CloudProviderSyncStatus {
@@ -621,6 +667,48 @@ export class CloudProviderSync {
       () => undefined,
     );
     return run;
+  }
+
+  private sessionContextKey(session: CloudProviderDenSession): string {
+    return `${session.baseUrl}\u0000${session.orgId}\u0000${session.token}`;
+  }
+
+  private createTrailingRun(request: CloudProviderSyncRequest): Promise<CloudProviderSyncRunResult> {
+    let resolve: (result: CloudProviderSyncRunResult) => void = () => undefined;
+    let reject: (error: unknown) => void = () => undefined;
+    const promise = new Promise<CloudProviderSyncRunResult>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    this.trailingRun = {
+      contextKey: request.contextKey,
+      request,
+      promise,
+      resolve,
+      reject,
+    };
+    return promise;
+  }
+
+  private startRun(request: CloudProviderSyncRequest): Promise<CloudProviderSyncRunResult> {
+    const promise = this.enqueue(() => this.runPass(request));
+    const active = { contextKey: request.contextKey, promise };
+    this.activeRun = active;
+    void promise.then(
+      () => this.finishRun(active),
+      () => this.finishRun(active),
+    );
+    return promise;
+  }
+
+  private finishRun(active: CloudProviderSyncRun): void {
+    if (this.activeRun !== active) return;
+    this.activeRun = null;
+    const trailing = this.trailingRun;
+    this.trailingRun = null;
+    if (!trailing) return;
+    const promise = this.startRun(trailing.request);
+    void promise.then(trailing.resolve, trailing.reject);
   }
 
   private startInterval(): void {
@@ -703,9 +791,8 @@ export class CloudProviderSync {
     }
   }
 
-  private async runPass(reason?: string): Promise<CloudProviderSyncRunResult> {
-    const session = this.session;
-    if (!session) return { status: "no_session" };
+  private async runPass(request: CloudProviderSyncRequest): Promise<CloudProviderSyncRunResult> {
+    const { reason, session } = request;
     try {
       const prepared = prepareMaterialization(await fetchProviders(this.fetchImpl, session));
       const { changed, detail, reloadError } = await this.apply(prepared);

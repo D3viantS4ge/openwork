@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto"
 import type { AutomationClaimResult, AutomationListItem } from "@openwork/automations"
+import { AUTOMATION_MIN_CLAIM_WINDOW_MS, desktopRunnerConnected } from "@openwork/automations"
 import type {
   AutomationDesktopRunnerCapability,
+  AutomationDesktopRunnerPresence,
   AutomationDesktopRunnerResult,
   AutomationDesktopRunnerRegistration,
   AutomationRunEventType,
@@ -14,11 +16,12 @@ import { env } from "../env.js"
 import { isActiveAutomationOwner, resolveAutomationModelAccess } from "./authority.js"
 import { shouldApplyAutomationModelAccessFailure } from "./model-attention-rollout.js"
 import { automationRepository } from "./repository.js"
-import { validateSavedScriptAutomationAction } from "../codemode-scripts.js"
+import { validateWorkflowAutomationAction } from "../workflows.js"
 import type { CloudAgentExecution, CloudAgentExecutorInput } from "./cloud-agent-executor.js"
 import { appLogger } from "../observability/logger.js"
 
 const schedulerOwner = `den:${process.pid}:${randomUUID()}`
+const logger = appLogger.child({ component: "automations" })
 
 type OwnerScope = {
   organizationId: string
@@ -45,23 +48,23 @@ function supportsModelAttention(scope: OwnerScope | DesktopRunnerScope) {
     || ("capabilities" in scope && scope.capabilities?.includes("model_attention_v1") === true)
 }
 
-export type CloudSavedScriptExecution =
+export type CloudWorkflowExecution =
   | { ok: true; value: unknown; canonicalResult: string; receiptId: string }
   | { ok: false; message: string; retryable: boolean; receiptId?: string | null }
 
-export type CloudSavedScriptExecutor = (input: {
+export type CloudWorkflowExecutor = (input: {
   organizationId: string
   ownerMemberId: string
   automationRunId: string
   action: Extract<AutomationAction, { kind: "saved_script" }>
-}) => Promise<CloudSavedScriptExecution>
+}) => Promise<CloudWorkflowExecution>
 
-let cloudSavedScriptExecutor: CloudSavedScriptExecutor | null = null
+let cloudWorkflowExecutor: CloudWorkflowExecutor | null = null
 let cloudAgentExecutor: ((input: CloudAgentExecutorInput) => Promise<CloudAgentExecution>) | null = null
 let cloudAgentRuntimeAvailable: ((scope: OwnerScope) => Promise<boolean>) | null = null
 
-export function configureCloudSavedScriptExecutor(executor: CloudSavedScriptExecutor): void {
-  cloudSavedScriptExecutor = executor
+export function configureCloudWorkflowExecutor(executor: CloudWorkflowExecutor): void {
+  cloudWorkflowExecutor = executor
 }
 
 export function configureCloudAgentExecutor(input: {
@@ -100,7 +103,7 @@ export class AutomationService {
       }
       else {
         if (!await isActiveAutomationOwner(scope)) throw new Error("automation_owner_inactive")
-        await validateSavedScriptAutomationAction({ ...scope, action: definition.action })
+        await validateWorkflowAutomationAction({ ...scope, action: definition.action })
       }
       if (definition.action.kind === "agent" && (!cloudAgentRuntimeAvailable || !await cloudAgentRuntimeAvailable(scope))) {
         throw new Error("automation_cloud_worker_required")
@@ -124,7 +127,7 @@ export class AutomationService {
       throw new Error("automation_action_target_mismatch")
     }
     if (nextAction?.kind === "saved_script") {
-      await validateSavedScriptAutomationAction({ ...scope, action: nextAction })
+      await validateWorkflowAutomationAction({ ...scope, action: nextAction })
     } else if (nextAction?.kind === "agent") {
       if ((current.revision.executionTarget ?? "desktop") === "cloud"
         && (!cloudAgentRuntimeAvailable || !await cloudAgentRuntimeAvailable(scope))) {
@@ -216,7 +219,10 @@ export class AutomationService {
       nonce: randomUUID(),
       leaseOwner: schedulerOwner,
       leaseMs: env.automations.leaseMs,
-      claimDeadlineMs: env.automations.runnerClaimDeadlineMs,
+      // Someone is watching this one. The recovery window exists for occurrences
+      // that come due while nobody is at the machine; a manual run should say
+      // what happened promptly instead of sitting queued for minutes.
+      claimDeadlineMs: AUTOMATION_MIN_CLAIM_WINDOW_MS,
       now: Date.now(),
     })
     if (claim.kind === "claimed" && claim.run.executionTarget === "cloud") {
@@ -331,8 +337,23 @@ export class AutomationService {
     return automationRepository.touchDesktopRunner({ ...scope, now: Date.now() })
   }
 
+  /** Lets a management client warn before a due occurrence instead of after it. */
+  async desktopRunnerPresence(scope: OwnerScope): Promise<AutomationDesktopRunnerPresence> {
+    const lastSeenAt = await automationRepository.desktopRunnerLastSeenAt(scope)
+    return { connected: desktopRunnerConnected({ lastSeenAt, now: Date.now() }), lastSeenAt }
+  }
+
   async discoverDesktopRunnerWork(scope: DesktopRunnerScope) {
-    await this.touchDesktopRunner(scope)
+    try {
+      await this.touchDesktopRunner(scope)
+    } catch (error) {
+      logger.warn("automation desktop runner touch failed", {
+        organization_id: scope.organizationId,
+        owner_member_id: scope.ownerMemberId,
+        runner_id: scope.runnerId,
+        error,
+      })
+    }
     return automationRepository.discoverDesktopWork({ ...scope, now: Date.now(), limit: 4 })
   }
 
@@ -422,6 +443,10 @@ export class AutomationService {
       resultSummary: result.resultSummary,
       usage: result.usage,
       error: result.error,
+      engineReceipt: {
+        ...(result.sessionId ? { nativeThreadId: result.sessionId } : {}),
+        ...(result.workspaceId ? { workspaceId: result.workspaceId } : {}),
+      },
       attempt: result.attempt,
       now,
     })
@@ -504,15 +529,15 @@ export class AutomationService {
       return
     }
     if (claimed.revision.action?.kind !== "saved_script") return
-    const executor = cloudSavedScriptExecutor
+    const executor = cloudWorkflowExecutor
     if (!executor) {
       await automationRepository.completeCloud({
         automationId: claimed.automation.id,
         runId,
         leaseOwner,
         status: "failed",
-        resultSummary: "OpenWork Cloud script execution is unavailable.",
-        error: { code: "execution_runtime_unavailable", message: "OpenWork Cloud script execution is unavailable.", retryable: true },
+        resultSummary: "OpenWork Cloud Workflow execution is unavailable.",
+        error: { code: "execution_runtime_unavailable", message: "OpenWork Cloud Workflow execution is unavailable.", retryable: true },
         now: Date.now(),
       })
       return
@@ -522,9 +547,9 @@ export class AutomationService {
       ownerMemberId: claimed.automation.ownerMemberId,
       automationRunId: runId,
       action: claimed.revision.action,
-    }).catch((error): CloudSavedScriptExecution => ({
+    }).catch((error): CloudWorkflowExecution => ({
       ok: false,
-      message: error instanceof Error ? error.message : "Saved script execution failed.",
+      message: error instanceof Error ? error.message : "Workflow execution failed.",
       retryable: true,
     }))
     await automationRepository.completeCloud({

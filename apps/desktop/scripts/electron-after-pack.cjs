@@ -53,16 +53,19 @@ function resolveAppAsarPath(context) {
   return path.join(context.appOutDir, "resources", "app.asar");
 }
 
+function normalizeAsarEntryPath(entry, separator) {
+  return entry.split(separator).join("/");
+}
+
 function verifyRuntimeDependencies(context) {
   const appAsarPath = resolveAppAsarPath(context);
   if (!appAsarPath || !fs.existsSync(appAsarPath)) {
     throw new Error(`Missing packaged app.asar at ${appAsarPath || context.appOutDir}`);
   }
-  // @electron/asar returns platform-native separators (backslashes on
-  // Windows); the staged package paths below are always forward-slash, so
-  // normalize before comparing or every staged package reads as missing.
   const packagedFiles = new Set(
-    asar.listPackage(appAsarPath).map((file) => file.replaceAll("\\", "/")),
+    asar
+      .listPackage(appAsarPath, { isPack: false })
+      .map((entry) => normalizeAsarEntryPath(entry, path.sep)),
   );
   const stagedNodeModules = path.resolve(__dirname, "..", ".electron-runtime", "node_modules");
   const packageJsonPaths = [];
@@ -175,3 +178,4 @@ async function afterPack(context) {
 
 module.exports = afterPack;
 module.exports.default = afterPack;
+module.exports.normalizeAsarEntryPath = normalizeAsarEntryPath;

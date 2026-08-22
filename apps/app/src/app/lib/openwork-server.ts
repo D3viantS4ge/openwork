@@ -239,6 +239,7 @@ export type OpenworkSkillItem = {
   description: string;
   scope: "project" | "global";
   trigger?: string;
+  error?: string;
 };
 
 export type OpenworkSkillContent = {
@@ -421,6 +422,13 @@ export type OpenworkMcpAppResource = {
   prefersBorder: boolean;
 };
 
+export type OpenworkMcpAppLaunchReference = {
+  connectionId?: string;
+  toolName: string;
+  resourceUri: string;
+  arguments: Record<string, unknown>;
+};
+
 export type OpenworkMcpAppToolResult = {
   content: Array<Record<string, unknown>>;
   structuredContent?: Record<string, unknown>;
@@ -433,6 +441,10 @@ export type OpenworkMcpAppSandbox = {
   expectedOrigin: string;
 };
 
+export function normalizeMcpAppHostOrigin(hostOrigin: string): string {
+  return hostOrigin === "file://" ? "null" : hostOrigin;
+}
+
 export type OpenworkManagedMcpConnection = {
   name: string;
   serverUrl: string;
@@ -441,6 +453,11 @@ export type OpenworkManagedMcpConnection = {
   lastError: string | null;
   hasCredential: boolean;
   updatedAt: number;
+};
+
+export type OpenworkManagedOAuthState = {
+  available: boolean;
+  recovery: { at: number; reason: string; quarantinedTo: string } | null;
 };
 
 export type OpenworkManagedMcpStartResult =
@@ -718,6 +735,8 @@ export type OpenworkCloudMcpReconcilePayload = {
   workspaceId: string;
   name: "openwork-cloud";
   config: Record<string, unknown>;
+  /** Desktop-private credential; the local server must never project it into OpenCode. */
+  appHostAuthorization?: string;
   tokenMetadata?: Record<string, string | number | boolean | null>;
   org?: Record<string, string | number | boolean | null>;
   app?: Record<string, string | number | boolean | null>;
@@ -1945,12 +1964,20 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
         },
       ),
     listMcp: (workspaceId: string) =>
-      requestJson<{ items: OpenworkMcpItem[]; engineSync?: OpenworkMcpEngineSync | null }>(
+      requestJson<{
+        items: OpenworkMcpItem[];
+        engineSync?: OpenworkMcpEngineSync | null;
+        managedOAuthState?: OpenworkManagedOAuthState | null;
+      }>(
         baseUrl,
         `/workspace/${workspaceId}/mcp`,
         { token, hostToken },
       ),
-    resolveMcpApp: (workspaceId: string, projectedToolName: string) =>
+    resolveMcpApp: (
+      workspaceId: string,
+      projectedToolName: string,
+      launch?: OpenworkMcpAppLaunchReference,
+    ) =>
       requestJson<{ app: OpenworkMcpAppResource | null }>(
         baseUrl,
         `/workspace/${encodeURIComponent(workspaceId)}/mcp-apps/resolve`,
@@ -1958,21 +1985,28 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
           token,
           hostToken,
           method: "POST",
-          body: { projectedToolName },
+          body: { projectedToolName, ...(launch ? { launch } : {}) },
           timeoutMs: timeouts.config,
         },
       ),
     mcpAppSandbox: (app: OpenworkMcpAppResource, hostOrigin: string): OpenworkMcpAppSandbox => {
+      const messageOrigin = normalizeMcpAppHostOrigin(hostOrigin);
       const url = new URL(`${baseUrl}/mcp-apps/sandbox.html`);
       if (url.origin === hostOrigin && url.hostname === "localhost") url.hostname = "127.0.0.1";
       else if (url.origin === hostOrigin && url.hostname === "127.0.0.1") url.hostname = "localhost";
       url.searchParams.set("csp", JSON.stringify(app.csp));
-      url.searchParams.set("hostOrigin", hostOrigin);
+      url.searchParams.set("hostOrigin", messageOrigin);
       return { url: url.toString(), expectedOrigin: url.origin };
     },
     callMcpAppTool: (
       workspaceId: string,
-      payload: { serverName: string; name: string; arguments?: Record<string, unknown>; approved?: boolean },
+      payload: {
+        serverName: string;
+        name: string;
+        resourceUri: string;
+        arguments?: Record<string, unknown>;
+        approved?: boolean;
+      },
     ) => requestJson<OpenworkMcpAppToolResult>(
       baseUrl,
       `/workspace/${encodeURIComponent(workspaceId)}/mcp-apps/call`,

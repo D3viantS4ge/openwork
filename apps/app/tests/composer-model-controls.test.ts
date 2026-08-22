@@ -21,15 +21,21 @@ const providerAuthModalPath = fileURLToPath(
 describe("composer model controls", () => {
   test("stay enabled during ordinary generation and disable during steering", () => {
     const composerSource = readFileSync(composerPath, "utf8");
+    const modelSelectPath = fileURLToPath(
+      new URL("../src/components/model-select.tsx", import.meta.url),
+    );
+    const modelSelectSource = readFileSync(modelSelectPath, "utf8");
     const modelSelectStart = composerSource.indexOf("<ModelSelect");
-    const behaviorSelectStart = composerSource.indexOf("<ModelBehaviorSelect");
-    const modelControls = [
-      composerSource.slice(modelSelectStart, composerSource.indexOf("/>", modelSelectStart) + 2),
-      composerSource.slice(behaviorSelectStart, composerSource.indexOf("/>", behaviorSelectStart) + 2),
-    ].join("\n");
+    const modelSelect = composerSource.slice(modelSelectStart, composerSource.indexOf("/>", modelSelectStart) + 2);
 
-    expect(modelControls.match(/disabled=\{props\.steering\}/g)).toHaveLength(2);
-    expect(modelControls).not.toContain("disabled={props.busy}");
+    expect(composerSource).not.toContain("ModelBehaviorSelect");
+    expect(modelSelect).toContain("disabled={props.steering}");
+    expect(modelSelect).not.toContain("disabled={props.busy}");
+    expect(modelSelect).toContain("behaviorOptions={props.modelBehaviorOptions}");
+    expect(modelSelectSource).toContain("setThinkingFor(option)");
+    expect(modelSelectSource).not.toContain("setThinkingOpen(true)");
+    expect(modelSelectSource).toContain('data-slot="model-thinking-submenu"');
+    expect(modelSelectSource).not.toContain("onMouseEnter");
   });
 
   test("tracks steering until the active run stops streaming", () => {
@@ -38,6 +44,7 @@ describe("composer model controls", () => {
     expect(sessionSurfaceSource).toContain("setSteering(true);\n    await handleSend();");
     expect(sessionSurfaceSource).toContain("if (!chatStreaming) setSteering(false);");
     expect(sessionSurfaceSource).toContain("steering={steering}");
+    expect(sessionSurfaceSource).toContain("props.onModelChange(nextModel, variant)");
   });
 
   test("makes the unavailable-model hint a compact refresh control", () => {
@@ -56,6 +63,7 @@ describe("composer model controls", () => {
     const sessionProviderAuthSource = readFileSync(sessionProviderAuthPath, "utf8");
 
     expect(sessionRouteSource).toContain('await refreshCloudProviderSync("manual");');
+    expect(sessionRouteSource).toContain("applyLastUsedModelToSession(session.id)");
     expect(sessionProviderAuthSource).toContain(
       "setCompletedCloudProviderSync({ context: cloudProviderSyncContext, providerList });",
     );

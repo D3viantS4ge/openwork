@@ -2,13 +2,25 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 import { readMcpResourceText, type McpFetch } from "./connect-mcp-transport.js";
+import { readActivatedEnterpriseDenOrigin } from "./enterprise-den-origin.js";
 import { runtimeMcpMap, writeRuntimeOpencodeConfig } from "./runtime-opencode-config-store.js";
 import { externalFetch } from "./server-fetch.js";
 import type { ServerConfig, WorkspaceInfo } from "./types.js";
+import { createWorkspaceKvStore } from "./workspace-kv-store.js";
 
 export const CONNECT_MCP_SERVER_INDEX_URI = "openwork://connect/mcp-servers/index.json";
 export const CONNECT_MCP_SERVER_INDEX_SCHEMA_VERSION = "openwork.connect/mcp-servers/1";
+export const CONNECT_MCP_APP_HOST_NAME_PREFIX = "openwork-app-host-connect-";
 export const CONNECT_MCP_SERVER_NAME_PREFIX = "openwork-connect-";
+export const CONNECT_MCP_APP_HOST_CAPABILITY_HEADER = "x-openwork-mcp-client-capabilities";
+export const CONNECT_MCP_APP_HOST_CAPABILITY = "mcp-app-host-v1";
+
+const BUILTIN_APP_HOST_CLOUD_ORIGINS = new Set([
+  "https://api.openworklabs.com",
+  "https://app.openworklabs.com",
+  "https://api.openwork.software",
+  "https://app.openwork.software",
+]);
 
 const indexSchema = z.object({
   schemaVersion: z.literal(CONNECT_MCP_SERVER_INDEX_SCHEMA_VERSION),
@@ -20,68 +32,221 @@ const indexSchema = z.object({
   })).max(100),
 });
 
+const appHostCredentialSchema = z.object({
+  authorization: z.string(),
+  origin: z.string().url(),
+});
+
 export type OpenWorkConnectMcpServerIndex = z.infer<typeof indexSchema>;
 
-export function connectMcpRuntimeName(connectionId: string): string {
+const emptyIndex = (): OpenWorkConnectMcpServerIndex => ({
+  schemaVersion: CONNECT_MCP_SERVER_INDEX_SCHEMA_VERSION,
+  servers: [],
+});
+
+const appHostCatalogStore = createWorkspaceKvStore<OpenWorkConnectMcpServerIndex>({
+  tableName: "connect_mcp_app_host_catalogs",
+  valueColumn: "catalog_json",
+  parse: (json) => {
+    try {
+      const parsed = indexSchema.safeParse(JSON.parse(json));
+      return parsed.success ? parsed.data : emptyIndex();
+    } catch {
+      return emptyIndex();
+    }
+  },
+  serialize: (value) => JSON.stringify(value),
+});
+
+type OpenWorkConnectMcpAppHostCredential = z.infer<typeof appHostCredentialSchema>;
+
+const appHostAuthorizationStore = createWorkspaceKvStore<OpenWorkConnectMcpAppHostCredential | null>({
+  tableName: "connect_mcp_app_host_authorizations",
+  valueColumn: "authorization_json",
+  parse: (json) => {
+    try {
+      const parsed = appHostCredentialSchema.safeParse(JSON.parse(json));
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  },
+  serialize: (value) => JSON.stringify(value),
+});
+
+function privateAppHostAuthorization(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length <= 8_192 && /^Bearer\s+[^\s,]+$/i.test(normalized) ? normalized : null;
+}
+
+function endpointOrigin(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const endpoint = new URL(value);
+    return endpoint.username || endpoint.password ? null : endpoint.origin;
+  } catch {
+    return null;
+  }
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const value = hostname.toLowerCase();
+  if (value === "localhost" || value === "::1" || value === "[::1]") return true;
+  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(value);
+  return Boolean(match && Number(match[1]) === 127 && match.slice(1).every((part) => Number(part) <= 255));
+}
+
+async function trustedAppHostCloudEndpoint(cloudMcp: Record<string, unknown>): Promise<boolean> {
+  if (typeof cloudMcp.url !== "string") return false;
+  let endpoint: URL;
+  try {
+    endpoint = new URL(cloudMcp.url);
+  } catch {
+    return false;
+  }
+  if (endpoint.username || endpoint.password || endpoint.search || endpoint.hash) return false;
+  if (BUILTIN_APP_HOST_CLOUD_ORIGINS.has(endpoint.origin)) return true;
+  if (process.env.OPENWORK_DEV_MODE === "1" && isLoopbackHostname(endpoint.hostname)) return true;
+  const activatedEnterpriseOrigin = await readActivatedEnterpriseDenOrigin();
+  return activatedEnterpriseOrigin !== null && endpoint.origin === activatedEnterpriseOrigin;
+}
+
+/** Stable private App-host identifier. This must never become an OpenCode MCP key. */
+export function connectMcpAppHostName(connectionId: string): string {
   const digest = createHash("sha256").update(connectionId).digest("hex").slice(0, 12);
-  return `${CONNECT_MCP_SERVER_NAME_PREFIX}${digest}`;
+  return `${CONNECT_MCP_APP_HOST_NAME_PREFIX}${digest}`;
+}
+
+export async function readOpenWorkConnectMcpAppHostCatalog(
+  config: ServerConfig,
+  workspaceId: string,
+): Promise<OpenWorkConnectMcpServerIndex> {
+  return await appHostCatalogStore.get(config, workspaceId) ?? emptyIndex();
+}
+
+export async function writeOpenWorkConnectMcpAppHostCatalog(
+  config: ServerConfig,
+  workspaceId: string,
+  catalog: OpenWorkConnectMcpServerIndex,
+): Promise<void> {
+  const parsed = indexSchema.safeParse(catalog);
+  await appHostCatalogStore.set(config, workspaceId, parsed.success ? parsed.data : emptyIndex());
+}
+
+export async function readOpenWorkConnectMcpAppHostAuthorization(
+  config: ServerConfig,
+  workspaceId: string,
+  endpointUrl: string,
+): Promise<string | null> {
+  const credential = await appHostAuthorizationStore.get(config, workspaceId);
+  const expectedOrigin = endpointOrigin(endpointUrl);
+  if (!credential || !expectedOrigin || credential.origin !== expectedOrigin) return null;
+  return privateAppHostAuthorization(credential.authorization);
+}
+
+export async function writeOpenWorkConnectMcpAppHostAuthorization(
+  config: ServerConfig,
+  workspaceId: string,
+  value: string,
+  sourceUrl: string,
+): Promise<void> {
+  const authorization = privateAppHostAuthorization(value);
+  const origin = endpointOrigin(sourceUrl);
+  await appHostAuthorizationStore.set(
+    config,
+    workspaceId,
+    authorization && origin ? { authorization, origin } : null,
+  );
+}
+
+export async function findOpenWorkConnectMcpAppHostServer(
+  config: ServerConfig,
+  workspaceId: string,
+  reference: { connectionId?: string; serverName?: string },
+): Promise<OpenWorkConnectMcpServerIndex["servers"][number] | null> {
+  const catalog = await readOpenWorkConnectMcpAppHostCatalog(config, workspaceId);
+  return catalog.servers.find((server) => (
+    (reference.connectionId !== undefined && server.connectionId === reference.connectionId)
+    || (reference.serverName !== undefined && connectMcpAppHostName(server.connectionId) === reference.serverName)
+  )) ?? null;
 }
 
 export async function readOpenWorkConnectMcpServerIndex(
   cloudMcp: Record<string, unknown>,
+  appHostAuthorization: string,
   fetcher: McpFetch = externalFetch,
 ): Promise<OpenWorkConnectMcpServerIndex | null> {
+  if (!await trustedAppHostCloudEndpoint(cloudMcp)) return null;
   const text = await readMcpResourceText({
-    config: cloudMcp,
+    config: {
+      ...cloudMcp,
+      headers: {
+        Authorization: appHostAuthorization,
+        [CONNECT_MCP_APP_HOST_CAPABILITY_HEADER]: CONNECT_MCP_APP_HOST_CAPABILITY,
+      },
+    },
     uri: CONNECT_MCP_SERVER_INDEX_URI,
     fetcher,
     clientName: "openwork-server-connect-mcp-catalog",
   });
   if (text === null) return null;
   const parsed = indexSchema.safeParse(JSON.parse(text));
-  return parsed.success ? parsed.data : null;
+  if (!parsed.success) return null;
+  const cloudOrigin = endpointOrigin(cloudMcp.url);
+  if (!cloudOrigin || parsed.data.servers.some((server) => endpointOrigin(server.url) !== cloudOrigin)) return null;
+  return parsed.data;
 }
 
 /**
- * Reconciles only OpenWork-owned Connect proxy entries. User-authored MCP
- * configurations are never touched. A missing/unreadable index is a no-op so
- * an older Cloud deployment cannot erase a previously working catalog.
+ * Keeps provider descriptors private to the Desktop App host and removes any
+ * legacy OpenWork-owned provider endpoints from the model-facing runtime.
+ * User-authored MCP configurations and durable provider records are untouched.
  */
 export async function reconcileOpenWorkConnectMcpServers(input: {
   config: ServerConfig;
   workspace: WorkspaceInfo;
   cloudMcp: Record<string, unknown>;
+  appHostAuthorization?: string;
   fetcher?: McpFetch;
-}): Promise<{ status: "synced" | "unavailable"; names: string[]; removedNames: string[] }> {
-  const index = await readOpenWorkConnectMcpServerIndex(input.cloudMcp, input.fetcher);
-  if (!index) return { status: "unavailable", names: [], removedNames: [] };
+}): Promise<{ status: "synced" | "unavailable"; appHostNames: string[]; removedNames: string[] }> {
+  const trustedCloudEndpoint = await trustedAppHostCloudEndpoint(input.cloudMcp);
+  if (trustedCloudEndpoint && input.appHostAuthorization !== undefined) {
+    await writeOpenWorkConnectMcpAppHostAuthorization(
+      input.config,
+      input.workspace.id,
+      input.appHostAuthorization,
+      String(input.cloudMcp.url),
+    );
+  }
+  const appHostAuthorization = trustedCloudEndpoint
+    ? await readOpenWorkConnectMcpAppHostAuthorization(
+      input.config,
+      input.workspace.id,
+      String(input.cloudMcp.url),
+    )
+    : null;
+  const index = trustedCloudEndpoint && appHostAuthorization
+    ? await readOpenWorkConnectMcpServerIndex(input.cloudMcp, appHostAuthorization, input.fetcher).catch(() => null)
+    : null;
+  const privateCatalog = index ?? emptyIndex();
+  await writeOpenWorkConnectMcpAppHostCatalog(input.config, input.workspace.id, privateCatalog);
 
-  const headers = typeof input.cloudMcp.headers === "object" && input.cloudMcp.headers !== null
-    ? input.cloudMcp.headers
-    : undefined;
-  const entries = Object.fromEntries(index.servers.map((server) => {
-    const name = connectMcpRuntimeName(server.connectionId);
-    return [name, {
-      type: "remote",
-      url: server.url,
-      enabled: input.cloudMcp.enabled !== false,
-      ...(headers ? { headers } : {}),
-    }];
-  }));
   let removedNames: string[] = [];
   await writeRuntimeOpencodeConfig(input.config, input.workspace.id, (current) => {
     const currentMcp = runtimeMcpMap(current);
     removedNames = Object.keys(currentMcp)
-      .filter((name) => name.startsWith(CONNECT_MCP_SERVER_NAME_PREFIX) && !(name in entries))
+      .filter((name) => name.startsWith(CONNECT_MCP_SERVER_NAME_PREFIX))
       .sort();
     return {
       ...current,
-      mcp: {
-        ...Object.fromEntries(Object.entries(currentMcp)
-          .filter(([name]) => !name.startsWith(CONNECT_MCP_SERVER_NAME_PREFIX))),
-        ...entries,
-      },
+      mcp: Object.fromEntries(Object.entries(currentMcp)
+        .filter(([name]) => !name.startsWith(CONNECT_MCP_SERVER_NAME_PREFIX))),
     };
   });
-  return { status: "synced", names: Object.keys(entries).sort(), removedNames };
+  return {
+    status: index ? "synced" : "unavailable",
+    appHostNames: privateCatalog.servers.map((server) => connectMcpAppHostName(server.connectionId)).sort(),
+    removedNames,
+  };
 }

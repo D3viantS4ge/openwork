@@ -104,6 +104,44 @@ helm template openwork-ee ./packaging/helm/openwork-ee -f values.prod.yaml
 helm upgrade --install openwork-ee ./packaging/helm/openwork-ee -f values.prod.yaml
 ```
 
+### Automations rollout
+
+The Helm chart advertises Automations as unavailable by default for self-hosted
+and customer-managed deployments. Set availability explicitly when the
+deployment is ready:
+
+```yaml
+config:
+  public:
+    automationsEnabled: "true"
+```
+
+This renders `DEN_AUTOMATIONS_ENABLED=true` for Den. Missing configuration is
+treated as unavailable in every deployment; hosted OpenWork Cloud sets the
+variable explicitly to `true`.
+
+The flag is delivered in compatibility-safe phases. Den first publishes its
+effective value through `/v1/me/desktop-config`. The config-aware Desktop then
+hides the Automation surface and does not register its runner when the value is
+not explicitly true, while Den deliberately preserves the existing Automation
+API and scheduler behavior for older published Desktop clients. A later Den
+release enforces disabled execution after this Desktop has been distributed.
+
+For an existing deployment, stage the upgrade so independently released Den
+and Desktop versions never observe an unintended flag state:
+
+1. Set `config.public.automationsEnabled: "true"` before upgrading the chart.
+2. Upgrade Den and verify `/v1/me/desktop-config` reports
+   `automationsEnabled: true`.
+3. Roll out the config-aware Desktop follow-up release.
+4. Roll out the Den enforcement follow-up release.
+5. Leave the value `true` to keep Automations, or change it to `"false"` only
+   after both follow-ups are deployed to disable them.
+
+New installations that intend to keep Automations off can keep the chart's
+default `"false"`. Until the enforcement follow-up is deployed, that value is
+an advertised availability contract rather than a runtime kill switch.
+
 Provider-specific starter guides:
 
 - AWS EKS:
@@ -597,16 +635,31 @@ config:
     bootstrapAdminEmails: "admin@acme.com"
 ```
 
-After the release is installed and the web host is reachable, sign up or sign in
-with one of the emails in `config.tenancy.ownerEmails`. If the singleton
-organization does not exist yet, Den creates it with `singleOrgName` and
-`singleOrgSlug`, then makes that eligible first user the organization owner.
+For releases that include initial-administrator bootstrap, inject the
+release-documented one-time setup secret through the chart's Secret integration.
+Do not put the setup code in Helm values, a ConfigMap, source control, logs, or a
+PR. After the release is installed and the web host is reachable, open `/setup`,
+enter an email configured in `config.tenancy.ownerEmails`, and verify it with the
+one-time operator code. Den then creates the Better Auth account, creates or
+claims the singleton organization identified by `singleOrgName` and
+`singleOrgSlug`, grants owner and configured platform-admin access, and consumes
+the setup claim. The code cannot be reused and public signup remains disabled.
+
+Configuring `ownerEmails` or `bootstrapAdminEmails` does not create an account or
+password. `ownerEmails` controls singleton-organization ownership;
+`bootstrapAdminEmails` controls platform-admin allowlist access. Configure the
+initial administrator in both lists when that person needs both roles.
+
+Chart versions without the `/setup` route do not support this private bootstrap
+flow. Upgrade to a release that includes initial-administrator bootstrap before
+attempting first-user setup; entering the configured email on the normal sign-in
+page cannot create the account and no default administrator password exists.
 
 Later users are attached to the same singleton organization. They do not see an
 organization creation step, and attempts to create another organization return a
-single-org-mode error. If no `ownerEmails` are configured, the first user who
-reaches the deployment can claim the owner role, so production deployments
-should set `ownerEmails` explicitly.
+single-org-mode error. If no eligible initial-administrator email is configured,
+the private setup flow remains unavailable; it never falls back to allowing an
+arbitrary first visitor to claim ownership.
 
 For most production installs, use this first owner account as the break-glass
 setup path, then configure SAML/OIDC SSO and SCIM from the organization

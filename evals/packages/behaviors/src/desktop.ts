@@ -1,4 +1,4 @@
-import { describeAppState, dumpScreenState, evaluateOnSurface, isInteractive, probeAppState } from "@openwork/cdp";
+import { describeAppState, dumpScreenState, evaluateOnSurface, isInteractive, probeAppStateOnSurface } from "@openwork/cdp";
 import type { AppStateProbe, EvaluateOptions, Surface } from "@openwork/cdp";
 
 export interface SessionToolCall {
@@ -420,7 +420,7 @@ export async function waitUntilInteractive(
   let last: AppStateProbe = { controlReady: false, transitional: null, surface: null, workspaceId: null, route: "", text: "" };
   while (Date.now() < deadline) {
     try {
-      last = await probeAppState(app.client, {
+      last = await probeAppStateOnSurface(app, {
         timeoutMs: Math.min(DEFAULT_DOM_PROBE_TIMEOUT_MS, Math.max(0, deadline - Date.now())),
       });
       if (isInteractive(last)) return last;

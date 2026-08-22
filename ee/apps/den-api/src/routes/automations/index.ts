@@ -7,6 +7,7 @@ import {
   AUTOMATION_MODEL_ATTENTION_CAPABILITY_HEADER,
   automationDesktopRunnerAssignmentSchema,
   automationDesktopRunnerRegistrationSchema,
+  automationDesktopRunnerPresenceSchema,
   automationDesktopRunnerResultSchema,
   automationDetailSchema,
   automationListSchema,
@@ -73,18 +74,21 @@ function scope(c: {
 
 function failure(error: unknown): { status: 400 | 403 | 404 | 409; body: { error: string; message?: string } } | null {
   if (!(error instanceof Error)) return null
+  if (error.message === "automation_runner_identity_conflict") {
+    return { status: 409, body: { error: error.message, message: "This desktop runner identity is already registered to a different organization member." } }
+  }
   if (error.message === "automation_not_found") return { status: 404, body: { error: "automation_not_found" } }
   if (error.message === "automation_action_target_mismatch") {
     return { status: 400, body: { error: "automation_action_target_mismatch", message: "Desktop creates local Automations; Web creates OpenWork Cloud Automations." } }
   }
   if (error.message === "automation_saved_script_input_invalid") {
-    return { status: 400, body: { error: "automation_saved_script_input_invalid", message: "The existing Automation input does not match the selected Script version. Correct the input before creating the revision." } }
+    return { status: 400, body: { error: "automation_saved_script_input_invalid", message: "The existing Automation input does not match the selected Workflow version. Correct the input before creating the revision." } }
   }
   if (["automation_saved_script_version_not_found", "automation_saved_script_version_invalid"].includes(error.message)) {
-    return { status: 400, body: { error: error.message, message: "The selected Script version is unavailable." } }
+    return { status: 400, body: { error: error.message, message: "The selected Workflow version is unavailable." } }
   }
   if (error.message === "automation_saved_script_forbidden") {
-    return { status: 403, body: { error: error.message, message: "The Automation owner does not have access to this saved Script." } }
+    return { status: 403, body: { error: error.message, message: "The Automation owner does not have access to this Workflow." } }
   }
   if (error.message === "automation_owner_inactive") {
     return { status: 409, body: { error: error.message, message: "The Automation owner is no longer an active organization member." } }
@@ -119,12 +123,21 @@ export function registerAutomationRoutes<T extends { Variables: RouteVariables }
       tags: ["Automations"], operationId: "mintAutomationRunnerToken", "x-mcp": false,
       summary: "Connect this desktop as an Automation runner",
       description: "Mints a time-limited runner-only credential for the desktop SSE connection and HTTP runner APIs.",
-      responses: { 200: jsonResponse("Runner credential minted.", automationRunnerTokenResponseSchema) },
+      responses: {
+        200: jsonResponse("Runner credential minted.", automationRunnerTokenResponseSchema),
+        409: jsonResponse("Runner identity conflict.", invalidRequestSchema),
+      },
     }),
     orgMemberRoute(), jsonValidator(automationDesktopRunnerRegistrationSchema),
     async (c) => {
       const registration = c.req.valid("json")
-      await service.registerDesktopRunner(scope(c), registration)
+      try {
+        await service.registerDesktopRunner(scope(c), registration)
+      } catch (error) {
+        const mapped = failure(error)
+        if (mapped) return c.json(mapped.body, mapped.status)
+        throw error
+      }
       return c.json(automationRunnerAuth.issue(
         {
           organizationId: scope(c).organizationId,
@@ -137,6 +150,19 @@ export function registerAutomationRoutes<T extends { Variables: RouteVariables }
         }),
       ))
     },
+  )
+
+  app.get(
+    "/v1/automation-runners/presence",
+    describeNonMcpRoute({
+      tags: ["Automations"], operationId: "getAutomationDesktopRunnerPresence", "x-mcp": false,
+      summary: "Report whether a desktop runner is connected",
+      description: "Desktop Automations only run while one of the owner's desktops is connected. "
+        + "Management surfaces read this to warn before an occurrence is due rather than after it was missed.",
+      responses: { 200: jsonResponse("Desktop runner presence.", automationDesktopRunnerPresenceSchema) },
+    }),
+    orgMemberRoute(),
+    async (c) => c.json(await service.desktopRunnerPresence(scope(c))),
   )
 
   // Runner tokens are stateless 12h credentials, so authorization is re-derived

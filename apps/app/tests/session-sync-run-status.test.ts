@@ -12,6 +12,7 @@ import {
   ensureWorkspaceSessionSync,
   markSessionSnapshotFetchStart,
   seedSessionState,
+  snapshotKey,
   statusKey,
   trackWorkspaceSessionSync,
 } from "../src/react-app/domains/session/sync/session-sync";
@@ -112,6 +113,22 @@ afterEach(() => {
 });
 
 describe("session run status ordering", () => {
+  test("invalidates the durable snapshot when a tracked run becomes idle", () => {
+    const { input, cleanup, releaseSession } = createTestSync();
+    const queryClient = getReactQueryClient();
+    queryClient.setQueryData(snapshotKey(workspaceId, sessionId), createSnapshot({ type: "busy" }));
+
+    __applySessionSyncEventForTest(input, {
+      type: "session.idle",
+      properties: { sessionID: sessionId },
+    });
+
+    expect(queryClient.getQueryState(snapshotKey(workspaceId, sessionId))?.isInvalidated).toBe(true);
+
+    releaseSession();
+    cleanup();
+  });
+
   test("does not resurrect a finished run from a stale busy snapshot", () => {
     const { input, cleanup, releaseSession } = createTestSync();
     const snapshot = createSnapshot({ type: "busy" });

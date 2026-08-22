@@ -200,13 +200,20 @@ jobs:
             echo
             echo "$result"
           } >> "$GITHUB_STEP_SUMMARY"
+          changed=false
+          case "$result" in
+            updated:*) changed=true ;;
+          esac
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
 
       - name: Redeploy den-api so the new pin takes effect
         # Render does not redeploy services when an env group value changes, so
         # den-api keeps serving the previous DAYTONA_SNAPSHOT until it redeploys.
         # Without this the pin moves but `latestVersion` stays stale and no
         # sandbox ever recycles - observed for real on v0.18.11.
-        if: steps.pin.outcome == 'success' && vars.DAYTONA_PIN_CHANNEL != 'dev'
+        # Gated on the pin actually moving, so unchanged re-runs and the
+        # nightly backstop no longer redeploy production for a no-op.
+        if: steps.pin.outcome == 'success' && steps.pin.outputs.changed == 'true' && vars.DAYTONA_PIN_CHANNEL != 'dev'
         shell: bash
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}

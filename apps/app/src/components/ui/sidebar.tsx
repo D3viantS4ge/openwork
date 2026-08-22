@@ -336,7 +336,7 @@ function SidebarHeader({ className, ...props }: React.ComponentProps<"div">) {
       data-slot="sidebar-header"
       data-sidebar="header"
       className={cn(
-        "flex flex-col gap-2 p-2 [--radius:var(--radius-xl)]",
+        "flex flex-col gap-1 mx-2 my-2 px-0 [--radius:var(--radius-md)]",
         className
       )}
       {...props}
@@ -388,7 +388,7 @@ function SidebarGroup({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="sidebar-group"
       data-sidebar="group"
-      className={cn("relative flex w-full min-w-0 flex-col p-2 py-0", className)}
+      className={cn("relative flex w-full min-w-0 flex-col mx-2 px-0 py-0", className)}
       {...props}
     />
   )
@@ -479,7 +479,7 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
 }
 
 const sidebarMenuButtonVariants = cva(
-  "peer/menu-button group/menu-button flex w-full items-center gap-2 overflow-hidden relative rounded-md px-3 py-2 text-start text-sm ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pe-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-open:hover:bg-sidebar-accent data-open:hover:text-sidebar-accent-foreground data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-accent-foreground [&_svg]:size-4 [&_svg]:shrink-0 [&>span:last-child]:truncate max-lg:min-h-11 mac:hover:bg-black/5 mac:active:bg-black/5 mac:data-active:bg-black/5 dark:mac:hover:bg-white/10 dark:mac:active:bg-white/10 dark:mac:data-active:bg-white/10 ",
+  "peer/menu-button group/menu-button flex h-8 w-full items-center gap-2 overflow-hidden relative rounded-md px-2.5 text-start text-[13px] ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pe-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-open:hover:bg-sidebar-accent data-open:hover:text-sidebar-accent-foreground data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-accent-foreground [&_svg]:size-4 [&_svg]:shrink-0 [&>span:last-child]:truncate mac:hover:bg-black/5 mac:active:bg-black/5 mac:data-active:bg-black/5 dark:mac:hover:bg-white/10 dark:mac:active:bg-white/10 dark:mac:data-active:bg-white/10 ",
   {
     variants: {
       variant: {
@@ -488,7 +488,7 @@ const sidebarMenuButtonVariants = cva(
           "bg-background shadow-[0_0_0_1px_hsl(var(--sidebar-border))] hover:bg-sidebar-accent hover:text-sidebar-accent-foreground hover:shadow-[0_0_0_1px_hsl(var(--sidebar-accent))]",
       },
       size: {
-        default: "h-7 text-sm",
+        default: "h-8 text-[13px]",
         sm: "h-7 text-xs",
         lg: "h-14 px-3 text-sm group-data-[collapsible=icon]:p-0!",
       },
@@ -617,7 +617,7 @@ function SidebarMenuSkeleton({
     <div
       data-slot="sidebar-menu-skeleton"
       data-sidebar="menu-skeleton"
-      className={cn("flex h-7 items-center gap-2 rounded-xl px-2", className)}
+      className={cn("flex h-8 items-center gap-2 rounded-xl px-2", className)}
       {...props}
     >
       {showIcon && (
@@ -643,7 +643,7 @@ function SidebarMenuSub({ className, ...props }: React.ComponentProps<"ul">) {
       data-slot="sidebar-menu-sub"
       data-sidebar="menu-sub"
       className={cn(
-        "flex min-w-0 translate-x-px rtl:-translate-x-px flex-col gap-px group-data-[collapsible=icon]:hidden",
+        "flex min-w-0 translate-x-px rtl:-translate-x-px flex-col gap-0.5 group-data-[collapsible=icon]:hidden",
         className
       )}
       {...props}
@@ -681,7 +681,7 @@ function SidebarMenuSubButton({
     props: mergeProps<"a">(
       {
         className: cn(
-          "flex h-7 ps-9 min-w-0 -translate-x-px rtl:translate-x-px items-center gap-2 overflow-hidden relative rounded-md px-3 text-sidebar-foreground ring-sidebar-ring outline-hidden group-data-[collapsible=icon]:hidden hover:bg-sidebar-accent hover:text-sidebar-accent-foreground group-hover/menu-sub-item:bg-sidebar-accent group-hover/menu-sub-item:text-sidebar-accent-foreground focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[size=md]:text-sm data-[size=sm]:text-xs data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-sidebar-accent-foreground mac:hover:bg-black/5 mac:group-hover/menu-sub-item:bg-black/5 mac:active:bg-black/5 mac:data-active:bg-black/5 dark:mac:hover:bg-white/10 dark:mac:group-hover/menu-sub-item:bg-white/10 dark:mac:active:bg-white/10 dark:mac:data-active:bg-white/10",
+          "flex h-8 min-w-0 -translate-x-px rtl:translate-x-px items-center gap-2 overflow-hidden relative rounded-md px-2.5 text-[13px] text-sidebar-foreground ring-sidebar-ring outline-hidden group-data-[collapsible=icon]:hidden hover:bg-sidebar-accent hover:text-sidebar-accent-foreground group-hover/menu-sub-item:bg-sidebar-accent group-hover/menu-sub-item:text-sidebar-accent-foreground focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[size=md]:text-[13px] data-[size=sm]:text-xs data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-sidebar-accent-foreground mac:hover:bg-black/5 mac:group-hover/menu-sub-item:bg-black/5 mac:active:bg-black/5 mac:data-active:bg-black/5 dark:mac:hover:bg-white/10 dark:mac:group-hover/menu-sub-item:bg-white/10 dark:mac:active:bg-white/10 dark:mac:data-active:bg-white/10",
           className
         ),
       },

@@ -34,10 +34,11 @@ describe("dashboard home layouts", () => {
 
     expect(member).toContain('data-testid="member-dashboard"');
     expect(member).toContain('data-testid="member-download-app"');
-    expect(member).toContain('data-testid="member-copy-install-link"');
-    // The install link is minted by the workspace's own den, so the same
-    // action works for OpenWork Cloud and self-hosted orgs.
-    expect(member).toContain("createOrganizationInstallLink");
+    // The authenticated /install guide resolves the active workspace from the
+    // session, so the dashboard never mints or copies an install-link token.
+    expect(member).toContain('router.push("/install")');
+    expect(member).not.toContain("member-copy-install-link");
+    expect(member).not.toContain("createOrganizationInstallLink");
     expect(member).toContain('"openwork://open"');
     expect(member).not.toContain("useOrgLlmProviders");
     expect(member).not.toContain("useMarketplaces");

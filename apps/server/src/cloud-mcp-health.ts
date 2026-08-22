@@ -395,6 +395,12 @@ type DirectCloudToolsSnapshot = {
   failure?: CloudMcpFailure;
 };
 
+const directCloudToolsProbeFlights = new Map<string, Promise<DirectCloudToolsSnapshot>>();
+
+export function clearOpenworkCloudMcpProbeFlights(): void {
+  directCloudToolsProbeFlights.clear();
+}
+
 type ProviderProjectionSnapshot = {
   checked: boolean;
   provider?: string;
@@ -1355,6 +1361,40 @@ async function readDirectCloudTools(config: Record<string, unknown>): Promise<Di
   }
 }
 
+function successfulDirectCloudToolsProbe(value: DirectCloudToolsSnapshot): boolean {
+  return value.checked
+    && value.failure === undefined
+    && value.missing.length === 0
+    && value.trace !== undefined
+    && value.trace.steps.length > 0
+    && value.trace.steps.every((step) => step.ok);
+}
+
+async function readDirectCloudToolsSingleFlight(input: {
+  serverConfig: ServerConfig;
+  workspace: WorkspaceInfo;
+  directory: string | null;
+  desiredConfig: Record<string, unknown>;
+  desiredRevision: string;
+}): Promise<DirectCloudToolsSnapshot> {
+  const key = hashString(JSON.stringify({
+    configPath: input.serverConfig.configPath,
+    serverStartedAt: input.serverConfig.startedAt,
+    workspaceId: input.workspace.id,
+    directory: input.directory,
+    desiredRevision: input.desiredRevision,
+  }));
+  const active = directCloudToolsProbeFlights.get(key);
+  if (active) return active;
+
+  const value = readDirectCloudTools(input.desiredConfig)
+    .finally(() => {
+      if (directCloudToolsProbeFlights.get(key) === value) directCloudToolsProbeFlights.delete(key);
+    });
+  directCloudToolsProbeFlights.set(key, value);
+  return value;
+}
+
 async function readMcpStatus(
   opencode: WorkspaceOpencodeClient,
   directory: string | null,
@@ -1659,7 +1699,7 @@ async function readOpencodeVersion(opencode: WorkspaceOpencodeClient): Promise<C
       expectedVersion: null,
       actualVersion: null,
       probe: "unavailable",
-      error: sanitizeDiagnosticValue({ status: result.response.status, error: result.error }),
+      error: sanitizeDiagnosticValue({ status: result.response?.status, error: result.error }),
     };
   } catch (error) {
     return {
@@ -1677,6 +1717,8 @@ async function inspectOpenworkCloud(input: {
   workspace: WorkspaceInfo;
   directory: string | null;
   desiredConfig: Record<string, unknown>;
+  desiredRevision: string;
+  directProbeReuse?: DirectProbeReuse;
   providerModel?: CloudMcpProviderModelContext;
   probe: boolean;
   refreshRegistrationFromLiveStatus?: CloudMcpLiveStatusObserver;
@@ -1753,7 +1795,19 @@ async function inspectOpenworkCloud(input: {
   const ids = idsResult.data ?? [];
   const experimentalToolIds = experimentalToolIdsFromSplit(splitPresentMissing(ids, expectedTools()));
   const pluginCanaries = splitPresentMissing(ids, expectedCanaries());
-  const directTools = input.probe ? await readDirectCloudTools(input.desiredConfig) : emptyDirectTools;
+  const reusableDirectTools = input.directProbeReuse?.desiredRevision === input.desiredRevision
+    && successfulDirectCloudToolsProbe(input.directProbeReuse.value)
+    ? input.directProbeReuse.value
+    : null;
+  const directTools = input.probe
+    ? reusableDirectTools ?? await readDirectCloudToolsSingleFlight({
+      serverConfig: input.config,
+      workspace: input.workspace,
+      directory: input.directory,
+      desiredConfig: input.desiredConfig,
+      desiredRevision: input.desiredRevision,
+    })
+    : emptyDirectTools;
   if (input.probe) {
     // The engine is authoritative; a probe-only transport failure must stay diagnostic and not veto steering/delivery.
     if (directTools.failure && directTools.failure.code !== "probe_unreachable") {
@@ -1956,7 +2010,7 @@ async function compatibilitySnapshot(input: {
   };
 }
 
-export async function readOpenworkCloudMcpHealth(input: {
+type ReadOpenworkCloudMcpHealthInput = {
   config: ServerConfig;
   workspace: WorkspaceInfo;
   directory: string | null;
@@ -1965,7 +2019,16 @@ export async function readOpenworkCloudMcpHealth(input: {
   probe?: boolean;
   createWorkspaceOpencodeClient: (config: ServerConfig, workspace: WorkspaceInfo) => WorkspaceOpencodeClient;
   refreshRegistrationFromLiveStatus?: CloudMcpLiveStatusObserver;
-}): Promise<CloudMcpHealth> {
+};
+
+type DirectProbeReuse = {
+  desiredRevision: string;
+  value: CloudMcpHealth["tools"]["direct"];
+};
+
+async function readOpenworkCloudMcpHealthInternal(
+  input: ReadOpenworkCloudMcpHealthInput & { directProbeReuse?: DirectProbeReuse },
+): Promise<CloudMcpHealth> {
   const checkedAt = new Date().toISOString();
   const startedAtMs = Date.now();
   const desired = await readDesiredState({ config: input.config, workspace: input.workspace, directory: input.directory });
@@ -2021,13 +2084,15 @@ export async function readOpenworkCloudMcpHealth(input: {
     opencodeVersion: { expectedVersion: input.serverMetadata?.expectedOpencodeVersion ?? null, actualVersion: null, probe: "not_checked" },
     failures: [],
   };
-  if (desired.present && desired.config && !desired.validationProblem && input.directory && baseUrlConfigured(input.config, input.workspace)) {
+  if (desired.present && desired.config && desired.revision && !desired.validationProblem && input.directory && baseUrlConfigured(input.config, input.workspace)) {
     inspection = await inspectOpenworkCloud({
       opencode: input.createWorkspaceOpencodeClient(input.config, input.workspace),
       config: input.config,
       workspace: input.workspace,
       directory: input.directory,
       desiredConfig: desired.config,
+      desiredRevision: desired.revision,
+      directProbeReuse: input.directProbeReuse,
       providerModel: input.providerModel,
       probe: input.probe === true,
       refreshRegistrationFromLiveStatus: input.refreshRegistrationFromLiveStatus,
@@ -2035,7 +2100,12 @@ export async function readOpenworkCloudMcpHealth(input: {
     failures.push(...inspection.failures);
   }
 
-  if (desired.present && desired.revision && failures.length === 0 && delivery.appliedRevision !== desired.revision) {
+  if (
+    desired.present
+    && desired.revision
+    && failures.length === 0
+    && (delivery.appliedRevision !== desired.revision || delivery.state !== "ready")
+  ) {
     cloudMcpDeliveryState.markDesired(input.workspace, input.directory, desired.revision, desired.metadata);
     cloudMcpDeliveryState.markReady(input.workspace, input.directory, desired.revision);
     delivery = cloudMcpDeliveryState.snapshot(input.workspace, input.directory, desired.revision);
@@ -2107,6 +2177,10 @@ export async function readOpenworkCloudMcpHealth(input: {
     checkedAt,
     durationMs: Date.now() - startedAtMs,
   };
+}
+
+export async function readOpenworkCloudMcpHealth(input: ReadOpenworkCloudMcpHealthInput): Promise<CloudMcpHealth> {
+  return readOpenworkCloudMcpHealthInternal(input);
 }
 
 async function persistDesiredConfig(config: ServerConfig, workspaceId: string, desiredConfig: Record<string, unknown>): Promise<void> {
@@ -2185,6 +2259,12 @@ function healthWithFailure(health: CloudMcpHealth, firstFailure: CloudMcpFailure
   };
 }
 
+function reusableDirectProbeFromHealth(health: CloudMcpHealth): DirectProbeReuse | undefined {
+  return health.desired.revision && successfulDirectCloudToolsProbe(health.tools.direct)
+    ? { desiredRevision: health.desired.revision, value: health.tools.direct }
+    : undefined;
+}
+
 export async function reconcileOpenworkCloudMcp(input: {
   config: ServerConfig;
   workspace: WorkspaceInfo;
@@ -2196,7 +2276,7 @@ export async function reconcileOpenworkCloudMcp(input: {
   registerRuntimeMcp: CloudMcpRuntimeRegistrar;
   refreshRegistrationFromLiveStatus?: CloudMcpLiveStatusObserver;
 }): Promise<CloudMcpHealth> {
-  const readHealth = () => readOpenworkCloudMcpHealth({
+  const readHealth = (directProbeReuse?: DirectProbeReuse) => readOpenworkCloudMcpHealthInternal({
     config: input.config,
     workspace: input.workspace,
     directory: input.directory,
@@ -2204,6 +2284,7 @@ export async function reconcileOpenworkCloudMcp(input: {
     serverMetadata: input.serverMetadata,
     createWorkspaceOpencodeClient: input.createWorkspaceOpencodeClient,
     probe: true,
+    directProbeReuse,
     refreshRegistrationFromLiveStatus: input.refreshRegistrationFromLiveStatus,
   });
   const configBody = input.body.config ?? input.body;
@@ -2242,6 +2323,23 @@ export async function reconcileOpenworkCloudMcp(input: {
     return healthWithFailure(await readHealth(), unconfiguredFailure);
   }
 
+  // Provider descriptors are private App-host state. Fetch them only after
+  // the normal engine prerequisites pass, then purge stale model-runtime
+  // entries before registration. Independent projection filters keep stale
+  // rows from ever reaching an engine while prerequisites are unavailable.
+  const { reconcileOpenWorkConnectMcpServers } = await import("./connect-mcp-server-catalog.js");
+  const connectServers = await reconcileOpenWorkConnectMcpServers({
+    config: input.config,
+    workspace: input.workspace,
+    cloudMcp: desiredConfig,
+    appHostAuthorization: readString(input.body.appHostAuthorization) ?? undefined,
+  }).catch(() => ({ status: "unavailable" as const, appHostNames: [], removedNames: [] }));
+
+  const opencode = input.createWorkspaceOpencodeClient(input.config, input.workspace);
+  for (const name of connectServers.removedNames) {
+    await opencode.mcp.disconnect({ name, ...locationParams(input.directory) }).catch(() => undefined);
+  }
+
   cloudMcpDeliveryState.markRegistering(input.workspace, input.directory, desiredRevision);
   const registration = await input.registerRuntimeMcp(input.config, input.workspace, [OPENWORK_CLOUD_MCP_NAME], { throwOnFailure: false });
   if (registration.failures.length > 0) {
@@ -2250,7 +2348,6 @@ export async function reconcileOpenworkCloudMcp(input: {
     return healthWithFailure(await readHealth(), registrationError);
   }
 
-  const opencode = input.createWorkspaceOpencodeClient(input.config, input.workspace);
   const connectedFailure = await pollConnected({
     opencode,
     config: input.config,
@@ -2264,35 +2361,16 @@ export async function reconcileOpenworkCloudMcp(input: {
     return healthWithFailure(await readHealth(), connectedFailure);
   }
 
-  // The Cloud control connection publishes a normal MCP resource describing
-  // the member-authorized Connect servers. Reconcile each one as its own MCP
-  // endpoint so standard MCP Apps retain exact tool names, resource URIs, and
-  // the same-server UI execution boundary. Older Cloud deployments simply do
-  // not expose the index and remain compatible.
-  const { reconcileOpenWorkConnectMcpServers } = await import("./connect-mcp-server-catalog.js");
-  const connectServers = await reconcileOpenWorkConnectMcpServers({
-    config: input.config,
-    workspace: input.workspace,
-    cloudMcp: desiredConfig,
-  }).catch(() => ({ status: "unavailable" as const, names: [], removedNames: [] }));
-  if (connectServers.status === "synced") {
-    for (const name of connectServers.removedNames) {
-      await opencode.mcp.disconnect({ name, ...locationParams(input.directory) }).catch(() => undefined);
-    }
-  }
-  if (connectServers.status === "synced" && connectServers.names.length > 0) {
-    await input.registerRuntimeMcp(input.config, input.workspace, connectServers.names, { throwOnFailure: false });
-  }
-
   const health = await readHealth();
+  const directProbeReuse = reusableDirectProbeFromHealth(health);
 
   if (health.firstFailure) {
     cloudMcpDeliveryState.markFailed(input.workspace, input.directory, desiredRevision, health.firstFailure);
-    return healthWithFailure(await readHealth(), health.firstFailure);
+    return healthWithFailure(await readHealth(directProbeReuse), health.firstFailure);
   }
 
   cloudMcpDeliveryState.markReady(input.workspace, input.directory, desiredRevision);
-  return readHealth();
+  return readHealth(directProbeReuse);
 }
 
 export async function reconcilePersistedOpenworkCloudMcp(input: {
@@ -2394,7 +2472,7 @@ export async function refreshOpenworkCloudMcpEngine(input: {
       ok: result.error === undefined,
       latencyMs: Date.now() - disconnectStarted,
       ...(result.error !== undefined
-        ? { detail: sanitizeDiagnosticValue({ status: result.response.status, error: result.error }) }
+        ? { detail: sanitizeDiagnosticValue({ status: result.response?.status, error: result.error }) }
         : {}),
     });
   } catch (error) {

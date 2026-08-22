@@ -1,9 +1,15 @@
 import { describe, expect, test } from "bun:test"
 
-import { OpenworkServerError, type OpenworkMcpAppResource } from "../src/app/lib/openwork-server"
+import {
+  createOpenworkServerClient,
+  normalizeMcpAppHostOrigin,
+  OpenworkServerError,
+  type OpenworkMcpAppResource,
+} from "../src/app/lib/openwork-server"
 import { formatMcpAppDiagnostic, safeMcpAppDiagnosticMessage } from "../src/components/chat/mcp-app-diagnostics"
 import {
   buildMcpAppCsp,
+  gatewayMcpAppLaunch,
   isActionableMcpAppResolutionError,
   secureMcpAppHtml,
 } from "../src/components/chat/mcp-app-frame"
@@ -26,6 +32,54 @@ function fixture(overrides: Partial<OpenworkMcpAppResource> = {}): OpenworkMcpAp
 }
 
 describe("MCP App iframe policy", () => {
+  test("accepts a namespaced gateway launch reference without exposing credentials", () => {
+    expect(gatewayMcpAppLaunch({
+      source: "provider",
+      "openwork/mcpApp": {
+        connectionId: "emc_01atlas",
+        toolName: "open_project_atlas",
+        resourceUri: "ui://atlas/1/index.html",
+        arguments: { query: "migration" },
+      },
+    })).toEqual({
+      connectionId: "emc_01atlas",
+      toolName: "open_project_atlas",
+      resourceUri: "ui://atlas/1/index.html",
+      arguments: { query: "migration" },
+    })
+    expect(gatewayMcpAppLaunch({
+      "openwork/mcpApp": {
+        connectionId: "emc_01atlas",
+        toolName: "open_project_atlas",
+        resourceUri: "ui://atlas/1/index.html",
+      },
+    })).toBeNull()
+  })
+
+  test("accepts a same-server generated App launch without a connection reference", () => {
+    expect(gatewayMcpAppLaunch({
+      "openwork/mcpApp": {
+        toolName: "render_artifact_view",
+        resourceUri: "ui://openwork/artifacts/atlas/views/1/index.html",
+        arguments: { input: { query: "migration" } },
+      },
+    })).toEqual({
+      toolName: "render_artifact_view",
+      resourceUri: "ui://openwork/artifacts/atlas/views/1/index.html",
+      arguments: { input: { query: "migration" } },
+    })
+  })
+
+  test("uses the opaque message origin for packaged file hosts", () => {
+    expect(normalizeMcpAppHostOrigin("file://")).toBe("null")
+    expect(normalizeMcpAppHostOrigin("null")).toBe("null")
+    expect(normalizeMcpAppHostOrigin("https://desktop.example")).toBe("https://desktop.example")
+
+    const client = createOpenworkServerClient({ baseUrl: "http://localhost:61856" })
+    const sandbox = client.mcpAppSandbox(fixture(), "file://")
+    expect(new URL(sandbox.url).searchParams.get("hostOrigin")).toBe("null")
+  })
+
   test("keeps ordinary tools silent while surfacing advertised resource failures", () => {
     expect(isActionableMcpAppResolutionError(new OpenworkServerError(503, "mcp_unreachable", "offline"))).toBe(false)
     expect(isActionableMcpAppResolutionError(new OpenworkServerError(404, "resource_read_failed", "missing"))).toBe(true)

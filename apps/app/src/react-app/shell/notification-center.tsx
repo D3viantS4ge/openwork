@@ -141,7 +141,7 @@ export function NotificationBell({ variant = "icon" }: { variant?: "icon" | "sid
               tooltip={label}
               aria-label={label}
             >
-              <Bell />
+              <Bell className="size-4" />
               <span className="flex-1 truncate">{t("notifications.title")}</span>
               {unreadCount > 0 ? (
                 <span className="ml-auto flex min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-4 text-primary-foreground">

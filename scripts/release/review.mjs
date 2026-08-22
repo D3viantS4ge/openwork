@@ -7,16 +7,25 @@ const args = process.argv.slice(2);
 const outputJson = args.includes("--json");
 const strict = args.includes("--strict");
 
+/**
+ * Versions live in git tags, not files: every committed package.json must hold
+ * the permanent dev placeholder. CI stamps the real version into the workspace
+ * at build time (scripts/release/stamp-version.mjs). This review guards against
+ * accidentally re-introducing committed release versions.
+ */
+export const VERSION_PLACEHOLDER = "0.0.0-dev";
+
 const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
 
 const appPkg = readJson(resolve(root, "apps", "app", "package.json"));
 const desktopPkg = readJson(resolve(root, "apps", "desktop", "package.json"));
+const serverPkg = readJson(resolve(root, "apps", "server", "package.json"));
 const pinnedOpencodeVersion = String(
   readJson(resolve(root, "constants.json")).opencodeVersion ?? "",
 )
   .trim()
   .replace(/^v/, "");
-const serverPkg = readJson(resolve(root, "apps", "server", "package.json"));
+
 const versions = {
   app: appPkg.version ?? null,
   desktop: desktopPkg.version ?? null,
@@ -35,26 +44,22 @@ const addCheck = (label, pass, details) => {
 
 const addWarning = (message) => warnings.push(message);
 
-addCheck(
-  "App/desktop versions match",
-  versions.app && versions.desktop && versions.app === versions.desktop,
-  `${versions.app ?? "?"} vs ${versions.desktop ?? "?"}`,
-);
-addCheck(
-  "App/openwork-server versions match",
-  versions.app && versions.server && versions.app === versions.server,
-  `${versions.app ?? "?"} vs ${versions.server ?? "?"}`,
-);
-if (versions.opencode) {
+for (const [name, version] of [
+  ["app", versions.app],
+  ["desktop", versions.desktop],
+  ["openwork-server", versions.server],
+]) {
   addCheck(
-    "OpenCode version pin exists",
-    Boolean(versions.opencode),
-    String(versions.opencode),
+    `${name} package.json holds the dev placeholder`,
+    version === VERSION_PLACEHOLDER,
+    `${version ?? "?"} (expected ${VERSION_PLACEHOLDER}; releases stamp versions in CI from the tag)`,
   );
+}
+
+if (versions.opencode) {
+  addCheck("OpenCode version pin exists", true, String(versions.opencode));
 } else {
-  addWarning(
-    "OpenCode version is not pinned in constants.json.",
-  );
+  addWarning("OpenCode version is not pinned in constants.json.");
 }
 
 const report = { ok, versions, checks, warnings };

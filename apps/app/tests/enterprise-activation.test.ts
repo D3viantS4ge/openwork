@@ -115,7 +115,7 @@ describe("enterprise desktop activation", () => {
     );
   });
 
-  test("matches the desktop login gate without guessing a Den portal URL", () => {
+  test("matches the desktop login gate and offers actionable sign-in", () => {
     for (const marker of [
       'type="2x2"',
       "size={20.3}",
@@ -126,8 +126,25 @@ describe("enterprise desktop activation", () => {
       expect(signInSurfaceSource).toContain(marker);
       expect(activationGateSource).toContain(marker);
     }
-    expect(activationGateSource).not.toContain("Open Den portal");
-    expect(activationGateSource).not.toContain("openDesktopUrl");
+    expect(activationGateSource).toContain('id="organization-server-input"');
+    expect(activationGateSource).toContain('data-testid="organization-server-input"');
+    expect(activationGateSource).toContain('data-testid="organization-server-confirm"');
+    expect(activationGateSource).toContain("Connect this app to");
+    expect(activationGateSource).toContain("binds OpenWork Enterprise to it");
+    expect(activationGateSource).toContain("Continue in browser");
+    expect(activationGateSource).not.toContain('htmlFor="enterprise-openwork-link"');
+    expect(activationGateSource).not.toContain("OpenWork link");
+    expect(activationGateSource).not.toContain("enterprise-openwork-link-connect");
+    expect(activationGateSource).toContain("Link this app to your organization");
+    expect(activationGateSource).toContain("Enter your workspace address — the page where you downloaded this app. Sign-in finishes in your browser and returns here.");
+    expect(activationGateSource).toContain("const pastedLink = parseManualAuthInput(serverInput);");
+    expect(activationGateSource).toContain("{pendingConfirmation ? null : (");
+    expect(activationGateSource).not.toContain("Have an OpenWork link");
+    expect(activationGateSource).not.toContain("Use workspace address instead");
+    expect(activationGateSource).not.toContain("manualAuthOpen");
+    expect(activationGateSource).not.toMatch(/(?:paste|hide) sign-in code/i);
+    expect(activationGateSource).not.toContain("Sign-in link or one-time code");
+    expect(activationGateSource).not.toContain("Waiting for your organization");
   });
 
   test("reuses the activated enterprise Den URL when signing in again", () => {

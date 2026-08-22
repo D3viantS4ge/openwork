@@ -23,6 +23,7 @@ function seedRequiredEnv() {
 }
 
 let CAPABILITY_SOURCE_KINDS: typeof import("../src/mcp/capability-registry.js")["CAPABILITY_SOURCE_KINDS"]
+let catalogOperationAvailableToCapabilities: typeof import("../src/mcp/capability-registry.js")["catalogOperationAvailableToCapabilities"]
 let createCapabilityRegistry: typeof import("../src/mcp/capability-registry.js")["createCapabilityRegistry"]
 let codemodeScriptPath: typeof import("../src/mcp/codemode-namespaces.js")["codemodeScriptPath"]
 
@@ -30,6 +31,7 @@ beforeAll(async () => {
   seedRequiredEnv()
   const capabilityRegistry = await import("../src/mcp/capability-registry.js")
   CAPABILITY_SOURCE_KINDS = capabilityRegistry.CAPABILITY_SOURCE_KINDS
+  catalogOperationAvailableToCapabilities = capabilityRegistry.catalogOperationAvailableToCapabilities
   createCapabilityRegistry = capabilityRegistry.createCapabilityRegistry
   codemodeScriptPath = (await import("../src/mcp/codemode-namespaces.js")).codemodeScriptPath
 })
@@ -143,6 +145,7 @@ function fixtureContext(platformAdmin: boolean): CapabilityRegistryContext {
     member: { orgMembershipId: memberId, teamIds: [] },
     redirectUriBase: "http://127.0.0.1:8790",
     codemodeEnabled: true,
+    generatedArtifactViewsEnabled: false,
     externalMcpConnectionsEnabled: true,
     resolvePlatformAdmin: () => {
       platformAdminResolution ??= Promise.resolve(platformAdmin)
@@ -209,4 +212,21 @@ test("a non-admin member has zero admin capabilities in search, execute, and the
 
   const executed = await result.registry.execute(result.context, { name: FIXTURES.admin.capabilityName })
   expect(firstText(executed)).toContain("unknown_capability")
+})
+
+test("keeps installation and disabled generated-view operations out of every generic capability consumer", () => {
+  const disabled = { generatedArtifactViewsEnabled: false }
+  expect(catalogOperationAvailableToCapabilities(disabled, { method: "POST", path: "/v1/remote-mcp-apps" })).toBe(false)
+  expect(catalogOperationAvailableToCapabilities(disabled, { method: "GET", path: "/v1/remote-mcp-apps/{appId}" })).toBe(false)
+  expect(catalogOperationAvailableToCapabilities({ generatedArtifactViewsEnabled: true }, {
+    method: "POST",
+    path: "/v1/remote-mcp-apps/{appId}/activate",
+  })).toBe(false)
+  expect(catalogOperationAvailableToCapabilities(disabled, { method: "POST", path: "/v1/artifact-views/{artifactViewId}/retire" })).toBe(false)
+  expect(catalogOperationAvailableToCapabilities(disabled, { method: "GET", path: "/v1/workflows/{configObjectId}/views" })).toBe(false)
+  expect(catalogOperationAvailableToCapabilities(disabled, { method: "GET", path: "/v1/workflows/{configObjectId}" })).toBe(true)
+  expect(catalogOperationAvailableToCapabilities({ generatedArtifactViewsEnabled: true }, {
+    method: "POST",
+    path: "/v1/artifact-views/{artifactViewId}/retire",
+  })).toBe(true)
 })

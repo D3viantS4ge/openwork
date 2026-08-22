@@ -618,7 +618,11 @@ export function createSessionActionsStore(options: {
     if (!c) return;
     const id = (sessionID ?? options.selectedSessionId() ?? "").trim();
     if (!id) return;
-    await abortSessionTyped(c, id);
+    await abortSessionTyped(c, id, undefined, {
+      source: "session.actions.abort_session",
+      initiator: "user",
+      reason: "session action requested abort",
+    });
   }
 
   function retryLastPrompt() {
@@ -683,7 +687,11 @@ export function createSessionActionsStore(options: {
     const sessionID = (options.selectedSessionId() ?? "").trim();
     if (!c || !sessionID) return;
 
-    await abortSessionSafe(c, sessionID);
+    await abortSessionSafe(c, sessionID, undefined, {
+      source: "session.undo_last_user_message.before_revert",
+      initiator: "user",
+      reason: "abort active run before undoing last user message",
+    });
 
     const users = options.messages().filter((message) => {
       const role = (message.info as { role?: string }).role;
@@ -711,7 +719,11 @@ export function createSessionActionsStore(options: {
     const sessionID = (options.selectedSessionId() ?? "").trim();
     if (!c || !sessionID) return;
 
-    await abortSessionSafe(c, sessionID);
+    await abortSessionSafe(c, sessionID, undefined, {
+      source: "session.redo_last_user_message.before_revert",
+      initiator: "user",
+      reason: "abort active run before redoing last user message",
+    });
 
     const revertMessageID = options.selectedSession()?.revert?.messageID ?? null;
     if (!revertMessageID) return;

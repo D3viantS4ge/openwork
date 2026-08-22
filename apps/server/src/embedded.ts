@@ -25,6 +25,7 @@ import { createManagedOpencodeServer, type ManagedOpencodeServer, type OpencodeE
 import {
   clearTrustedOpencodeProcess,
   createEnginePoolForConfig,
+  createServerLogger,
   registerTrustedOpencodeProcess,
   startServer,
   syncAllWorkspacesRuntimeMcpToEngine,
@@ -68,6 +69,7 @@ export type EmbeddedServerHandle = {
 export async function startEmbeddedServer(options: EmbeddedServerOptions): Promise<EmbeddedServerHandle> {
   const config = await resolveServerConfig(options);
   config.localManagedMcpVaultKey = options.localManagedMcpVaultKey;
+  const logger = createServerLogger(config);
 
   // Spawn managed OpenCode if requested and no explicit base URL was provided.
   let managedOpencode: ManagedOpencodeServer | null = null;
@@ -84,7 +86,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
 
     const identity = managedOpencodeIdentity;
     managedOpencodeIdentity = null;
-    if (identity) {
+    if (identity && !enginePool) {
       try {
         clearTrustedOpencodeProcess(config, identity);
       } catch (error) {
@@ -285,13 +287,10 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
   // re-POSTing every entry would spawn a duplicate, idle process tree per
   // server (see #3325).
   if (managedOpencode) {
-    const managedWorkspace = findManagedEngineWorkspace(config.workspaces);
-    void syncAllWorkspacesRuntimeMcpToEngine(config, {
-      configCoveredWorkspaceId: managedWorkspace?.id,
-    });
+    void syncAllWorkspacesRuntimeMcpToEngine(config);
   }
 
-  if (managedOpencode && engineSpawnTemplate && config.engineRollover) {
+  if (managedOpencode && engineSpawnTemplate) {
     enginePool = createEnginePoolForConfig({
       config,
       template: engineSpawnTemplate,

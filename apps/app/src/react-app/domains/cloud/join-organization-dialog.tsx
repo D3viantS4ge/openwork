@@ -3,6 +3,7 @@ import { useCallback, useMemo, useState } from "react";
 import { installConfigSchema, parseInstallLinkInput } from "@openwork/install-config";
 
 import { clearDenSession, createDenClient, readDenBootstrapConfig, readDenSettings, setDenBootstrapConfig } from "@/app/lib/den";
+import { parseManualAuthInput } from "@/app/lib/manual-auth-input";
 import { exchangeHandoffAndSignIn } from "@/app/lib/den-handoff";
 import { desktopFetchViaMain } from "@/app/lib/desktop";
 import { isDesktopRuntime } from "@/app/utils";
@@ -36,7 +37,6 @@ import { Input } from "@/components/ui/input";
 import { t } from "@/i18n";
 import { usePlatform } from "../../kernel/platform";
 import { saveControlPlaneUrl } from "../settings/cloud/control-plane-url";
-import { parseManualAuthInput } from "./forced-signin-page";
 import { parseInviteLinkInput, parseServerUrlInput, type ParsedInviteLink } from "./join-organization-input";
 
 type JoinOrganizationDialogProps = {

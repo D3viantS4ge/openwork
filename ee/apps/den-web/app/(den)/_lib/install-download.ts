@@ -33,6 +33,15 @@ export function buildInstallDownloadHref(apiUrl: string, platform: InstallPlatfo
   return url.toString();
 }
 
+export function buildAuthenticatedInstallDownloadHref(apiUrl: string, platform: InstallPlatform) {
+  const url = new URL(apiUrl);
+  const basePath = url.pathname.replace(/\/+$/, "");
+  url.pathname = `${basePath}/v1/me/install/${platform}`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
 export function installTokenFromPageUrl(value: string) {
   try {
     const token = new URL(value).searchParams.get("token")?.trim() ?? "";

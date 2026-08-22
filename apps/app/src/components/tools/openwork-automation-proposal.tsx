@@ -13,6 +13,7 @@ import { createDenClient, readDenSettings } from "@/app/lib/den"
 import { Button } from "@/components/ui/button"
 import { Tool } from "@/components/ui/tool"
 import { useDenAuth } from "@/react-app/domains/cloud/den-auth-provider"
+import { useAutomationDeploymentEnabled } from "@/react-app/domains/automations/automation-availability"
 import { formatAutomationSchedule } from "@/react-app/domains/automations/automation-format"
 import {
   automationModelOptions,
@@ -55,6 +56,7 @@ export function isAutomationProposalToolPart(part: DynamicToolUIPart): boolean {
 export function OpenWorkAutomationProposalTool({ part }: { part: DynamicToolUIPart }) {
   const navigate = useNavigate()
   const denAuth = useDenAuth()
+  const automationsEnabled = useAutomationDeploymentEnabled()
   const [created, setCreated] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -66,7 +68,7 @@ export function OpenWorkAutomationProposalTool({ part }: { part: DynamicToolUIPa
   const providersQuery = useQuery({
     queryKey: ["den", "automations", organizationId, "models"],
     queryFn: () => createDenClient({ baseUrl: settings.baseUrl, token }).listOrgLlmProviders(organizationId),
-    enabled: signedIn && !created,
+    enabled: automationsEnabled && signedIn && !created,
   })
   const providers = providersQuery.data ?? []
   const resolved = providersQuery.isError || providersQuery.data === undefined || !proposal
@@ -80,11 +82,14 @@ export function OpenWorkAutomationProposalTool({ part }: { part: DynamicToolUIPa
     return <Tool toolPart={part} title="Proposed an Automation" />
   }
 
-  const blocker = !signedIn
-    ? "Sign in to OpenWork Cloud to create this Automation."
-    : null
+  const blocker = !automationsEnabled
+    ? "Automations are disabled for this deployment."
+    : !signedIn
+      ? "Sign in to OpenWork Cloud to create this Automation."
+      : null
 
   const create = async () => {
+    if (!automationsEnabled) return
     setBusy(true)
     try {
       const client = createDenClient({ baseUrl: settings.baseUrl, token })

@@ -42,9 +42,9 @@ The native thread client uses both the collaborator token and the internal
 host credential when it passes through the Cloud worker proxy. No provider
 credential or worker token is copied into the Automation receipt.
 
-## Relationship to saved Script Automations
+## Relationship to Workflow Automations
 
-Saved Script Automations from the Dynamic Artifacts work remain Cloud-owned
+Workflow Automations from the Workflow Artifacts work remain Cloud-owned
 and keep their existing Den Code Mode executor. This feature adds ordinary
 agent actions as a second Cloud execution kind; it does not change Script
 snapshot validation or artifact result retention.

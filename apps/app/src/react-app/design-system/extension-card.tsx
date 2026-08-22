@@ -59,6 +59,8 @@ const taxonomyStyle: Record<ExtensionTaxonomy, string> = {
   connection: "bg-blue-3 text-blue-11",
   mcp: "bg-dls-hover text-dls-secondary",
   skill: "bg-amber-3 text-amber-11",
+  command: "bg-orange-3 text-orange-11",
+  agent: "bg-pink-3 text-pink-11",
   plugin: "bg-violet-3 text-violet-11",
 };
 

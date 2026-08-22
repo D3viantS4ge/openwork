@@ -1,5 +1,11 @@
 import type { DynamicToolUIPart, JSONValue, ProviderMetadata, TextUIPart } from "ai";
 import type { ToolPart } from "@opencode-ai/sdk/v2/client";
+import {
+  connectionActionAppResourceUri,
+  connectionActionAppSchemaVersion,
+  connectionActionPayloadSchema,
+  connectionActionToolName,
+} from "@openwork/types/connection-action-app";
 
 import { safeStringify } from "@/app/utils";
 import { normalizeErrorText } from "@/lib/error-text";
@@ -24,13 +30,55 @@ function isJsonValue(value: unknown, depth = 0): value is JSONValue {
   return entries.length <= 4_096 && entries.every((entry) => isJsonValue(entry, depth + 1));
 }
 
+function connectionActionMcpResultFromError(error: string): JSONValue | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(error);
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed) || !isRecord(parsed.connectionStatus)) return null;
+  const status = parsed.connectionStatus;
+  const action = isRecord(status.action) ? status.action : null;
+  const payload = connectionActionPayloadSchema.safeParse({
+    schemaVersion: connectionActionAppSchemaVersion,
+    connectionId: status.connectionId,
+    connectionName: status.connectionName,
+    state: status.state,
+    actor: status.actor,
+    message: status.message,
+    action: action
+      ? {
+          type: action.type,
+          label: action.label,
+          surface: action.surface,
+          ...(typeof action.url === "string" ? { url: action.url } : {}),
+        }
+      : null,
+  });
+  if (!payload.success) return null;
+  return {
+    content: [{ type: "text", text: error }],
+    structuredContent: payload.data,
+    _meta: {
+      "openwork/mcpApp": {
+        toolName: connectionActionToolName,
+        resourceUri: connectionActionAppResourceUri,
+        arguments: { connectionId: payload.data.connectionId },
+      },
+    },
+  };
+}
+
 function toolCallProviderMetadata(part: ToolPart): ProviderMetadata {
   const stateMetadata = "metadata" in part.state && isRecord(part.state.metadata) ? part.state.metadata : {};
-  const mcpResult = isJsonValue(stateMetadata.openworkMcpResult)
+  const persistedMcpResult = isJsonValue(stateMetadata.openworkMcpResult)
     ? stateMetadata.openworkMcpResult
     : isJsonValue(stateMetadata.openworkMcpApp)
       ? stateMetadata.openworkMcpApp
       : null;
+  const mcpResult = persistedMcpResult
+    ?? (part.state.status === "error" ? connectionActionMcpResultFromError(part.state.error) : null);
   return {
     opencode: { partId: part.id },
     ...(mcpResult ? { openwork: { mcpResult } } : {}),

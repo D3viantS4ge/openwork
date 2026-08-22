@@ -117,7 +117,7 @@ export function DenMarketingRail({ compact = false }: DenMarketingRailProps) {
             Always-on AI workers for you and your team.
           </h1>
           <p className="max-w-[38rem] text-[16px] leading-8 text-slate-600">
-            Define a task, deploy a worker, and check results from Slack or Telegram. Den handles the repetitive work so your team can stay focused on approvals and exceptions.
+            Define a task, deploy a worker, and check results from Slack. Den handles the repetitive work so your team can stay focused on approvals and exceptions.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2.5 text-[13px] font-medium text-slate-700">

@@ -58,10 +58,6 @@ import {
   SsoProviderTable,
   TeamMemberTable,
   TeamTable,
-  TelegramChatBindingTable,
-  TelegramConnectionTable,
-  TelegramPairingTable,
-  TelegramUpdateTable,
   TelemetryEventTable,
   TelemetrySessionDimensionTable,
   WorkerBundleTable,
@@ -360,6 +356,7 @@ export function registerDeleteOrganizationRoutes<T extends { Variables: OrgRoute
 
       await cancelOrganizationSubscriptions({ organizationId })
 
+      let affectedSessions: Array<{ id: typeof AuthSessionTable.$inferSelect.id; token: typeof AuthSessionTable.$inferSelect.token }> = []
       await db.transaction(async (tx) => {
         const memberRows = await tx
           .select({ id: MemberTable.id, userId: MemberTable.userId })
@@ -441,17 +438,6 @@ export function registerDeleteOrganizationRoutes<T extends { Variables: OrgRoute
           await tx.delete(InferenceUsageLedgerBucketChargeTable).where(inArray(InferenceUsageLedgerBucketChargeTable.ledger_entry_id, ledgerEntryIds))
         }
 
-        const telegramConnectionIds = (await tx
-          .select({ id: TelegramConnectionTable.id })
-          .from(TelegramConnectionTable)
-          .where(eq(TelegramConnectionTable.organizationId, organizationId)))
-          .map((row) => row.id)
-        if (telegramConnectionIds.length > 0) {
-          await tx.delete(TelegramPairingTable).where(inArray(TelegramPairingTable.connectionId, telegramConnectionIds))
-          await tx.delete(TelegramChatBindingTable).where(inArray(TelegramChatBindingTable.connectionId, telegramConnectionIds))
-          await tx.delete(TelegramUpdateTable).where(inArray(TelegramUpdateTable.connectionId, telegramConnectionIds))
-        }
-
         const memoryIds = (await tx
           .select({ id: MemoryTable.id })
           .from(MemoryTable)
@@ -471,12 +457,11 @@ export function registerDeleteOrganizationRoutes<T extends { Variables: OrgRoute
           await tx.delete(LlmProviderAccessTable).where(inArray(LlmProviderAccessTable.llmProviderId, llmProviderIds))
         }
 
-        const affectedSessions = await tx
-          .select({ token: AuthSessionTable.token })
+        affectedSessions = await tx
+          .select({ id: AuthSessionTable.id, token: AuthSessionTable.token })
           .from(AuthSessionTable)
           .where(eq(AuthSessionTable.activeOrganizationId, organizationId))
         await tx.update(AuthSessionTable).set({ activeOrganizationId: null }).where(eq(AuthSessionTable.activeOrganizationId, organizationId))
-        await Promise.all(affectedSessions.map((session) => cache.auth.deleteSession(session.token)))
 
         await tx.delete(OrganizationBrandAssetTable).where(eq(OrganizationBrandAssetTable.organizationId, organizationId))
         await tx.delete(WorkspaceClaimTable).where(eq(WorkspaceClaimTable.organizationId, organizationId))
@@ -509,7 +494,6 @@ export function registerDeleteOrganizationRoutes<T extends { Variables: OrgRoute
         await tx.delete(DesktopPolicyMemberTable).where(eq(DesktopPolicyMemberTable.organizationId, organizationId))
         await tx.delete(DesktopPolicyTable).where(eq(DesktopPolicyTable.organizationId, organizationId))
 
-        await tx.delete(TelegramConnectionTable).where(eq(TelegramConnectionTable.organizationId, organizationId))
         await tx.delete(OrganizationDiagnosticCredentialTable).where(eq(OrganizationDiagnosticCredentialTable.organizationId, organizationId))
         await tx.delete(MemoryTable).where(eq(MemoryTable.org_id, organizationId))
 
@@ -543,6 +527,13 @@ export function registerDeleteOrganizationRoutes<T extends { Variables: OrgRoute
         await tx.delete(MemberTable).where(eq(MemberTable.organizationId, organizationId))
         await tx.delete(OrganizationTable).where(eq(OrganizationTable.id, organizationId))
       })
+
+      // Org deletion removes every member row; clear aggregate and per-user membership cache keys.
+      await cache.org.deleteMembers(organizationId)
+      await Promise.all(affectedSessions.flatMap((session) => [
+        cache.auth.revokeSession(session.token),
+        cache.auth.revokeSessionId(session.id),
+      ]))
 
       logger.info("organization deleted", {
         organization_id: organizationId,

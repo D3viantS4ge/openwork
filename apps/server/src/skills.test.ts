@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { deleteSkill, listSkills } from "./skills.js";
+import { deleteSkill, listSkills, renderSkillContentForResponse } from "./skills.js";
 import { exists } from "./utils.js";
 
 let workspace: string;
@@ -43,5 +43,43 @@ describe("deleteSkill", () => {
 
   test("404s for unknown skills", async () => {
     await expect(deleteSkill(workspace, "does-not-exist")).rejects.toThrow("Skill not found");
+  });
+});
+
+describe("listSkills", () => {
+  test("returns skills with malformed YAML frontmatter as visible errors", async () => {
+    const validDir = join(workspace, ".opencode", "skills", "valid-skill");
+    await writeSkill(validDir, "valid-skill");
+
+    const invalidDir = join(workspace, ".opencode", "skills", "invalid-skill");
+    await mkdir(invalidDir, { recursive: true });
+    const invalidContent = `---\nname: invalid-skill\ndescription: Use when searching the web, looking up facts, researching technology: trends\n---\n\nBody\n`;
+    await writeFile(
+      join(invalidDir, "SKILL.md"),
+      invalidContent,
+      "utf8",
+    );
+
+    const originalWarn = console.warn;
+    const warnings: unknown[][] = [];
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args);
+    };
+    try {
+      const listed = await listSkills(workspace, false);
+      const names = listed.map((skill) => skill.name);
+      const invalid = listed.find((skill) => skill.name === "invalid-skill");
+
+      expect(names).toContain("valid-skill");
+      expect(names).toContain("invalid-skill");
+      expect(invalid?.description.startsWith("ERROR: Invalid skill frontmatter")).toBe(true);
+      expect(invalid?.error).toContain("Nested mappings are not allowed");
+      expect(invalid ? renderSkillContentForResponse(invalid, invalidContent) : "").toContain("ERROR: This skill has invalid YAML frontmatter");
+      expect(invalid ? renderSkillContentForResponse(invalid, invalidContent) : "").toContain(invalidContent);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]?.[0]).toBe("[openwork:skills] Found invalid skill frontmatter");
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 });

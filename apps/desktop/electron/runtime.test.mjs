@@ -1,13 +1,16 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   commandMatchesPackagedSidecar,
+  createRuntimeManager,
   embeddedServerImportUrl,
+  migrateOpenworkServerTokenStore,
+  prepareRuntimeWorkspaceRoot,
   prioritizeWorkspacePaths,
   resetRuntimeStatesAfterFailedServerStart,
   resolveEngineRolloverPreference,
@@ -18,6 +21,75 @@ import {
   snapshotEngineState,
   snapshotOpenworkServerState,
 } from "./runtime.mjs";
+
+describe("workspace root preparation", () => {
+  it("reports an inaccessible Windows drive as a controlled recoverable error", async () => {
+    const mkdirError = Object.assign(new Error("drive is unavailable"), { code: "ENOENT" });
+    let attemptedPath = null;
+
+    await assert.rejects(
+      prepareRuntimeWorkspaceRoot("\\\\?\\Z:\\Disconnected\\Workspace", {
+        platform: "win32",
+        mkdirImpl: async (workspaceRoot) => {
+          attemptedPath = workspaceRoot;
+          throw mkdirError;
+        },
+      }),
+      (error) => {
+        assert.ok(error instanceof Error);
+        assert.ok("code" in error);
+        assert.ok("workspacePath" in error);
+        assert.equal(error.code, "workspace_inaccessible");
+        assert.equal(error.workspacePath, "\\\\?\\Z:\\Disconnected\\Workspace");
+        assert.equal(error.cause, mkdirError);
+        return true;
+      },
+    );
+    assert.equal(attemptedPath, "Z:\\Disconnected\\Workspace");
+  });
+
+  it("returns the runtime lifecycle to idle after root preparation fails", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "openwork-runtime-root-"));
+    try {
+      const manager = createRuntimeManager({
+        app: {
+          getPath: (name) => name === "exe" ? path.join(root, "OpenWork.exe") : root,
+          isPackaged: false,
+        },
+        desktopRoot: path.dirname(fileURLToPath(import.meta.url)),
+        listLocalWorkspacePaths: async () => [],
+        localManagedMcpVaultKey: "test-key",
+        workspaceMkdir: async () => {
+          throw Object.assign(new Error("network share disconnected"), { code: "ENOENT" });
+        },
+        workspacePlatform: "win32",
+      });
+
+      await assert.rejects(
+        manager.engineStart("\\\\server\\share\\Workspace"),
+        (error) => error instanceof Error && "code" in error && error.code === "workspace_inaccessible",
+      );
+      const status = await manager.runtimeStatus();
+      assert.equal(status.lifecycleState, "idle");
+      assert.equal(status.engine.running, false);
+      assert.equal(status.engine.projectDir, null);
+      assert.equal(status.openworkServer.running, false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("bundled OpenCode runtime", () => {
+  it("pins the engine release containing the timestamp-based session loop repair", async () => {
+    const constantsPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../constants.json");
+    const constants = JSON.parse(await readFile(constantsPath, "utf8"));
+
+    // OpenCode #40990 stops old assistant messages with lexicographically
+    // later IDs from short-circuiting a newly appended user turn.
+    assert.equal(constants.opencodeVersion, "v1.18.18");
+  });
+});
 
 describe("engine rollover preference", () => {
   it("uses an explicit value and otherwise restores the persisted value", () => {
@@ -176,6 +248,45 @@ describe("resolveOpenworkServerConfigPath", () => {
       resolveOpenworkServerConfigPath({ XDG_CONFIG_HOME: "/tmp/xdg" }),
       "/tmp/xdg/openwork/server.json",
     );
+  });
+});
+
+describe("OpenWork server credential persistence", () => {
+  it("deterministically migrates legacy workspace credentials into one server bundle", () => {
+    const migrated = migrateOpenworkServerTokenStore({
+      version: 1,
+      workspaces: {
+        "/workspace/z": {
+          clientToken: "client-z",
+          hostToken: "host-z",
+          ownerToken: "owner-z",
+          updatedAt: 20,
+        },
+        "/workspace/a": {
+          clientToken: "client-a",
+          hostToken: "host-a",
+          ownerToken: "owner-a",
+          updatedAt: 20,
+        },
+        "/workspace/old": {
+          clientToken: "client-old",
+          hostToken: "host-old",
+          ownerToken: "owner-old",
+          updatedAt: 10,
+        },
+      },
+    });
+
+    assert.deepEqual(migrated, {
+      version: 2,
+      credentials: {
+        clientToken: "client-a",
+        hostToken: "host-a",
+        ownerToken: "owner-a",
+        updatedAt: 20,
+      },
+    });
+    assert.deepEqual(migrateOpenworkServerTokenStore(migrated), migrated);
   });
 });
 

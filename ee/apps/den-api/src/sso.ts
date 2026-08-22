@@ -155,6 +155,7 @@ async function registerBetterAuthSsoProvider(input: OrganizationSsoRegistrationI
           entryPoint: input.entryPoint,
           cert: input.cert,
           audience,
+          callbackUrl: getSsoAcsUrl(providerId),
           idpMetadata: {
             entityID: input.issuer,
           },
@@ -432,5 +433,5 @@ export async function hasEnabledOrganizationSsoConnection(organizationId: Organi
   }
 
   const provider = await getSsoProviderForConnection(connection)
-  return isOrganizationSsoReady({ connection, providerExists: Boolean(provider) })
+  return isOrganizationSsoReady({ connection, provider })
 }

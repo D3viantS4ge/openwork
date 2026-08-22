@@ -32,7 +32,9 @@ const context = {
 };
 const token: DenMcpToken = {
   token: "owt_mcp_secret_token",
+  appHostToken: "owt_mcp_private_app_host_token",
   expiresAt: new Date(NOW + 7 * 24 * 60 * 60 * 1000).toISOString(),
+  appHostExpiresAt: new Date(NOW + 7 * 24 * 60 * 60 * 1000).toISOString(),
   organizationId: "org_1",
   scopes: ["mcp:read", "mcp:write"],
   resource: "https://api.openwork.test/mcp",
@@ -148,6 +150,22 @@ describe("OpenWork Cloud MCP reconciler", () => {
     });
 
     expect(payload?.config.url).toBe("https://app.openwork.test/api/den/mcp/agent");
+  });
+
+  test("keeps central search and execute working against an older Den without opening the App host", () => {
+    const payload = buildOpenworkCloudMcpReconcilePayload({
+      context,
+      token: {
+        token: token.token,
+        expiresAt: token.expiresAt,
+        organizationId: token.organizationId,
+        scopes: token.scopes,
+        resource: token.resource,
+      },
+    });
+
+    expect(payload?.config.headers).toEqual({ Authorization: `Bearer ${token.token}` });
+    expect(payload?.appHostAuthorization).toBeUndefined();
   });
 
   test("Test now performs only GET health", async () => {

@@ -68,24 +68,18 @@ jobs:
             --color D93F0B \
             --description "Expedited change requiring post-hoc review (SOC 2 evidence)" || true
 
-          backfill_pr="$(gh pr list \
-            --repo "$GITHUB_REPOSITORY" \
-            --search "head:release/$TAG-dev-sync" \
-            --state all \
-            --limit 1 \
-            --json url \
-            --jq '.[0].url // ""' || true)"
-          backfill_link="${backfill_pr:-Not found yet}"
           release_runs_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/release-macos-aarch64.yml?query=branch%3A$TAG"
+          tag_commit="$(git rev-list -n1 "$TAG")"
 
           body_file="$RUNNER_TEMP/post-hoc-review.md"
           cat > "$body_file" <<EOF
-          This tag was released before its version-bump commit was reviewed into \`dev\`.
+          This tag points at a commit that was not on \`dev\` when it was released
+          (tag-first expedited path — versions live in tags, so no bump commit exists).
 
           - [ ] Reason / incident link:
           - [ ] Release App run: $release_runs_url
           - [ ] Triggering audit run: $TRIGGER_RUN_URL
-          - [ ] Backfill PR merged: $backfill_link
+          - [ ] Tagged commit ($tag_commit) landed on \`dev\` through a reviewed PR
           - [ ] Reviewed by someone other than the release actor
 
           Release actor: @$ACTOR

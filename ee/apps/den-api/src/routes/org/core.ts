@@ -9,7 +9,7 @@ import { auth } from "../../auth.js"
 import { verifyBotProtection } from "../../bot-protection.js"
 import { validateBrandIconUrl } from "../../brand-icon-validation.js"
 import { organizationCloudEnabled } from "../../capability-sources/cloud-rollout.js"
-import { codemodeScriptsEnabled } from "../../capability-sources/codemode-rollout.js"
+import { workflowsEnabled } from "../../capability-sources/workflow-rollout.js"
 import { memberFacingMcpConnectionsEnabled } from "../../capability-sources/external-mcp-rollout.js"
 import { organizationInstallLinksEnabled } from "../../capability-sources/install-links-rollout.js"
 import { db } from "../../db.js"
@@ -110,6 +110,11 @@ const invitationPreviewQuerySchema = z.object({
 const acceptInvitationSchema = z.object({
   id: z.string().trim().min(1).max(255),
 })
+
+const scimDeprovisionedSchema = z.object({
+  error: z.literal("scim_deprovisioned"),
+  message: z.string(),
+}).meta({ ref: "ScimDeprovisionedError" })
 
 const organizationResponseSchema = z.object({
   organization: z.object({}).passthrough().nullable(),
@@ -363,7 +368,7 @@ export function registerOrgCoreRoutes<T extends { Variables: OrgRouteVariables }
         400: jsonResponse("The invitation acceptance request body was invalid.", invalidRequestSchema),
         401: jsonResponse("The caller must be signed in to accept an invitation.", unauthorizedSchema),
         403: jsonResponse("API keys cannot accept invitations, or the deployment requires a verified account email.", forbiddenSchema),
-        409: jsonResponse("The current account email is not allowed to join this organization.", accountEmailDomainNotAllowedSchema),
+        409: jsonResponse("The account cannot join this organization.", z.union([accountEmailDomainNotAllowedSchema, scimDeprovisionedSchema])),
         410: jsonResponse("The user previously accepted this invitation, but their workspace access was removed.", membershipRemovedSchema),
         404: jsonResponse("The invitation could not be found.", notFoundSchema),
       },
@@ -422,6 +427,12 @@ export function registerOrgCoreRoutes<T extends { Variables: OrgRouteVariables }
         error: "membership_removed",
         message: "Your access to this workspace was removed. Ask a workspace admin for a new invite.",
       }, 410)
+    }
+    if (accepted.status === "scim_deprovisioned") {
+      return c.json({
+        error: "scim_deprovisioned",
+        message: "This member is managed by your identity provider. Restore their access in the IdP.",
+      }, 409)
     }
 
     await setRequestActiveOrganization(c, accepted.member.organizationId)
@@ -702,7 +713,7 @@ export function registerOrgCoreRoutes<T extends { Variables: OrgRouteVariables }
           mcpConnections: memberFacingMcpConnectionsEnabled(payload.organization.metadata, {
             gatingEnabled: env.mcpConnectionsGatingEnabled,
           }),
-          codemodeScripts: codemodeScriptsEnabled(payload.organization.metadata),
+          workflows: workflowsEnabled(payload.organization.metadata),
           installLinks: organizationInstallLinksEnabled(payload.organization.metadata, {
             gatingEnabled: env.installLinksGatingEnabled,
           }),

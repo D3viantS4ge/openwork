@@ -90,7 +90,7 @@ async function replaceOrganizationMetadata(metadata: Record<string, unknown>) {
     .where(drizzle.eq(schema.OrganizationTable.id, organizationId))
 }
 
-async function putCapabilities(capabilities: { installLinks?: boolean | null; mcpConnections?: boolean | null; cloud?: boolean | null }) {
+async function putCapabilities(capabilities: { installLinks?: boolean | null; mcpConnections?: boolean | null; remoteMcpApps?: boolean | null; cloud?: boolean | null }) {
   return routeApp().request(`http://den.local/v1/admin/organizations/${organizationId}/capabilities`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
@@ -187,12 +187,12 @@ test("admin capability routes show effective defaults while preserving raw overr
 
   const getAbsent = await routeApp().request(`http://den.local/v1/admin/organizations/${organizationId}/capabilities`)
   expect(getAbsent.status).toBe(200)
-  await expect(getAbsent.json()).resolves.toMatchObject({ capabilities: { installLinks: true, mcpConnections: true, cloud: false } })
+  await expect(getAbsent.json()).resolves.toMatchObject({ capabilities: { installLinks: true, mcpConnections: true, remoteMcpApps: false, cloud: false } })
 
   const listAbsent = await routeApp().request(`http://den.local/v1/admin/organizations?search=${organizationId}`)
   expect(listAbsent.status).toBe(200)
   await expect(listAbsent.json()).resolves.toMatchObject({
-    organizations: [{ id: organizationId, capabilities: { installLinks: true, mcpConnections: true, cloud: false } }],
+    organizations: [{ id: organizationId, capabilities: { installLinks: true, mcpConnections: true, remoteMcpApps: false, cloud: false } }],
   })
 
   const enableInstallLinks = await putCapabilities({ installLinks: true })
@@ -220,6 +220,16 @@ test("admin capability routes show effective defaults while preserving raw overr
   expect(disableCloud.status).toBe(200)
   await expect(disableCloud.json()).resolves.toMatchObject({ capabilities: { cloud: false } })
   expect(readCapabilityMetadata(await readOrganizationMetadata())).toMatchObject({ installLinks: true, cloud: false })
+
+  const enableRemoteMcpApps = await putCapabilities({ remoteMcpApps: true })
+  expect(enableRemoteMcpApps.status).toBe(200)
+  await expect(enableRemoteMcpApps.json()).resolves.toMatchObject({ capabilities: { remoteMcpApps: true } })
+  expect(readCapabilityMetadata(await readOrganizationMetadata())).toMatchObject({ remoteMcpApps: true })
+
+  const clearRemoteMcpApps = await putCapabilities({ remoteMcpApps: null })
+  expect(clearRemoteMcpApps.status).toBe(200)
+  await expect(clearRemoteMcpApps.json()).resolves.toMatchObject({ capabilities: { remoteMcpApps: false } })
+  expect("remoteMcpApps" in readCapabilityMetadata(await readOrganizationMetadata())).toBe(false)
 
   await replaceOrganizationMetadata({ connectEnabled: true, capabilities: { installLinks: true } })
   const disableFlatEnabledConnect = await putCapabilities({ mcpConnections: false })

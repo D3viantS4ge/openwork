@@ -24,7 +24,9 @@ const SETTINGS: DenSettings = {
 };
 const MINTED: DenMcpToken = {
   token: "mcp-token",
+  appHostToken: "app-host-token",
   expiresAt: new Date(NOW + 7 * 24 * 60 * 60 * 1000).toISOString(),
+  appHostExpiresAt: new Date(NOW + 7 * 24 * 60 * 60 * 1000).toISOString(),
   organizationId: "organization_1",
   scopes: ["mcp:read", "mcp:write"],
   resource: "https://api.openwork.test/mcp",
@@ -137,6 +139,7 @@ describe("session MCP maintenance", () => {
           headers: { Authorization: "Bearer mcp-token" },
           oauth: false,
         },
+        appHostAuthorization: "Bearer app-host-token",
         tokenMetadata: {
           organizationId: "organization_1",
           expiresAt: MINTED.expiresAt,

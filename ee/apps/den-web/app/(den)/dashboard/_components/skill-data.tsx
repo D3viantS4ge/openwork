@@ -178,17 +178,20 @@ export function useUpdateSkill(pluginId: string) {
 
 export function useDeleteSkill(pluginId: string) {
   const queryClient = useQueryClient();
+  const { runReauthableAction } = useOrgDashboard();
 
   return useMutation({
     mutationFn: async (skillId: string): Promise<string> => {
-      const { response, payload } = await requestJson(
-        `/v1/config-objects/${encodeURIComponent(skillId)}/delete`,
-        { method: "POST" },
-        15000,
-      );
-      if (!response.ok) {
-        throw getRequestError(payload, response, `Failed to delete skill (${response.status}).`);
-      }
+      await runReauthableAction("delete-skill", async () => {
+        const { response, payload } = await requestJson(
+          `/v1/config-objects/${encodeURIComponent(skillId)}/delete`,
+          { method: "POST" },
+          15000,
+        );
+        if (!response.ok) {
+          throw getRequestError(payload, response, `Failed to delete skill (${response.status}).`);
+        }
+      });
       return skillId;
     },
     onSuccess: async () => {

@@ -6,9 +6,15 @@ import {
   setDenBootstrapConfig,
   writeDenSettings,
 } from "@/app/lib/den";
+import { normalizeOrganizationServerInput } from "@/app/lib/organization-server-input";
+
+function normalizeControlPlaneInput(value: string) {
+  const serverOrigin = normalizeOrganizationServerInput(value);
+  return serverOrigin ? normalizeDenBaseUrl(serverOrigin) : null;
+}
 
 export function isValidControlPlaneUrl(value: string) {
-  return normalizeDenBaseUrl(value) !== null;
+  return normalizeControlPlaneInput(value) !== null;
 }
 
 export function isDefaultControlPlaneUrl(value: string, defaultBaseUrl = DEFAULT_DEN_BASE_URL) {
@@ -33,7 +39,7 @@ export function formatControlPlaneHost(value: string) {
 }
 
 export async function saveControlPlaneUrl(value: string) {
-  const normalized = normalizeDenBaseUrl(value);
+  const normalized = normalizeControlPlaneInput(value);
   if (!normalized) return null;
 
   const resolved = resolveDenBaseUrls(normalized);

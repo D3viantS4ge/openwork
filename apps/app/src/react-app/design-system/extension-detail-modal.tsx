@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import { CheckCircle2, ChevronLeft, ExternalLink, Loader2 } from "lucide-react";
+import { CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, Loader2 } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -24,6 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { t } from "@/i18n";
 import {
   extensionTaxonomyLabel,
   type ExtensionTaxonomy,
@@ -74,6 +75,18 @@ export type ExtensionDetailModalProps = {
   path?: string;
   /** Skill trigger phrase (e.g. "when user asks to create an agent"). */
   trigger?: string;
+  /** Trigger phrases shown as rows (commands, skills, agents). */
+  triggers?: string[];
+  triggerHint?: string;
+  /** Caption under the title, e.g. a path or "Available in composer". */
+  sourceLabel?: string;
+  instructionsHint?: string;
+  openFileLabel?: string;
+  facts?: Array<{ label: string; value: string }>;
+  /** Nested capabilities shown on plugin (and similar) detail pages. */
+  contents?: Array<{ key: string; kindLabel: string; name: string; onOpen: () => void }>;
+  contentsTitle?: string;
+  contentsEmptyLabel?: string;
   /** Reveal the file in Finder/Explorer. */
   onReveal?: () => void;
   /** Skill content preview (first ~500 chars of the SKILL.md). */
@@ -107,6 +120,8 @@ const taxonomyDesc: Record<ExtensionTaxonomy, string> = {
   connection: "An account your agent can act in, once it is signed in.",
   mcp: "Connects as a Model Context Protocol server, giving your agent access to external tools and data.",
   skill: "A reusable workflow that your agent can execute on demand.",
+  command: "A slash command the composer can run in this workspace.",
+  agent: "A named agent the composer can run a session as.",
   plugin: "Extends OpenWork with additional capabilities managed by your organization.",
 };
 
@@ -210,6 +225,15 @@ export function ExtensionDetailModal({
   environment,
   path,
   trigger,
+  triggers,
+  triggerHint,
+  sourceLabel,
+  instructionsHint,
+  openFileLabel,
+  facts = [],
+  contents,
+  contentsTitle,
+  contentsEmptyLabel,
   contentPreview,
   onReveal,
   onConnect,
@@ -232,6 +256,38 @@ export function ExtensionDetailModal({
   const resolvedIconSrc = resolveExtensionIconUrl({ iconSrc, iconSlug, serviceUrl: url });
 
   if (!open) return null;
+
+  const composerCapability = taxonomy === "skill" || taxonomy === "command" || taxonomy === "agent";
+  const triggerRows = (triggers && triggers.length > 0)
+    ? triggers
+    : trigger
+      ? [trigger]
+      : [];
+  const instructionBody = contentPreview ? stripSkillFrontmatter(contentPreview) : "";
+
+  const taxonomyPills = (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+        {extensionTaxonomyLabel(taxonomy)}
+      </span>
+      {connected ? (
+        <span className="flex items-center gap-1 rounded-md bg-green-3 px-2 py-0.5 text-[10px] font-medium text-green-11">
+          <CheckCircle2 size={10} strokeWidth={3} />
+          {t("extensions.detail_ready")}
+        </span>
+      ) : null}
+      {preview ? (
+        <span className="rounded-md bg-blue-3 px-1.5 py-0.5 text-[10px] font-medium text-blue-11">
+          Preview
+        </span>
+      ) : null}
+      {beta ? (
+        <span className="rounded-md bg-amber-3 px-1.5 py-0.5 text-[10px] font-medium text-amber-11">
+          Beta
+        </span>
+      ) : null}
+    </div>
+  );
 
   const header = (
     <div className="flex min-w-0 items-start gap-4">
@@ -261,39 +317,23 @@ export function ExtensionDetailModal({
         ) : null}
       </div>
 
-      <div className="min-w-0 flex flex-col gap-1 justify-center self-stretch">
+      <div className="min-w-0 flex flex-1 flex-col gap-1 justify-center self-stretch">
         {presentation === "page" ? (
           <>
-            <h2 className="text-lg font-semibold leading-none tracking-tight text-foreground">{name}</h2>
-            <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-              <span>{extensionTaxonomyLabel(taxonomy)}</span>
-              {preview ? (
-                <span className="rounded-md bg-blue-3 px-1.5 py-0.5 text-[10px] font-medium text-blue-11">
-                  Preview
-                </span>
-              ) : null}
-              {beta ? (
-                <span className="rounded-md bg-amber-3 px-1.5 py-0.5 text-[10px] font-medium text-amber-11">
-                  Beta
-                </span>
-              ) : null}
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-lg font-semibold leading-none tracking-tight text-foreground">{name}</h2>
+              {taxonomyPills}
             </div>
+            <p className="text-sm leading-relaxed text-muted-foreground">{description}</p>
+            {sourceLabel ? (
+              <p className="text-xs text-muted-foreground">{sourceLabel}</p>
+            ) : null}
           </>
         ) : (
           <>
             <DialogTitle>{name}</DialogTitle>
             <DialogDescription className="flex flex-wrap items-center gap-2">
-              <span>{extensionTaxonomyLabel(taxonomy)}</span>
-              {preview ? (
-                <span className="rounded-md bg-blue-3 px-1.5 py-0.5 text-[10px] font-medium text-blue-11">
-                  Preview
-                </span>
-              ) : null}
-              {beta ? (
-                <span className="rounded-md bg-amber-3 px-1.5 py-0.5 text-[10px] font-medium text-amber-11">
-                  Beta
-                </span>
-              ) : null}
+              {taxonomyPills}
             </DialogDescription>
           </>
         )}
@@ -303,9 +343,14 @@ export function ExtensionDetailModal({
 
   const body = (
     <div className="space-y-5 px-px">
-      <div className="text-sm leading-relaxed text-card-foreground">
-        {description}
-      </div>
+      {presentation !== "page" ? (
+        <div className="text-sm leading-relaxed text-card-foreground">
+          {description}
+        </div>
+      ) : null}
+      {composerCapability && presentation !== "page" && sourceLabel ? (
+        <p className="text-xs text-muted-foreground">{sourceLabel}</p>
+      ) : null}
 
       {errorInfo ? (
         <div role="alert" className="rounded-lg border border-red-6 bg-red-2 px-3 py-2 text-sm text-red-11">
@@ -358,130 +403,206 @@ export function ExtensionDetailModal({
         </Card>
       ) : null}
 
-      <Card variant="outline" size="sm">
-        <CardHeader>
-          <CardTitle>Details</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Type</span>
-              <span className="font-medium text-card-foreground">{extensionTaxonomyLabel(taxonomy)}</span>
-            </div>
-
-            {url ? (
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Endpoint</span>
-                <span className="flex items-center gap-1.5 truncate font-mono text-xs text-card-foreground">
-                  {url.replace(/^https?:\/\//, "").slice(0, 40)}
-                  <ExternalLink size={10} className="shrink-0 text-muted-foreground" />
-                </span>
-              </div>
-            ) : null}
-
-            {uiControl ? (
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Launch</span>
-                <span className="max-w-[300px] truncate font-mono text-xs text-card-foreground">{(launchCommand ?? fallbackUiControlCommand).join(" ")}</span>
-              </div>
-            ) : null}
-
-            {path && onReveal ? (
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Location</span>
-                <Button
-                  variant="link"
-                  size="xs"
-                  onClick={onReveal}
-                >
-                  Reveal in Finder
-                  <ExternalLink data-icon="inline-end" />
-                </Button>
-              </div>
-            ) : null}
-
-            {oauth ? (
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Authentication</span>
-                <span className="font-medium text-card-foreground">OAuth required</span>
-              </div>
-            ) : null}
-
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Status</span>
-              <span className={cn("font-medium", connected ? "text-green-11" : "text-muted-foreground")}>
-                {connected
-                  ? connectedLabel ?? (taxonomy === "skill" || taxonomy === "plugin" ? "Installed" : "Connected")
-                  : connecting
-                    ? connectingLabel
-                    : disconnectedLabel ?? (taxonomy === "skill" || taxonomy === "plugin" ? "Not installed" : "Not connected")}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Visibility</span>
-              <span className="font-medium text-card-foreground">{hidden ? "Hidden" : "Shown"}</span>
-            </div>
-
-            {preview ? (
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Release stage</span>
-                <span className="font-medium text-blue-11">Preview</span>
-              </div>
-            ) : null}
-
-            {beta ? (
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Release stage</span>
-                <span className="font-medium text-amber-11">Beta</span>
-              </div>
-            ) : null}
-
-            {disabledReason ? (
-              <div className="flex items-center justify-between gap-4 text-sm">
-                <span className="text-muted-foreground">Availability</span>
-                <span className="text-right font-medium text-amber-11">{disabledReason}</span>
-              </div>
+      {composerCapability && triggerRows.length > 0 ? (
+        <Card variant="outline" size="sm" className="overflow-hidden py-0">
+          <div className="flex items-center justify-between border-b border-border px-4 py-3">
+            <div className="text-sm font-semibold text-card-foreground">{t("extensions.detail_triggers")}</div>
+            {triggerHint ? (
+              <div className="text-xs text-muted-foreground">{triggerHint}</div>
             ) : null}
           </div>
-        </CardContent>
-      </Card>
+          <div>
+            {triggerRows.map((row, index) => (
+              <div
+                key={`${row}:${index}`}
+                className={cn(
+                  "px-4 py-2.5 text-[13px] leading-5 text-muted-foreground",
+                  index < triggerRows.length - 1 ? "border-b border-border" : "",
+                )}
+              >
+                {row}
+              </div>
+            ))}
+          </div>
+        </Card>
+      ) : null}
 
-      {uiControl ? <UiControlConnectionDetails launchCommand={launchCommand} environment={environment} /> : null}
-
-      {taxonomy === "skill" && trigger ? (
+      {composerCapability && facts.length > 0 ? (
         <Card variant="outline" size="sm">
           <CardHeader>
-            <CardTitle>Trigger</CardTitle>
+            <CardTitle>{t("extensions.detail_how_it_runs")}</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-sm leading-relaxed text-card-foreground">
-              {trigger}
+            <div className="space-y-2">
+              {facts.map((fact) => (
+                <div key={fact.label} className="flex items-center justify-between gap-4 text-sm">
+                  <span className="text-muted-foreground">{fact.label}</span>
+                  <span className="truncate font-medium text-card-foreground">{fact.value}</span>
+                </div>
+              ))}
             </div>
           </CardContent>
         </Card>
       ) : null}
 
-      {taxonomy === "skill" && contentPreview ? (() => {
-        const skillBody = stripSkillFrontmatter(contentPreview);
-
-        if (!skillBody) {
-          return null;
-        }
-
-        return (
-          <div className="flex flex-col gap-2">
-            <div className="text-sm font-medium text-card-foreground">
-              Skill content
+      {composerCapability && instructionBody ? (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-baseline justify-between gap-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+              {t("extensions.detail_instructions")}
             </div>
-            <div className="max-h-[300px] overflow-y-auto rounded-xl border border-border bg-card p-4 text-sm leading-relaxed text-card-foreground">
-              <MarkdownBlock text={skillBody} />
+            {instructionsHint ? (
+              <div className="text-xs text-muted-foreground">{instructionsHint}</div>
+            ) : null}
+          </div>
+          <div className="max-h-[320px] overflow-y-auto rounded-xl border border-border bg-card p-4 text-sm leading-relaxed text-card-foreground">
+            <MarkdownBlock text={instructionBody} />
+          </div>
+          {onReveal ? (
+            <Button variant="link" size="xs" className="h-auto w-fit px-0" onClick={onReveal}>
+              {openFileLabel ?? t("extensions.detail_open_file")}
+              <ExternalLink data-icon="inline-end" />
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {!composerCapability ? (
+        <Card variant="outline" size="sm">
+          <CardHeader>
+            <CardTitle>Details</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Type</span>
+                <span className="font-medium text-card-foreground">{extensionTaxonomyLabel(taxonomy)}</span>
+              </div>
+
+              {url ? (
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Endpoint</span>
+                  <span className="flex items-center gap-1.5 truncate font-mono text-xs text-card-foreground">
+                    {url.replace(/^https?:\/\//, "").slice(0, 40)}
+                    <ExternalLink size={10} className="shrink-0 text-muted-foreground" />
+                  </span>
+                </div>
+              ) : null}
+
+              {uiControl ? (
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Launch</span>
+                  <span className="max-w-[300px] truncate font-mono text-xs text-card-foreground">{(launchCommand ?? fallbackUiControlCommand).join(" ")}</span>
+                </div>
+              ) : null}
+
+              {path && onReveal ? (
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Location</span>
+                  <Button
+                    variant="link"
+                    size="xs"
+                    onClick={onReveal}
+                  >
+                    Reveal in Finder
+                    <ExternalLink data-icon="inline-end" />
+                  </Button>
+                </div>
+              ) : null}
+
+              {oauth ? (
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Authentication</span>
+                  <span className="font-medium text-card-foreground">OAuth required</span>
+                </div>
+              ) : null}
+
+              {facts.map((fact) => (
+                <div key={fact.label} className="flex items-center justify-between gap-4 text-sm">
+                  <span className="text-muted-foreground">{fact.label}</span>
+                  <span className="truncate font-medium text-card-foreground">{fact.value}</span>
+                </div>
+              ))}
+
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Status</span>
+                <span className={cn("font-medium", connected ? "text-green-11" : "text-muted-foreground")}>
+                  {connected
+                    ? connectedLabel ?? (taxonomy === "plugin" ? "Installed" : "Connected")
+                    : connecting
+                      ? connectingLabel
+                      : disconnectedLabel ?? (taxonomy === "plugin" ? "Not installed" : "Not connected")}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Visibility</span>
+                <span className="font-medium text-card-foreground">{hidden ? "Hidden" : "Shown"}</span>
+              </div>
+
+              {preview ? (
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Release stage</span>
+                  <span className="font-medium text-blue-11">Preview</span>
+                </div>
+              ) : null}
+
+              {beta ? (
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Release stage</span>
+                  <span className="font-medium text-amber-11">Beta</span>
+                </div>
+              ) : null}
+
+              {disabledReason ? (
+                <div className="flex items-center justify-between gap-4 text-sm">
+                  <span className="text-muted-foreground">Availability</span>
+                  <span className="text-right font-medium text-amber-11">{disabledReason}</span>
+                </div>
+              ) : null}
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {contents ? (
+        <Card variant="outline" size="sm" className="overflow-hidden py-0">
+          <div className="border-b border-border px-4 py-3">
+            <div className="text-sm font-semibold text-card-foreground">
+              {contentsTitle ?? t("extensions.detail_contents")}
             </div>
           </div>
-        );
-      })() : null}
+          {contents.length === 0 ? (
+            <p className="px-4 py-3 text-sm text-muted-foreground">
+              {contentsEmptyLabel ?? t("extensions.detail_contents_empty")}
+            </p>
+          ) : (
+            <div>
+              {contents.map((item, index) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={item.onOpen}
+                  className={cn(
+                    "flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-muted/60",
+                    index < contents.length - 1 ? "border-b border-border" : "",
+                  )}
+                >
+                  <span className="w-20 shrink-0 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                    {item.kindLabel}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-card-foreground">{item.name}</span>
+                  <ChevronRight size={14} className="shrink-0 text-muted-foreground" />
+                </button>
+              ))}
+            </div>
+          )}
+        </Card>
+      ) : null}
 
-      {showEnablementCard && ((taxonomy !== "skill" && !uiControl) || (!trigger && !contentPreview && !uiControl)) ? (
+      {uiControl ? <UiControlConnectionDetails launchCommand={launchCommand} environment={environment} /> : null}
+
+      {showEnablementCard && !composerCapability && !uiControl ? (
         <Card variant="outline" size="sm">
           <CardHeader>
             <CardTitle>What this enables</CardTitle>
@@ -596,7 +717,13 @@ export function ExtensionDetailModal({
           <ChevronLeft size={16} />
           {backLabel}
         </Button>
-        {header}
+        {composerCapability ? (
+          <div className="rounded-xl border border-border bg-card p-5">
+            {header}
+          </div>
+        ) : (
+          header
+        )}
         <div className="min-h-0 flex-1">
           {body}
         </div>

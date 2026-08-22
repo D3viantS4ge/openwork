@@ -1,33 +1,33 @@
 ---
-title: "Deploying a shared workspace"
-description: "Launch a cloud worker in OpenWork Cloud and open it from the desktop app"
+title: "OpenWork Web"
+description: "Run a full OpenWork workspace in the browser, hosted by OpenWork — available for select customers"
 ---
 
-OpenWork Cloud currently labels shared workers as `Shared Workspaces` in the web dashboard. Once the workspace is ready, the desktop app opens it through the normal remote connect flow.
+OpenWork Web gives your team a full OpenWork workspace in the browser, hosted and managed for you — nothing to install. It is currently available for select customers; contact OpenWork if your organization wants access.
 
-## Deploy the shared workspace
+## Deploy a hosted workspace
 
 1. Open your org dashboard and go to `Shared Workspace`.
 2. Click `Add workspace`.
 3. Wait until the status becomes `Ready`.
 4. Click `Connect`.
 
-From the connection drawer you can choose `Open in desktop`, `Open in web`, or copy the `Connection URL` plus `Owner token` / `Client token`.
+From the connection drawer you can choose `Open in web` to use OpenWork Web directly in the browser, `Open in desktop`, or copy the `Connection URL` plus `Owner token` / `Client token`.
 
 ## Open it from the desktop app
 
-From the connection drawer, click `Connect` and copy the `Connection URL` plus
-`Owner token` / `Client token`. In the desktop app, choose `Add workspace ->
-Connect custom remote`, paste the connection URL and token, then click
-`Connect remote`.
+The same hosted workspace also opens in the desktop app. From the connection
+drawer, click `Connect` and copy the `Connection URL` plus `Owner token` /
+`Client token`. In the desktop app, choose `Add workspace -> Connect custom
+remote`, paste the connection URL and token, then click `Connect remote`.
 
-## When to use this flow
+## When to use OpenWork Web
 
-Use a shared workspace when your team needs a hosted OpenWork runtime, a stable place for long-running tasks or messaging connectors, or one workspace that several people can open from the same org.
+Use OpenWork Web when your team needs a hosted OpenWork runtime, a stable place for long-running tasks or messaging connectors, or one workspace that several people can open from the same org — especially for teammates who should not have to install anything.
 
 ## Notes
 
-- This area is currently marked `Alpha` in the Cloud dashboard.
-- A workspace must be `Ready` before the desktop app can open it.
-- OpenWork Cloud plan limits apply to hosted workspaces.
-- If you prefer to self-host a runtime instead of using Cloud, run `openwork-server` and connect the desktop app to that server URL.
+- OpenWork Web is available for select customers. If you do not see it in your dashboard, contact OpenWork.
+- A workspace must be `Ready` before it can be opened.
+- Hosted workspace limits follow your OpenWork plan.
+- If you prefer to self-host a runtime instead, run `openwork-server` and connect the desktop app to that server URL.

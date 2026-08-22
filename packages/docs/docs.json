@@ -21,6 +21,7 @@
         "tab": "Start here",
         "pages": [
           "start-here/get-started",
+          "start-here/downloads",
           "start-here/migrate-from-claude-cowork",
           {
             "group": "Connect your stack",
@@ -72,6 +73,16 @@
             ]
           },
           {
+            "group": "Deploy to your cloud",
+            "pages": [
+              "self-host/deploy-to-your-cloud/overview",
+              "self-host/deploy-to-your-cloud/aws",
+              "self-host/deploy-to-your-cloud/azure",
+              "self-host/deploy-to-your-cloud/google-cloud",
+              "self-host/deploy-to-your-cloud/first-administrator"
+            ]
+          },
+          {
             "group": "Plan your network",
             "pages": [
               "start-here/private-network-deployment",
@@ -83,6 +94,7 @@
           {
             "group": "Install and operate",
             "pages": [
+              "start-here/enterprise-desktop-deployment",
               "start-here/installer-delivery",
               "start-here/on-prem-branding",
               "start-here/github-connector-helm"
@@ -120,7 +132,7 @@
             ]
           },
           {
-            "group": "Model Context Protocol (MCP)",
+            "group": "MCP Gateway",
             "pages": [
               "cloud/run-in-the-cloud/cloud-mcp",
               "model-context-protocol/opencode",
@@ -137,6 +149,8 @@
             ]
           },
           "cloud/members-and-rbac",
+          "cloud/sso-okta",
+          "cloud/scim-okta",
           "cloud/sso-microsoft-entra",
           "cloud/scim-microsoft-entra",
           "cloud/security-and-operations",

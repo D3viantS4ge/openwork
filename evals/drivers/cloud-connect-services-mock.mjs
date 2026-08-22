@@ -3,8 +3,6 @@
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 
-export const MOCK_TELEGRAM_BOT_TOKEN = "900100:OPENWORK_TEST_TOKEN";
-export const MOCK_TELEGRAM_WEBHOOK_SECRET = "openwork-telegram-webhook-secret";
 export const MOCK_MICROSOFT_ACCESS_TOKEN = "mock-microsoft-access-token";
 export const MOCK_MICROSOFT_REFRESH_TOKEN = "mock-microsoft-refresh-token";
 export const MOCK_WORKER_HOST_TOKEN = "mock-worker-host-token";
@@ -109,7 +107,7 @@ function sendJson(response, status, body, headers = {}) {
   response.writeHead(status, {
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
-    "access-control-allow-headers": "authorization,content-type,x-openwork-host-token,x-telegram-bot-api-secret-token",
+    "access-control-allow-headers": "authorization,content-type,x-openwork-host-token",
     "content-type": "application/json; charset=utf-8",
     ...headers,
   });
@@ -180,11 +178,6 @@ function recordRequest(state, request, url, rawBody) {
 function initialState() {
   return {
     requests: [],
-    telegram: {
-      webhook: null,
-      sentMessages: [],
-      nextMessageId: 7001,
-    },
     worker: {
       nextSessionId: 1,
       sessions: new Map(),
@@ -195,112 +188,7 @@ function initialState() {
 function resetState(state) {
   const fresh = initialState();
   state.requests = fresh.requests;
-  state.telegram = fresh.telegram;
   state.worker = fresh.worker;
-}
-
-function telegramUser() {
-  return {
-    id: 900100,
-    is_bot: true,
-    first_name: "OpenWork Test Bot",
-    username: "openwork_test_bot",
-    can_join_groups: false,
-    can_read_all_group_messages: false,
-    supports_inline_queries: false,
-  };
-}
-
-export function telegramUpdate(text = "Summarize the launch notes", updateId = 81001) {
-  return {
-    update_id: updateId,
-    message: {
-      message_id: 61001,
-      date: 1783612800,
-      chat: { id: 42001, type: "private", first_name: "OpenWork", username: "openwork_tester" },
-      from: { id: 42001, is_bot: false, first_name: "OpenWork", username: "openwork_tester" },
-      text,
-    },
-  };
-}
-
-function telegramUnauthorized(response) {
-  sendJson(response, 401, { ok: false, error_code: 401, description: "Unauthorized" });
-}
-
-function handleTelegram(state, request, response, url, rawBody) {
-  const match = url.pathname.match(/^\/telegram\/bot([^/]+)\/([^/]+)$/);
-  if (!match) return false;
-
-  const token = decodeURIComponent(match[1]);
-  const method = match[2];
-  if (token !== MOCK_TELEGRAM_BOT_TOKEN) {
-    telegramUnauthorized(response);
-    return true;
-  }
-
-  let body;
-  try {
-    body = parseJson(rawBody);
-  } catch {
-    sendJson(response, 400, { ok: false, error_code: 400, description: "Bad Request: invalid JSON" });
-    return true;
-  }
-
-  if (method === "getMe" && (request.method === "GET" || request.method === "POST")) {
-    sendJson(response, 200, { ok: true, result: telegramUser() });
-    return true;
-  }
-
-  if (method === "setWebhook" && request.method === "POST") {
-    state.telegram.webhook = {
-      url: typeof body.url === "string" ? body.url : "",
-      secretToken: typeof body.secret_token === "string" ? body.secret_token : null,
-      allowedUpdates: Array.isArray(body.allowed_updates) ? body.allowed_updates : null,
-    };
-    sendJson(response, 200, { ok: true, result: true, description: "Webhook was set" });
-    return true;
-  }
-
-  if (method === "deleteWebhook" && request.method === "POST") {
-    state.telegram.webhook = null;
-    sendJson(response, 200, { ok: true, result: true, description: "Webhook was deleted" });
-    return true;
-  }
-
-  if (method === "getWebhookInfo" && (request.method === "GET" || request.method === "POST")) {
-    sendJson(response, 200, {
-      ok: true,
-      result: {
-        url: state.telegram.webhook?.url ?? "",
-        has_custom_certificate: false,
-        pending_update_count: 0,
-        max_connections: 40,
-        allowed_updates: state.telegram.webhook?.allowedUpdates ?? ["message"],
-      },
-    });
-    return true;
-  }
-
-  if (method === "sendMessage" && request.method === "POST") {
-    if ((typeof body.chat_id !== "string" && typeof body.chat_id !== "number") || typeof body.text !== "string") {
-      sendJson(response, 400, { ok: false, error_code: 400, description: "Bad Request: chat_id and text are required" });
-      return true;
-    }
-    const message = {
-      message_id: state.telegram.nextMessageId++,
-      date: 1783612801,
-      chat: { id: Number(body.chat_id), type: "private" },
-      from: telegramUser(),
-      text: body.text,
-    };
-    state.telegram.sentMessages.push(message);
-    sendJson(response, 200, { ok: true, result: message });
-    return true;
-  }
-
-  sendJson(response, 404, { ok: false, error_code: 404, description: `Unknown Telegram method: ${method}` });
-  return true;
 }
 
 function handleMicrosoftOAuth(request, response, url, rawBody) {
@@ -568,7 +456,7 @@ function handleWorker(state, request, response, url, rawBody) {
       return true;
     }
     const id = `ses_mock_${state.worker.nextSessionId++}`;
-    const session = { id, title: typeof body.title === "string" ? body.title : "Telegram chat", prompt: null, messageId: null, polls: 0 };
+    const session = { id, title: typeof body.title === "string" ? body.title : "Cloud connect session", prompt: null, messageId: null, polls: 0 };
     state.worker.sessions.set(id, session);
     sendJson(response, 200, { id, title: session.title, directory: "/workspace" });
     return true;
@@ -625,20 +513,16 @@ function handleWorker(state, request, response, url, rawBody) {
 function stateView(state, origin) {
   return {
     endpoints: {
-      telegramApiBaseUrl: `${origin}/telegram`,
       microsoftAuthorizeUrl: `${origin}/entra/{tenantId}/oauth2/v2.0/authorize`,
       microsoftTokenUrl: `${origin}/entra/{tenantId}/oauth2/v2.0/token`,
       microsoftGraphBaseUrl: `${origin}/graph/v1.0`,
       workerBaseUrl: `${origin}/worker`,
     },
     credentials: {
-      telegramBotToken: MOCK_TELEGRAM_BOT_TOKEN,
-      telegramWebhookSecret: MOCK_TELEGRAM_WEBHOOK_SECRET,
       microsoftAccessToken: MOCK_MICROSOFT_ACCESS_TOKEN,
       workerHostToken: MOCK_WORKER_HOST_TOKEN,
       workerClientToken: MOCK_WORKER_CLIENT_TOKEN,
     },
-    telegram: state.telegram,
     worker: {
       sessions: Array.from(state.worker.sessions.values()),
     },
@@ -690,14 +574,6 @@ export function createCloudConnectMockServer(options = {}) {
       return;
     }
 
-    if (url.pathname === "/__mock/telegram/update" && method === "GET") {
-      const text = url.searchParams.get("text") ?? "Summarize the launch notes";
-      const updateId = Number(url.searchParams.get("updateId") ?? 81001);
-      sendJson(response, 200, telegramUpdate(text, Number.isFinite(updateId) ? updateId : 81001));
-      return;
-    }
-
-    if (handleTelegram(state, request, response, url, rawBody)) return;
     if (handleMicrosoftOAuth(request, response, url, rawBody)) return;
     if (handleMicrosoftGraph(request, response, url)) return;
     if (handleWorker(state, request, response, url, rawBody)) return;

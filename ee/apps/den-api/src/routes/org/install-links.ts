@@ -3,6 +3,7 @@ import { connectLinkClaimsSchema } from "@openwork/connect-link"
 import { and, eq, gt, isNull, or } from "@openwork-ee/den-db/drizzle"
 import { InstallLinkTable, OrganizationTable } from "@openwork-ee/den-db/schema"
 import { createReadStream } from "node:fs"
+import type { Context, Env, Input } from "hono"
 import type { MiddlewareHandler } from "hono"
 import type { Hono } from "hono"
 import { stream } from "hono/streaming"
@@ -13,6 +14,7 @@ import { resolvePublicOrigin } from "../../capability-sources/generic-oauth.js"
 import { organizationInstallLinksEnabled } from "../../capability-sources/install-links-rollout.js"
 import { db } from "../../db.js"
 import { mintDesktopConnectLink } from "../../desktop-connect-link.js"
+import { resolveInstallerReleaseTag } from "../../desktop-releases.js"
 import {
   consumeDesktopConnectGrant,
   inspectDesktopConnectGrant,
@@ -21,7 +23,7 @@ import {
 } from "../../desktop-connect-grants.js"
 import { env } from "../../env.js"
 import { hashInstallLinkToken, mintOrganizationInstallLink } from "../../install-links.js"
-import { jsonValidator, orgRoleRoute, publicRoute, queryValidator } from "../../middleware/index.js"
+import { jsonValidator, orgMemberRoute, orgRoleRoute, publicRoute, queryValidator } from "../../middleware/index.js"
 import { denTypeIdSchema, emptyResponse, forbiddenSchema, invalidRequestSchema, jsonResponse, notFoundSchema, textResponse, unauthorizedSchema } from "../../openapi.js"
 import { organizationCapabilityKeySchema } from "../../organization-capabilities.js"
 import { normalizeOrganizationMetadata } from "../../organization-limits.js"
@@ -79,6 +81,11 @@ const installPlatformSchema = z.enum(["mac-arm64", "mac-x64", "win-x64", "linux-
 const installPlatformParamSchema = z.object({
   platform: installPlatformSchema,
 })
+
+const authenticatedInstallConfigSchema = installConfigSchema.extend({
+  desktopVersion: z.string().trim().min(1),
+  distribution: z.enum(["cloud", "enterprise"]),
+}).meta({ ref: "AuthenticatedInstallConfig" })
 
 const installLinkNotFoundSchema = z.object({
   error: z.literal("install_link_not_found"),
@@ -240,15 +247,25 @@ function maxAllowedDesktopVersion(versions: string[]) {
   return maxVersion
 }
 
-function installerReleaseTagForMetadata(metadataInput: unknown) {
+async function installerReleaseTagForMetadata(metadataInput: unknown) {
   const metadata = normalizeOrganizationMetadata(organizationMetadataInput(metadataInput)).metadata
   const allowedVersions = metadata.allowedDesktopVersions
   if (!allowedVersions?.length) {
-    return env.installerReleaseTag
+    return resolveInstallerReleaseTag()
   }
 
   const maxVersion = maxAllowedDesktopVersion(allowedVersions)
-  return maxVersion ? `v${maxVersion}` : env.installerReleaseTag
+  return maxVersion ? `v${maxVersion}` : resolveInstallerReleaseTag()
+}
+
+async function resolveInstallConfigForOrganization(input: {
+  organization: { name: string; logo: string | null; metadata: unknown }
+  request: Request
+}) {
+  return {
+    config: buildInstallConfig(input),
+    installerReleaseTag: await installerReleaseTagForMetadata(input.organization.metadata),
+  }
 }
 
 async function resolveInstallConfigForToken(token: string, request: Request) {
@@ -272,11 +289,47 @@ async function resolveInstallConfigForToken(token: string, request: Request) {
   }
 
   return {
-    config: buildInstallConfig({ organization: row.organization, request }),
+    ...await resolveInstallConfigForOrganization({ organization: row.organization, request }),
     installLinkId: row.installLink.id,
     organizationSlug: row.organization.slug,
-    installerReleaseTag: installerReleaseTagForMetadata(row.organization.metadata),
   }
+}
+
+async function serveInstallerArtifact<
+  E extends Env,
+  P extends string,
+  I extends Input,
+>(
+  c: Context<E, P, I>,
+  installer: InstallExperienceDependencies,
+  platform: InstallPlatform,
+  installerReleaseTag: string,
+) {
+  const distribution = managedDesktopDistribution()
+  const fileName = distribution === "cloud"
+    ? cloudDesktopReleaseAssetName(platform, installerReleaseTag)
+    : enterpriseDesktopReleaseAssetName(platform, installerReleaseTag)
+  if (!fileName) {
+    return c.json({ error: "invalid_request", details: [{ message: "Unsupported desktop platform." }] }, 400)
+  }
+
+  const configuredArtifact = await installer.resolveConfiguredArtifact(fileName)
+  if (configuredArtifact) {
+    c.header("content-type", installerContentType(platform))
+    c.header("content-length", String(configuredArtifact.size))
+    c.header("content-disposition", contentDisposition(fileName))
+    c.header("cache-control", "private, max-age=300")
+    return stream(c, async (body) => {
+      for await (const chunk of createReadStream(configuredArtifact.filePath)) {
+        await body.write(chunk)
+      }
+    })
+  }
+
+  const directUrl = distribution === "cloud"
+    ? installer.resolveCloudDirectUrl(platform, installerReleaseTag)
+    : installer.resolveDirectUrl(platform, installerReleaseTag)
+  return c.redirect(directUrl, 302)
 }
 
 const setActiveOrganizationFromParam: MiddlewareHandler<{ Variables: OrgRouteVariables }> = async (c, next) => {
@@ -352,6 +405,71 @@ export function registerOrgInstallLinkRoutes<T extends { Variables: OrgRouteVari
       }
 
       return c.json(installLink)
+    },
+  )
+
+  app.get(
+    "/v1/me/install-config",
+    describeRoute({
+      tags: ["Users"],
+      summary: "Get current user's install configuration",
+      description: "Returns desktop branding, distribution, and approved version for the signed-in member's active organization.",
+      responses: {
+        200: jsonResponse("Authenticated install configuration resolved successfully.", authenticatedInstallConfigSchema),
+        401: jsonResponse("The caller must be signed in to load install configuration.", unauthorizedSchema),
+        404: jsonResponse("The caller has no active organization membership.", notFoundSchema),
+      },
+    }),
+    orgMemberRoute(),
+    async (c) => {
+      const payload = c.get("organizationContext")
+      const resolved = await resolveInstallConfigForOrganization({
+        organization: payload.organization,
+        request: c.req.raw,
+      })
+      return c.json({
+        ...resolved.config,
+        desktopVersion: resolved.installerReleaseTag.replace(/^v/i, ""),
+        distribution: managedDesktopDistribution(),
+      })
+    },
+  )
+
+  app.get(
+    "/v1/me/install/:platform",
+    describeRoute({
+      tags: ["Users"],
+      summary: "Download current user's managed OpenWork desktop",
+      description: "Downloads the Cloud or Enterprise artifact approved for the signed-in member's active organization.",
+      responses: {
+        200: textResponse("Mounted desktop artifact returned successfully."),
+        302: emptyResponse("Den redirected the browser to the signed desktop asset for this deployment."),
+        400: jsonResponse("The desktop platform was invalid.", invalidRequestSchema),
+        401: jsonResponse("The caller must be signed in to download the desktop app.", unauthorizedSchema),
+        404: jsonResponse("The caller has no active organization membership.", notFoundSchema),
+        429: jsonResponse("Too many installer download attempts.", rateLimitedSchema),
+      },
+    }),
+    orgMemberRoute(),
+    async (c) => {
+      const platformResult = installPlatformParamSchema.safeParse({ platform: c.req.param("platform") })
+      if (!platformResult.success) {
+        return c.json({ error: "invalid_request", details: platformResult.error.issues }, 400)
+      }
+
+      const retryAfter = await enforceRateLimit(c.req.raw.headers, "install:artifact", INSTALL_ARTIFACT_RATE_LIMIT_MAX, INSTALL_LINK_RATE_LIMIT_WINDOW_MS)
+      if (retryAfter !== null) {
+        c.header("Retry-After", String(retryAfter))
+        return c.json({ error: "rate_limited", message: "Too many installer download attempts. Try again later." }, 429)
+      }
+
+      const payload = c.get("organizationContext")
+      return serveInstallerArtifact(
+        c,
+        installer,
+        platformResult.data.platform,
+        await installerReleaseTagForMetadata(payload.organization.metadata),
+      )
     },
   )
 
@@ -525,32 +643,7 @@ export function registerOrgInstallLinkRoutes<T extends { Variables: OrgRouteVari
         return c.json({ error: "install_link_not_found" }, 404)
       }
 
-      const platform = platformResult.data.platform
-      const distribution = managedDesktopDistribution()
-      const fileName = distribution === "cloud"
-        ? cloudDesktopReleaseAssetName(platform, resolved.installerReleaseTag)
-        : enterpriseDesktopReleaseAssetName(platform, resolved.installerReleaseTag)
-      if (!fileName) {
-        return c.json({ error: "invalid_request", details: [{ message: "Unsupported desktop platform." }] }, 400)
-      }
-
-      const configuredArtifact = await installer.resolveConfiguredArtifact(fileName)
-      if (configuredArtifact) {
-        c.header("content-type", installerContentType(platform))
-        c.header("content-length", String(configuredArtifact.size))
-        c.header("content-disposition", contentDisposition(fileName))
-        c.header("cache-control", "private, max-age=300")
-        return stream(c, async (body) => {
-          for await (const chunk of createReadStream(configuredArtifact.filePath)) {
-            await body.write(chunk)
-          }
-        })
-      }
-
-      const directUrl = distribution === "cloud"
-        ? installer.resolveCloudDirectUrl(platform, resolved.installerReleaseTag)
-        : installer.resolveDirectUrl(platform, resolved.installerReleaseTag)
-      return c.redirect(directUrl, 302)
+      return serveInstallerArtifact(c, installer, platformResult.data.platform, resolved.installerReleaseTag)
     },
   )
 }

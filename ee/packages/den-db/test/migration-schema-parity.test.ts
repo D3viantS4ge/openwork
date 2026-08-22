@@ -217,6 +217,7 @@ async function migrationOwnedTables() {
   const entries = await readdir(migrationsFolder)
   const tables = new Set<string>()
   const createTableRegex = /CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+`([^`]+)`/gi
+  const renameTableRegex = /RENAME\s+TABLE\s+`[^`]+`\s+TO\s+`([^`]+)`/gi
 
   for (const entry of entries) {
     if (!entry.endsWith(".sql")) {
@@ -228,6 +229,11 @@ async function migrationOwnedTables() {
     while (match) {
       tables.add(match[1])
       match = createTableRegex.exec(sql)
+    }
+    match = renameTableRegex.exec(sql)
+    while (match) {
+      tables.add(match[1])
+      match = renameTableRegex.exec(sql)
     }
   }
 
@@ -504,6 +510,50 @@ test("migrations replay to exported schema and config object version inserts", {
     await exportedConnection?.end().catch(() => {})
     await root.query(`DROP DATABASE IF EXISTS ${quoteIdentifier(migratedDatabase)}`).catch(() => {})
     await root.query(`DROP DATABASE IF EXISTS ${quoteIdentifier(exportedDatabase)}`).catch(() => {})
+    await root.end()
+  }
+})
+
+test("0076 migrates workflow table, enums, and legacy data without changing IDs", { skip: !mysqlUrl, timeout: 120_000 }, async () => {
+  if (!mysqlUrl) return
+
+  const root = await mysql.createConnection(mysqlUrl)
+  const database = scratchDatabaseName()
+  let connection: mysql.Connection | undefined
+
+  try {
+    await root.query(`CREATE DATABASE ${quoteIdentifier(database)}`)
+    connection = await mysql.createConnection(databaseUrlFor(mysqlUrl, database))
+    await connection.query("CREATE TABLE `codemode_run` (`id` varchar(64) NOT NULL, `organization_id` varchar(64) NOT NULL, `automation_run_id` varchar(64), `config_object_id` varchar(64), `finished_at` timestamp(3) NOT NULL, `created_at` timestamp(3) NOT NULL, `payload` text, PRIMARY KEY (`id`), KEY `codemode_run_org_created` (`organization_id`,`created_at`), KEY `codemode_run_automation` (`automation_run_id`), KEY `codemode_run_artifact_history` (`config_object_id`,`finished_at`))")
+    await connection.query("CREATE TABLE `config_object` (`id` varchar(64) NOT NULL, `object_type` enum('skill','agent','command','tool','mcp','hook','context','custom','script','app') NOT NULL, PRIMARY KEY (`id`))")
+    await connection.query("CREATE TABLE `connector_mapping` (`id` varchar(64) NOT NULL, `object_type` enum('skill','agent','command','tool','mcp','hook','context','custom','script','app') NOT NULL, PRIMARY KEY (`id`))")
+    await connection.query("INSERT INTO `codemode_run` (`id`, `organization_id`, `finished_at`, `created_at`, `payload`) VALUES ('cmr_01k28e8q8pf8r9sff9mhyqxved', 'org_legacy', NOW(3), NOW(3), 'retained')")
+    await connection.query("INSERT INTO `config_object` (`id`, `object_type`) VALUES ('cob_legacy', 'script')")
+    await connection.query("INSERT INTO `connector_mapping` (`id`, `object_type`) VALUES ('cmp_legacy', 'script')")
+
+    const migrationSql = await readFile(join(migrationsFolder, "0076_abnormal_mongu.sql"), "utf8")
+    await applyStatements(connection, splitSqlStatements(migrationSql.replace(/--> statement-breakpoint/g, "")))
+    await connection.query("INSERT INTO `workflow_run` (`id`, `organization_id`, `finished_at`, `created_at`, `payload`) VALUES ('wfr_01k28e8q8pf8r9sff9mhyqxvee', 'org_new', NOW(3), NOW(3), 'new')")
+
+    const tables = await queryRecords(connection, "SELECT table_name AS table_name FROM information_schema.TABLES WHERE table_schema = DATABASE() AND table_name IN ('codemode_run', 'workflow_run') ORDER BY table_name")
+    assert.deepEqual(tables.map((row) => row.table_name), ["workflow_run"])
+    const runs = await queryRecords(connection, "SELECT `id`, `payload` FROM `workflow_run` ORDER BY `id`")
+    assert.deepEqual(runs, [
+      { id: "cmr_01k28e8q8pf8r9sff9mhyqxved", payload: "retained" },
+      { id: "wfr_01k28e8q8pf8r9sff9mhyqxvee", payload: "new" },
+    ])
+    const objects = await queryRecords(connection, "SELECT `object_type` FROM `config_object` WHERE `id` = 'cob_legacy'")
+    const mappings = await queryRecords(connection, "SELECT `object_type` FROM `connector_mapping` WHERE `id` = 'cmp_legacy'")
+    assert.equal(objects[0]?.object_type, "workflow")
+    assert.equal(mappings[0]?.object_type, "workflow")
+    const enumColumns = await queryRecords(connection, "SELECT `table_name` AS `table_name`, `column_type` AS `column_type` FROM information_schema.COLUMNS WHERE table_schema = DATABASE() AND table_name IN ('config_object', 'connector_mapping') AND column_name = 'object_type' ORDER BY table_name")
+    for (const row of enumColumns) {
+      assert.match(stringField(row, "column_type"), /'workflow'/)
+      assert.match(stringField(row, "column_type"), /'script'/)
+    }
+  } finally {
+    await connection?.end().catch(() => {})
+    await root.query(`DROP DATABASE IF EXISTS ${quoteIdentifier(database)}`).catch(() => {})
     await root.end()
   }
 })

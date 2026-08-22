@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { timed } from "@openwork/timeline";
-import { attachSurface, describeAppState, dumpScreenState, isInteractive, probeAppState } from "@openwork/cdp";
+import { attachSurface, describeAppState, dumpScreenState, isInteractive, probeAppStateOnSurface } from "@openwork/cdp";
 import { resolveHost } from "./resolve.ts";
 import type { AppStateProbe, AppSurfaceState, AttachedSurface, Surface, SurfaceHandle } from "@openwork/cdp";
 import type { Host } from "./types.ts";
@@ -77,7 +77,7 @@ async function waitForReadiness(app: Surface, timeoutMs: number): Promise<AppRea
   let last: AppStateProbe = { controlReady: false, transitional: null, surface: null, workspaceId: null, route: "", text: "" };
   while (Date.now() < deadline) {
     try {
-      last = await probeAppState(app.client, { timeoutMs: Math.min(8_000, Math.max(0, deadline - Date.now())) });
+      last = await probeAppStateOnSurface(app, { timeoutMs: Math.min(8_000, Math.max(1, deadline - Date.now())) });
       if (isInteractive(last) && last.surface) {
         return { state: last.surface, workspaceId: last.workspaceId, route: last.route };
       }

@@ -7,7 +7,6 @@ import { IntegrationIcon } from "./integration-icon";
 
 export const GOOGLE_WORKSPACE_QUICK_ADD_ID = "google-workspace";
 export const MICROSOFT_365_QUICK_ADD_ID = "microsoft-365";
-export const TELEGRAM_QUICK_ADD_ID = "telegram";
 
 const SUITE_CONNECTORS = [
   {
@@ -21,12 +20,6 @@ const SUITE_CONNECTORS = [
     displayName: "Microsoft 365",
     description: "Outlook mail, calendar, and OneDrive. Each teammate connects their own work account.",
     simpleIconSlug: "microsoft",
-  },
-  {
-    id: TELEGRAM_QUICK_ADD_ID,
-    displayName: "Telegram",
-    description: "Pair a private Telegram chat to a cloud worker for tasks and replies.",
-    simpleIconSlug: "telegram",
   },
 ];
 
@@ -75,7 +68,6 @@ function GroupHeader({ children }: { children: string }) {
 export function ConnectorQuickAddGrid({
   connections,
   presets,
-  telegramConnected,
   onSelect,
   filter,
   onManage,
@@ -84,7 +76,6 @@ export function ConnectorQuickAddGrid({
 }: {
   connections: ExternalMcpConnection[];
   presets: ExternalMcpPreset[];
-  telegramConnected: boolean;
   onSelect: (id: string) => void;
   filter: string;
   onManage: (connectionId: string) => void;
@@ -113,18 +104,12 @@ export function ConnectorQuickAddGrid({
           <GroupHeader>From your workspace suite</GroupHeader>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {suites.map((suite) => {
-              const showManage = suite.id === MICROSOFT_365_QUICK_ADD_ID
-                ? microsoftConfigured
-                : suite.id === TELEGRAM_QUICK_ADD_ID && telegramConnected;
+              const showManage = suite.id === MICROSOFT_365_QUICK_ADD_ID && microsoftConfigured;
               return (
                 <button
                   key={suite.id}
                   type="button"
-                  data-testid={suite.id === MICROSOFT_365_QUICK_ADD_ID
-                    ? "quick-add-microsoft-365"
-                    : suite.id === TELEGRAM_QUICK_ADD_ID
-                      ? "quick-add-telegram"
-                      : undefined}
+                  data-testid={suite.id === MICROSOFT_365_QUICK_ADD_ID ? "quick-add-microsoft-365" : undefined}
                   onClick={() => onSelect(suite.id)}
                   className="rounded-2xl border border-gray-100 bg-white p-3.5 text-left transition hover:border-gray-300 hover:shadow-sm"
                 >

@@ -6,8 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { ArrowRight, Check, ChevronDown, ChevronRight, RefreshCw, Search, Sparkles, Star, X } from "lucide-react";
-import { useNavigate } from "react-router";
+import { Check, ChevronDown, ChevronRight, RefreshCw, Search, Star } from "lucide-react";
 
 import {
   Dialog,
@@ -28,14 +27,8 @@ import { ProviderIcon } from "../../../design-system/provider-icon";
 import { useDenAuth } from "../../cloud/den-auth-provider";
 import { usePlatform } from "../../../kernel/platform";
 import {
-  getOpenWorkModelsActionUrl,
-  hasOpenWorkModelsProvider,
-  hideOpenWorkModelsPromo,
-  useOpenWorkModelsPromoEligibility,
-  isOpenWorkModelsPromoHidden,
   OPENWORK_MODELS_PROVIDER_ID,
   OPENWORK_MODELS_PROVIDER_NAME,
-  openWorkModelsPromoChangedEvent,
 } from "../../cloud/openwork-models-promo";
 
 export const MODEL_PICKER_DEFAULT_SUBTITLE = "Select a model for this session.";
@@ -61,7 +54,7 @@ export type ModelPickerModalProps = {
   onToggleProvider?: (providerId: string, enabled: boolean) => void;
   onOpenSettings: () => void;
   onClose: (options?: { restorePromptFocus?: boolean }) => void;
-  /** Den entitlement present; used to avoid a false Subscribe CTA while models sync. */
+  /** Den entitlement present. Picker no longer upsells here; callers still pass it. */
   openWorkModelsEntitled?: boolean;
   /** The server is waiting to reload this workspace with OpenWork Models. */
   openWorkModelsSyncing?: boolean;
@@ -122,12 +115,9 @@ export function resolveModelPickerEmptyState(input: {
 export function ModelPickerModal(props: ModelPickerModalProps) {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set());
-  const [promoHidden, setPromoHidden] = useState(isOpenWorkModelsPromoHidden);
   const [refreshingOrganizationModels, setRefreshingOrganizationModels] = useState(false);
   const denAuth = useDenAuth();
-  const navigate = useNavigate();
   const platform = usePlatform();
-  const openWorkModelsPromoEligible = useOpenWorkModelsPromoEligibility();
   const organizationModelsSettingsUrl = props.organizationModelsSettingsUrl;
   const organizationProviderLabel = useMemo(
     () => readDenSettings().activeOrgName?.trim() || t("settings.provider_source_organization"),
@@ -145,12 +135,6 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
       props.setQuery("");
     }
   }, [props.open]);
-
-  useEffect(() => {
-    const handlePromoChanged = () => setPromoHidden(isOpenWorkModelsPromoHidden());
-    window.addEventListener(openWorkModelsPromoChangedEvent, handlePromoChanged);
-    return () => window.removeEventListener(openWorkModelsPromoChangedEvent, handlePromoChanged);
-  }, []);
 
   // Focus search
   useEffect(() => {
@@ -255,34 +239,6 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
     });
   }, []);
 
-  const openWorkModelsAvailable = useMemo(
-    () => hasOpenWorkModelsProvider(props.options.map((option) => option.providerID)),
-    [props.options],
-  );
-  const showOpenWorkModelsPromo = useMemo(
-    () =>
-      openWorkModelsPromoEligible &&
-      !promoHidden &&
-      !openWorkModelsAvailable &&
-      !props.openWorkModelsEntitled,
-    [openWorkModelsPromoEligible, openWorkModelsAvailable, promoHidden, props.openWorkModelsEntitled],
-  );
-
-  const openOpenWorkModels = useCallback(() => {
-    props.onClose();
-    if (!denAuth.isSignedIn) {
-      navigate("/settings/cloud-account");
-    }
-    window.setTimeout(() => {
-      platform.openLink(getOpenWorkModelsActionUrl(denAuth.isSignedIn));
-    }, 0);
-  }, [denAuth.isSignedIn, navigate, platform, props.onClose]);
-
-  const hideOpenWorkModels = useCallback(() => {
-    hideOpenWorkModelsPromo();
-    setPromoHidden(true);
-  }, []);
-
   const handleSelect = useCallback(
     (opt: ModelOption) => props.onSelect({ providerID: opt.providerID, modelID: opt.modelID }),
     [props.onSelect],
@@ -358,39 +314,6 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
                   </div>
                 </div>
               </div>
-            </div>
-          ) : null}
-
-          {showOpenWorkModelsPromo ? (
-            <div className="mb-3 flex shrink-0 items-center overflow-hidden rounded-2xl border border-blue-6/60 bg-blue-2/60 shadow-[0_12px_30px_-20px_rgba(var(--dls-accent-rgb),0.45)]">
-              <button
-                type="button"
-                className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-blue-3/70"
-                onClick={openOpenWorkModels}
-              >
-                <ProviderIcon providerId={OPENWORK_MODELS_PROVIDER_ID} providerName={OPENWORK_MODELS_PROVIDER_NAME} size={18} className="shrink-0 text-blue-11" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5 text-[13px] font-medium text-dls-text">
-                    <Sparkles className="size-3.5 text-blue-11" />
-                    <span>{OPENWORK_MODELS_PROVIDER_NAME}</span>
-                  </div>
-                  <div className="truncate text-[11px] text-dls-secondary">
-                    {denAuth.isSignedIn ? "Subscribe to use hosted frontier models in this workspace." : "Sign in to unlock hosted frontier models for your team."}
-                  </div>
-                </div>
-                <span className="flex shrink-0 items-center gap-1 rounded-full border border-blue-6 bg-blue-3 px-2 py-0.5 text-[11px] font-medium text-blue-11">
-                  {denAuth.isSignedIn ? "Subscribe" : "Sign in"}
-                  <ArrowRight className="size-3" />
-                </span>
-              </button>
-              <button
-                type="button"
-                className="flex size-9 shrink-0 items-center justify-center border-l border-blue-6/60 text-blue-11 transition-colors hover:bg-blue-3/70"
-                onClick={hideOpenWorkModels}
-                aria-label="Hide OpenWork Models"
-              >
-                <X className="size-3.5" />
-              </button>
             </div>
           ) : null}
 

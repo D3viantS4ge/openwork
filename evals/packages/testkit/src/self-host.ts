@@ -60,9 +60,15 @@ function spawnService(
   logPath: string,
 ): SpawnedService {
   const logFd = openSync(logPath, "a");
-  const child = spawn("pnpm", [script], {
+  const prepared = process.env.OPENWORK_EVAL_DEN_RUNTIME_PREPARED === "1";
+  const args = prepared
+    ? label === "den-api"
+      ? ["--filter", "@openwork-ee/den-api", "exec", "tsx", "src/main.ts"]
+      : ["--filter", "@openwork-ee/den-web", "exec", "next", "start", "--hostname", "127.0.0.1", "--port", String(port)]
+    : [script];
+  const child = spawn("pnpm", args, {
     cwd: REPO_ROOT,
-    env,
+    env: prepared && label === "den-api" ? { ...env, PORT: String(port) } : env,
     detached: true,
     stdio: ["ignore", logFd, logFd],
   });
@@ -125,16 +131,25 @@ async function waitForAuthProbe(ref: DenRef, service: SpawnedService): Promise<v
 // mirrored from server.ts (keep in sync)
 async function runDbPush(databaseUrl: string): Promise<void> {
   try {
-    await execFileAsync("pnpm", ["--filter", "@openwork-ee/den-db", "db:push"], {
-      cwd: REPO_ROOT,
-      env: {
-        ...process.env,
-        DATABASE_URL: databaseUrl,
-        DEN_DB_ENCRYPTION_KEY: DATABASE_ENCRYPTION_KEY,
-      },
-      maxBuffer: 16 * 1024 * 1024,
-      timeout: 180_000,
-    });
+    const commands = process.env.OPENWORK_EVAL_DEN_RUNTIME_PREPARED === "1"
+      ? [
+          ["--filter", "@openwork-ee/den-db", "exec", "node", "--import", "tsx", "./node_modules/drizzle-kit/bin.cjs", "push", "--config", "drizzle.config.ts"],
+          ["--filter", "@openwork-ee/den-db", "exec", "node", "--import", "tsx", "scripts/ensure-fulltext-indexes.ts"],
+          ["--filter", "@openwork-ee/den-db", "exec", "node", "--import", "tsx", "scripts/ensure-schema-repairs.ts"],
+        ]
+      : [["--filter", "@openwork-ee/den-db", "db:push"]];
+    for (const args of commands) {
+      await execFileAsync("pnpm", args, {
+        cwd: REPO_ROOT,
+        env: {
+          ...process.env,
+          DATABASE_URL: databaseUrl,
+          DEN_DB_ENCRYPTION_KEY: DATABASE_ENCRYPTION_KEY,
+        },
+        maxBuffer: 16 * 1024 * 1024,
+        timeout: 180_000,
+      });
+    }
   } catch (error) {
     const stderr = typeof error === "object" && error !== null && typeof Reflect.get(error, "stderr") === "string"
       ? Reflect.get(error, "stderr")

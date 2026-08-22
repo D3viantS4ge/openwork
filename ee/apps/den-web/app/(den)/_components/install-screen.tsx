@@ -1,19 +1,15 @@
 "use client";
 
 import { detectPlatform, DownloadPlatformGrid, type DetectedPlatform, type DownloadPlatformGroup, type DownloadPlatformOption } from "@openwork/ui/react";
-import { ChevronDown, Download, ShieldCheck } from "lucide-react";
+import { Check, ChevronDown, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { requestJson } from "../_lib/den-flow";
-import {
-  getDesktopHandoffGrant,
-  getDesktopHandoffOpenworkUrl,
-  rememberDesktopHandoffGrant,
-} from "../_lib/desktop-handoff";
 import { getInstallConfigErrorMessage } from "../_lib/install-errors";
-import { buildInstallDownloadHref, type InstallPlatform, installerFileName } from "../_lib/install-download";
+import { LINK_STEP, parseGuideStep, type GuideStep } from "../_lib/install-guide";
+import { buildAuthenticatedInstallDownloadHref, buildInstallDownloadHref, type InstallPlatform, installerFileName } from "../_lib/install-download";
 import { isMobileUserAgent } from "../_lib/platform";
-import { useDesktopHandoffStatus } from "../_lib/use-desktop-handoff-status";
+import { InstallVisual } from "./install-visual";
 import { OnboardingShell } from "./onboarding-shell";
 import { OrganizationBrandIdentity } from "./organization-brand-identity";
 
@@ -25,16 +21,13 @@ type InstallConfig = {
   requireSignin: boolean;
   logoUrl: string | null;
   iconUrl: string | null;
-  connectUrl: string | null;
-  connectExpiresAt: string | null;
-  activationUrl: string;
-  activationExpiresAt: string;
   desktopVersion: string;
   distribution: "cloud" | "enterprise";
 };
 
 const RETURN_TO_OPENWORK_URL = "openwork://open";
 const INSTALL_PLATFORMS: InstallPlatform[] = ["mac-arm64", "mac-x64", "win-x64", "linux-x64", "linux-arm64"];
+
 
 type InstallerOs = "macos" | "windows" | "linux";
 
@@ -128,10 +121,6 @@ function parseInstallConfig(value: unknown): InstallConfig | null {
   const requireSignin = value.requireSignin;
   const logoUrl = value.logoUrl;
   const iconUrl = value.iconUrl ?? null;
-  const connectUrl = value.connectUrl ?? null;
-  const connectExpiresAt = value.connectExpiresAt ?? null;
-  const activationUrl = typeof value.activationUrl === "string" ? value.activationUrl.trim() : "";
-  const activationExpiresAt = typeof value.activationExpiresAt === "string" ? value.activationExpiresAt : "";
   const desktopVersion = typeof value.desktopVersion === "string" ? value.desktopVersion.trim() : "";
   const distribution = value.distribution;
 
@@ -144,16 +133,8 @@ function parseInstallConfig(value: unknown): InstallConfig | null {
   if (iconUrl !== null && (typeof iconUrl !== "string" || !isUrl(iconUrl))) {
     return null;
   }
-  if (connectUrl !== null && typeof connectUrl !== "string") {
-    return null;
-  }
-  if (connectExpiresAt !== null && (typeof connectExpiresAt !== "string" || Number.isNaN(Date.parse(connectExpiresAt)))) {
-    return null;
-  }
   if (
-    !isUrl(activationUrl)
-    || Number.isNaN(Date.parse(activationExpiresAt))
-    || !desktopVersion
+    !desktopVersion
     || (distribution !== "cloud" && distribution !== "enterprise")
   ) {
     return null;
@@ -167,22 +148,22 @@ function parseInstallConfig(value: unknown): InstallConfig | null {
     requireSignin,
     logoUrl,
     iconUrl,
-    connectUrl,
-    connectExpiresAt,
-    activationUrl,
-    activationExpiresAt,
     desktopVersion,
     distribution,
   };
 }
 
-async function fetchInstallConfig(token: string) {
+async function fetchInstallConfig(token: string | null) {
+  const path = token ? `/v1/install-config?token=${encodeURIComponent(token)}` : "/v1/me/install-config";
   const { response, payload } = await requestJson(
-    `/v1/install-config?token=${encodeURIComponent(token)}`,
+    path,
     { method: "GET" },
     12000,
   );
   if (!response.ok) {
+    if (!token && response.status === 401) {
+      throw new Error("Sign in to your Den portal to install OpenWork.");
+    }
     throw new Error(getInstallConfigErrorMessage(payload, response.status));
   }
   const parsed = parseInstallConfig(payload);
@@ -192,29 +173,24 @@ async function fetchInstallConfig(token: string) {
   return parsed;
 }
 
-function installHref(config: InstallConfig, platform: InstallPlatform, token: string) {
-  return buildInstallDownloadHref(config.apiUrl, platform, token);
+function installHref(config: InstallConfig, platform: InstallPlatform, token: string | null) {
+  return token
+    ? buildInstallDownloadHref(config.apiUrl, platform, token)
+    : buildAuthenticatedInstallDownloadHref(config.apiUrl, platform);
 }
 
 type StepState = "complete" | "active" | "pending";
 
-const STEP_SHELL: Record<StepState, string> = {
-  complete: "border-[#e7eaef] bg-[#fafbfc]",
-  active: "border-[#c8d6f5] bg-[#f8faff]",
-  pending: "border-[#e1e4e8] bg-[#f7f8fa]",
-};
-
 const STEP_BADGE: Record<StepState, string> = {
-  complete: "border-[1.5px] border-[#c9cfd7] bg-white text-[#7a828e]",
+  complete: "bg-emerald-50 text-emerald-600",
   active: "bg-[#101828] text-white",
-  pending: "border-[1.5px] border-[#101828] text-[#101828]",
+  pending: "bg-slate-100 text-slate-400",
 };
 
 function InstallStep({
   index,
   state,
   title,
-  description,
   expanded,
   onExpand,
   testId,
@@ -222,59 +198,29 @@ function InstallStep({
 }: {
   index: number;
   state: StepState;
-  title: string;
-  description: string;
+  title: ReactNode;
   expanded: boolean;
   onExpand: () => void;
   testId: string;
   children: ReactNode;
 }) {
   return (
-    <li className={`rounded-[18px] border ${STEP_SHELL[state]}`} data-state={state} data-testid={testId}>
+    <li className="border-b border-slate-100 last:border-b-0" data-state={state} data-testid={testId}>
       <button
         type="button"
-        className="flex w-full items-start gap-4 p-5 text-left disabled:cursor-default sm:px-7 sm:py-6"
+        className="flex w-full items-center gap-3.5 px-0 py-4 text-left disabled:cursor-default sm:py-[1.125rem]"
         aria-expanded={expanded}
         disabled={state === "pending"}
         onClick={onExpand}
       >
-        <span className={`grid size-8 shrink-0 place-items-center rounded-full text-[13px] font-semibold ${STEP_BADGE[state]}`} aria-hidden="true">
-          {state === "complete" ? "✓" : index}
+        <span className={`grid size-7 shrink-0 place-items-center rounded-full text-xs font-semibold ${STEP_BADGE[state]}`} aria-hidden="true">
+          {state === "complete" ? <Check className="size-3.5" strokeWidth={2.5} /> : index}
         </span>
-        <span className="grid grow gap-1">
-          <span className={`text-base font-semibold ${state === "complete" ? "text-[#667085]" : "text-[#101828]"}`}>{title}</span>
-          {expanded ? <span className="text-[13px] leading-5 text-[#60646c]">{description}</span> : null}
-        </span>
-        <ChevronDown className={`mt-0.5 size-5 shrink-0 text-[#667085] ${expanded ? "rotate-180" : ""}`} aria-hidden="true" />
+        <span className={`grow text-[15px] font-semibold tracking-[-0.01em] ${state === "complete" ? "text-slate-400" : "text-slate-950"}`}>{title}</span>
+        <ChevronDown className={`size-4 shrink-0 text-slate-300 transition-transform ${expanded ? "rotate-180" : ""}`} aria-hidden="true" />
       </button>
-      {expanded ? <div className="grid gap-4 px-5 pb-5 sm:pb-6 sm:pl-[4.25rem] sm:pr-7">{children}</div> : null}
+      {expanded ? <div className="grid gap-3.5 pb-6 pl-[2.625rem]">{children}</div> : null}
     </li>
-  );
-}
-
-function CopyLinkRow({
-  value,
-  copied,
-  onCopy,
-  testId,
-}: {
-  value: string;
-  copied: boolean;
-  onCopy: () => void;
-  testId?: string;
-}) {
-  return (
-    <div className="flex items-center gap-2 rounded-[10px] border border-[#e1e4e8] bg-[#fafbfc] px-3 py-2.5" data-testid={testId}>
-      <input
-        className="min-w-0 grow bg-transparent text-[11px] text-[#344054] outline-none"
-        value={value}
-        readOnly
-        onFocus={(event) => event.currentTarget.select()}
-      />
-      <button type="button" className="shrink-0 text-[11px] font-semibold text-[#101828] hover:underline" onClick={onCopy}>
-        {copied ? "Copied" : "Copy"}
-      </button>
-    </div>
   );
 }
 
@@ -292,18 +238,12 @@ export function InstallScreen() {
   const [downloadPlatform, setDownloadPlatform] = useState<InstallPlatform | null>(null);
   const [detected, setDetected] = useState<DetectedPlatform | null>(null);
   const [currentLink, setCurrentLink] = useState("");
-  const requestedStep = searchParams.get("step");
-  const initialStep = requestedStep === "3" ? 3 : requestedStep === "2" ? 2 : 1;
-  const [guideStep, setGuideStep] = useState<1 | 2 | 3>(initialStep);
-  const [expandedStep, setExpandedStep] = useState<1 | 2 | 3>(initialStep);
-  const [connecting, setConnecting] = useState(false);
+  const initialStep = parseGuideStep(searchParams.get("step"));
+  const [guideStep, setGuideStep] = useState<GuideStep>(initialStep);
+  const [expandedStep, setExpandedStep] = useState<GuideStep>(initialStep);
   const [connectError, setConnectError] = useState<string | null>(null);
-  const [desktopGrant, setDesktopGrant] = useState<string | null>(null);
-  const [connectLink, setConnectLink] = useState("");
-  const [connectCopied, setConnectCopied] = useState(false);
-  const [returnCopied, setReturnCopied] = useState(false);
+  const [addressCopied, setAddressCopied] = useState(false);
   const downloadStartedTimer = useRef<number | null>(null);
-  const handoffStatus = useDesktopHandoffStatus(desktopGrant);
 
   useEffect(() => {
     setIsMobile(isMobileUserAgent());
@@ -321,16 +261,10 @@ export function InstallScreen() {
     let cancelled = false;
 
     async function loadConfig() {
-      if (!token) {
-        setError("This install link is missing its token. Ask your organization admin for a fresh link.");
-        setBusy(false);
-        return;
-      }
-
       setBusy(true);
       setError(null);
       try {
-        const parsed = await fetchInstallConfig(token);
+        const parsed = await fetchInstallConfig(token || null);
         if (cancelled) {
           return;
         }
@@ -398,6 +332,8 @@ export function InstallScreen() {
     return Object.fromEntries(INSTALL_PLATFORMS.map((platform) => [installHref(config, platform, token), platform]));
   }, [config, token]);
 
+
+
   async function copyCurrentLink() {
     try {
       await navigator.clipboard.writeText(currentLink || window.location.href);
@@ -408,11 +344,34 @@ export function InstallScreen() {
     }
   }
 
+  const workspaceAddress = (() => {
+    if (!currentLink) return "";
+    try {
+      return new URL(currentLink).origin;
+    } catch {
+      return "";
+    }
+  })();
+
+  async function copyWorkspaceAddress() {
+    try {
+      await navigator.clipboard.writeText(workspaceAddress);
+      setAddressCopied(true);
+      window.setTimeout(() => setAddressCopied(false), 1800);
+    } catch {
+      setConnectError("Could not copy automatically. Select the address and copy it manually.");
+    }
+  }
+
   function advanceGuide(nextStep: 2 | 3) {
     setGuideStep(nextStep);
     setExpandedStep(nextStep);
     const url = new URL(window.location.href);
-    url.searchParams.set("step", String(nextStep));
+    if (token) {
+      url.searchParams.set("step", String(nextStep));
+    } else {
+      url.search = "";
+    }
     window.history.replaceState(null, "", url);
   }
 
@@ -431,98 +390,9 @@ export function InstallScreen() {
     }, 5000);
   }
 
-  async function beginConnect() {
-    setConnecting(true);
-    setConnectError(null);
-    try {
-      const { response, payload } = await requestJson(
-        "/v1/auth/desktop-handoff",
-        {
-          method: "POST",
-          body: JSON.stringify({ desktopScheme: "openwork" }),
-        },
-        12000,
-      );
-      if (!response.ok) {
-        throw new Error(response.status === 401
-          ? "Sign in to your Den portal before activating OpenWork Enterprise."
-          : `Could not create an activation link (${response.status}).`);
-      }
-      const nextConnectLink = getDesktopHandoffOpenworkUrl(payload);
-      const grant = getDesktopHandoffGrant(payload, nextConnectLink);
-      if (!nextConnectLink || !grant) {
-        throw new Error("Den did not return a valid OpenWork Enterprise activation link.");
-      }
-      rememberDesktopHandoffGrant(grant);
-      setDesktopGrant(grant);
-      setConnectLink(nextConnectLink);
-      advanceGuide(3);
-      window.location.assign(nextConnectLink);
-    } catch (connectFailure) {
-      setConnectError(connectFailure instanceof Error ? connectFailure.message : "Could not open OpenWork. Try again.");
-    } finally {
-      setConnecting(false);
-    }
-  }
-
-  async function copyConnectionLink() {
-    try {
-      await navigator.clipboard.writeText(connectLink);
-      setConnectCopied(true);
-      window.setTimeout(() => setConnectCopied(false), 1800);
-    } catch {
-      setConnectError("Could not copy automatically. Select the OpenWork link and copy it manually.");
-    }
-  }
-
-  async function prepareAndCopyConnectionLink() {
-    setConnecting(true);
-    setConnectError(null);
-    try {
-      const { response, payload } = await requestJson(
-        "/v1/auth/desktop-handoff",
-        {
-          method: "POST",
-          body: JSON.stringify({ desktopScheme: "openwork" }),
-        },
-        12000,
-      );
-      if (!response.ok) {
-        throw new Error(response.status === 401
-          ? "Sign in to your Den portal before creating an activation link."
-          : `Could not create an activation link (${response.status}).`);
-      }
-      const nextConnectLink = getDesktopHandoffOpenworkUrl(payload);
-      const grant = getDesktopHandoffGrant(payload, nextConnectLink);
-      if (!nextConnectLink || !grant) {
-        throw new Error("Den did not return a valid OpenWork Enterprise activation link.");
-      }
-      rememberDesktopHandoffGrant(grant);
-      setDesktopGrant(grant);
-      setConnectLink(nextConnectLink);
-      await navigator.clipboard.writeText(nextConnectLink);
-      setConnectCopied(true);
-      window.setTimeout(() => setConnectCopied(false), 1800);
-    } catch (copyFailure) {
-      setConnectError(copyFailure instanceof Error ? copyFailure.message : "Could not copy a fresh OpenWork link.");
-    } finally {
-      setConnecting(false);
-    }
-  }
-
-  async function copyReturnLink() {
-    try {
-      await navigator.clipboard.writeText(RETURN_TO_OPENWORK_URL);
-      setReturnCopied(true);
-      window.setTimeout(() => setReturnCopied(false), 1800);
-    } catch {
-      setConnectError("Could not copy automatically. Select the OpenWork link and copy it manually.");
-    }
-  }
-
   if (busy) {
     return (
-      <OnboardingShell state="install-loading" width="wide">
+      <OnboardingShell state="install-loading" width="wide" background="surface">
         <section className="grid gap-4 rounded-[1.75rem] border border-slate-200/80 bg-white p-6 md:p-8" data-testid="install-page">
           <p className="den-eyebrow">OpenWork Desktop</p>
           <h1 className="den-title-lg">Loading your install link.</h1>
@@ -534,7 +404,7 @@ export function InstallScreen() {
 
   if (!config) {
     return (
-      <OnboardingShell state="install-error" width="wide">
+      <OnboardingShell state="install-error" width="wide" background="surface">
         <section className="grid gap-6 rounded-[1.75rem] border border-slate-200/80 bg-white p-6 md:p-8" data-testid="install-page">
           <div className="grid gap-2">
             <p className="den-eyebrow">OpenWork Desktop</p>
@@ -548,7 +418,7 @@ export function InstallScreen() {
 
   if (config.distribution === "cloud") {
     return (
-      <OnboardingShell state="install" width="full">
+      <OnboardingShell state="install" width="full" background="surface">
         <section data-testid="install-page">
           <div className="grid gap-6 rounded-[1.75rem] border border-[#e7eaef] bg-[#fcfcfd] p-5 text-center sm:p-6 md:p-8" data-testid="install-card">
             <div className="grid justify-items-center gap-3">
@@ -587,25 +457,23 @@ export function InstallScreen() {
   const guidance = openGuidance(installerOsFor(downloadPlatform, detected), installerFile);
 
   return (
-    <OnboardingShell state="install" width="full">
+    <OnboardingShell state="install" width="enterprise" background="surface">
       <section data-testid="install-page">
-        <div className="grid gap-6 rounded-[1.75rem] border border-[#e7eaef] bg-[#fcfcfd] p-5 text-center sm:p-6 md:p-8" data-testid="install-card">
-          <div className="grid justify-items-center gap-3">
-            <h1 className="m-0 grid max-w-[22ch] gap-1 text-[2rem] font-semibold leading-[1.04] tracking-[-0.05em] text-slate-950 sm:text-[2.4rem]">
-              <span>Download OpenWork Enterprise</span>
-              <span className="flex min-w-0 flex-wrap items-center justify-center gap-x-[0.18em] gap-y-1">
-                <span>for</span>
-                <OrganizationBrandIdentity
-                  organizationName={config.clientName}
-                  brand={{ appName: config.appName, logoUrl: config.logoUrl, iconUrl: config.iconUrl }}
-                />
-              </span>
+        <div className="grid gap-2 rounded-[1.75rem] border border-slate-200/80 bg-white p-6 text-left sm:p-8 md:px-10 md:py-9" data-testid="install-card">
+          <div className="grid justify-items-start gap-2 border-b border-slate-100 pb-6">
+            <span className="text-[13px] font-medium text-slate-500">
+              <OrganizationBrandIdentity
+                organizationName={config.clientName}
+                brand={{ appName: config.appName, logoUrl: config.logoUrl, iconUrl: config.iconUrl }}
+              />
+            </span>
+            <h1 className="m-0 text-[1.5rem] font-semibold leading-tight tracking-[-0.03em] text-slate-950 sm:text-[1.7rem]">
+              Set up OpenWork Enterprise
             </h1>
-            <p className="den-copy">Complete one step at a time. Select any step to expand or review.</p>
           </div>
 
         {isMobile ? (
-          <div className="den-frame-inset grid gap-3 rounded-[1.5rem] p-5" data-testid="install-mobile-note">
+          <div className="grid gap-3 border-t border-slate-200 pt-5" data-testid="install-mobile-note">
             <p className="m-0 text-base font-medium text-[var(--dls-text-primary)]">{config.appName} runs on your computer.</p>
             <p className="den-copy">Open this link on your Mac, Windows, or Linux machine. You can also copy it and send it to yourself.</p>
             <button type="button" className="den-button-secondary w-full sm:w-auto" onClick={() => void copyCurrentLink()}>
@@ -613,12 +481,11 @@ export function InstallScreen() {
             </button>
           </div>
         ) : (
-          <ol className="grid gap-3 text-left" data-testid="install-guide">
+          <ol className="grid text-left" data-testid="install-guide">
             <InstallStep
               index={1}
               state={guideStep > 1 ? "complete" : "active"}
-              title="Download OpenWork Enterprise"
-              description="This is the signed desktop app itself. Den sends your browser directly to the matching GitHub release asset."
+              title="Download"
               expanded={expandedStep === 1}
               onExpand={() => setExpandedStep(1)}
               testId="install-guide-step-download"
@@ -627,27 +494,28 @@ export function InstallScreen() {
                     groups={downloadGroups}
                     recommendedTestId="install-download-primary"
                     onDownload={(option: DownloadPlatformOption) => beginDownload(option.label, option.href)}
+                    variant="flat"
                   />
                   <button
                     type="button"
                     className="w-fit text-sm font-medium text-slate-600 underline-offset-4 hover:text-slate-950 hover:underline"
-                    onClick={() => advanceGuide(2)}
+                    onClick={() => advanceGuide(LINK_STEP)}
                     data-testid="install-skip-download"
                   >
-                    I already have OpenWork Enterprise
+                    Already installed? Skip to step 3
                   </button>
                   {downloadState !== "idle" ? (
-                    <div className="den-frame-inset grid gap-2 rounded-[1.25rem] p-4" aria-live="polite" data-testid="install-download-status">
+                    <div className="grid gap-2 rounded-xl border border-slate-100 bg-slate-50 p-4" aria-live="polite" data-testid="install-download-status">
                       {downloadState === "preparing" ? (
                         <>
                           <span className="size-5 animate-spin rounded-full border-2 border-[var(--dls-border-strong)] border-t-[var(--dls-accent)]" aria-hidden="true" />
-                          <p className="m-0 font-medium text-[var(--dls-text-primary)]">Preparing your {downloadLabel} download...</p>
-                          <p className="den-copy">The first download may take up to a minute. Your browser will begin downloading when it is ready.</p>
+                          <p className="m-0 text-sm font-medium text-slate-950">Preparing your {downloadLabel} download...</p>
+                          <p className="m-0 text-[13px] leading-5 text-slate-500">The first download may take up to a minute. Your browser will begin downloading when it is ready.</p>
                         </>
                       ) : (
                         <>
-                          <p className="m-0 font-medium text-[var(--dls-text-primary)]">Download started</p>
-                          <p className="den-copy">Your browser is preparing the file. If it does not appear, try the download again.</p>
+                          <p className="m-0 text-sm font-medium text-slate-950">Download started</p>
+                          <p className="m-0 text-[13px] leading-5 text-slate-500">Your browser is preparing the file. If it does not appear, try the download again.</p>
                           <a className="den-button-secondary w-fit" href={downloadHref} onClick={() => beginDownload(downloadLabel, downloadHref)}>
                             Try again
                           </a>
@@ -660,146 +528,71 @@ export function InstallScreen() {
             <InstallStep
               index={2}
               state={guideStep === 2 ? "active" : guideStep > 2 ? "complete" : "pending"}
-              title="Continue on your computer"
-              description={guideStep < 2
-                ? "Only continue once OpenWork Enterprise is installed and open on this computer."
-                : "Open the downloaded app. It will wait at the pixel-dither activation screen."}
+              title="Install and open it"
               expanded={expandedStep === 2 && guideStep >= 2}
               onExpand={() => setExpandedStep(2)}
               testId="install-guide-step-open"
             >
-                  <div className="grid content-start gap-3 rounded-[14px] border border-[#e1e4e8] bg-white p-[18px]">
-                      <p className="m-0 text-xs font-semibold uppercase tracking-[0.04em] text-[#667085]">Next, on your computer</p>
-                      <p className="m-0 text-base font-semibold text-[#101828]">Open the file you just downloaded</p>
+                  <div className="grid content-start gap-3">
+                      <InstallVisual
+                        os={installerOsFor(downloadPlatform, detected)}
+                        appName={config.appName}
+                        iconUrl={config.iconUrl}
+                      />
 
-                      {installerFile ? (
-                        <div className="flex items-center gap-2.5 rounded-[10px] border border-[#e1e4e8] bg-[#fafbfc] px-3 py-2.5" data-testid="install-file-chip">
-                          <span className="grid size-[30px] shrink-0 place-items-center rounded-lg border border-[#e1e4e8] bg-white" aria-hidden="true">
-                            <Download className="size-[15px] text-[#344054]" />
-                          </span>
-                          <span className="grid min-w-0 gap-0.5">
-                            <span className="truncate text-[13px] font-semibold text-[#101828]">{installerFile}</span>
-                            <span className="text-xs text-[#60646c]">Saved in your Downloads folder</span>
-                          </span>
-                        </div>
-                      ) : null}
-
-                      <ol className="m-0 grid list-none gap-2.5 p-0">
-                        {guidance.actions.map((action, index) => (
-                          <li key={action} className="flex items-start gap-2.5">
-                            <span className="grid size-5 shrink-0 place-items-center rounded-full bg-[#eef1f5] text-xs font-semibold text-[#344054]" aria-hidden="true">
-                              {index + 1}
-                            </span>
-                            <span className="text-[13px] leading-5 text-[#344054]">{action}</span>
-                          </li>
-                        ))}
-                      </ol>
+                      <p className="m-0 max-w-xl text-sm leading-6 text-slate-600">{guidance.actions.join(" ")}</p>
 
                       {guidance.trust ? (
-                        <div className="flex items-start gap-2.5" data-testid="install-os-trust-note">
-                          <ShieldCheck className="mt-px size-[15px] shrink-0 text-[#8a6420]" aria-hidden="true" />
-                          <span className="grid gap-0.5">
-                            <span className="text-[13px] font-semibold leading-[17px] text-[#7a5714]">{guidance.trust.title}</span>
-                            <span className="text-[13px] leading-[17px] text-[#7a5714]">{guidance.trust.body}</span>
-                          </span>
-                        </div>
+                        <p className="m-0 flex items-start gap-2 text-[13px] leading-5 text-amber-700" data-testid="install-os-trust-note">
+                          <ShieldCheck className="mt-px size-[15px] shrink-0" aria-hidden="true" />
+                          {guidance.trust.body}
+                        </p>
                       ) : null}
 
-                      <div className="flex items-start gap-2.5 rounded-[10px] border border-[#d3e0fb] bg-[#eef4ff] px-3 py-2.5" data-testid="install-handoff-note">
-                        <span className="mt-0.5 grid size-3.5 shrink-0 place-items-center rounded-full bg-[#3e63dd]/20" aria-hidden="true">
-                          <span className="size-1.5 rounded-full bg-[#3e63dd]" />
-                        </span>
-                        <span className="grid gap-0.5">
-                          <span className="text-[13px] font-semibold leading-[17px] text-[#1f3d8f]">Activation happens from this Den page</span>
-                          <span className="text-[13px] leading-[17px] text-[#3a4e80]">OpenWork Enterprise stays locked until this signed-in portal sends it a one-time activation link.</span>
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-2.5 py-1">
-                        <span className="h-px grow bg-[#e1e4e8]" />
-                        <span className="text-xs text-[#7a808a]">THEN</span>
-                        <span className="h-px grow bg-[#e1e4e8]" />
-                      </div>
-
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="m-0 text-[13px] leading-[17px] text-[#344054]">When the enterprise app is open at its activation screen:</p>
-                        <button
-                          type="button"
-                          className="grid h-9 shrink-0 place-items-center rounded-[9px] bg-[#101828] px-4 text-[13px] font-semibold text-white transition-colors hover:bg-black disabled:opacity-60"
-                          data-testid="install-connect-open"
-                          disabled={connecting}
-                          onClick={() => void beginConnect()}
-                        >
-                          {connecting ? "Preparing…" : "Activate OpenWork Enterprise"}
-                        </button>
-                      </div>
-
-                      <details className="grid gap-2 border-t border-[#e1e4e8] pt-3 [&[open]_svg]:rotate-180">
-                        <summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs font-semibold text-[#344054] [&::-webkit-details-marker]:hidden">
-                          <ChevronDown className="size-3 shrink-0 text-[#7a808a] transition-transform" aria-hidden="true" />
-                          Nothing happening on your computer?
-                        </summary>
-                        <p className="m-0 text-[13px] leading-[17px] text-[#60646c]">Create a fresh one-time activation link and copy it if your browser cannot open the app automatically.</p>
-                        <button
-                          type="button"
-                          className="w-fit text-[11px] font-medium text-[#667085] underline-offset-4 hover:text-[#101828] hover:underline"
-                          data-testid="install-connect-copy"
-                          disabled={connecting}
-                          onClick={() => void prepareAndCopyConnectionLink()}
-                        >
-                          {connectCopied ? "Copied a fresh activation link" : "Copy a fresh activation link"}
-                        </button>
-                      </details>
+                      <button
+                        type="button"
+                        className="grid min-h-10 w-fit place-items-center rounded-xl bg-[#101828] px-4 text-[13px] font-semibold text-white transition-colors hover:bg-black"
+                        data-testid="install-app-ready"
+                        onClick={() => advanceGuide(LINK_STEP)}
+                      >
+                        It&apos;s open
+                      </button>
                   </div>
-
-                  {connectError ? <p className="m-0 text-sm text-red-600" role="alert">{connectError}</p> : null}
             </InstallStep>
 
             <InstallStep
               index={3}
               state={guideStep === 3 ? "active" : "pending"}
-              title="Confirm activation"
-              description="Keep this page open while OpenWork Enterprise consumes the one-time link and signs you in."
-              expanded={expandedStep === 3 && guideStep === 3}
+              title="Connect"
+              expanded={expandedStep === 3 && guideStep >= 3}
               onExpand={() => setExpandedStep(3)}
-              testId="install-guide-step-signin"
+              testId="install-guide-step-link"
             >
-                  <div className="grid gap-3" aria-live="polite">
-                    <div className="flex flex-col gap-3 sm:flex-row">
-                      <a
-                        className="grid h-11 shrink-0 place-items-center rounded-[11px] bg-[#101828] px-6 text-[13px] font-semibold text-white transition-colors hover:bg-black sm:w-[18rem]"
-                        href={RETURN_TO_OPENWORK_URL}
-                      >
-                        Return to OpenWork Enterprise
-                      </a>
-                      {handoffStatus.status === "consumed" ? null : (
-                        <p className="m-0 flex grow items-center gap-3 rounded-[11px] border border-[#e1e4e8] bg-white px-4 text-[13px] text-[#60646c]">
-                          <span className="size-4 animate-spin rounded-full border-2 border-[#b0b7c3] border-t-[#101828]" aria-hidden="true" />
-                          Waiting for OpenWork Enterprise…
-                        </p>
-                      )}
-                    </div>
+                  <div className="grid content-start gap-3" aria-live="polite">
+                      <p className="m-0 text-sm leading-6 text-slate-600">In the app, enter your workspace address:</p>
 
-                    {handoffStatus.status === "consumed" ? (
-                      <div className="flex items-start gap-3 rounded-[11px] border border-[#e7eaef] bg-[#fafbfc] px-3.5 py-3" data-testid="install-connected">
-                        <span className="grid size-5 shrink-0 place-items-center rounded-full border-[1.5px] border-[#c9cfd7] bg-white text-[11px] font-bold text-[#30a46c]" aria-hidden="true">✓</span>
-                        <span className="grid gap-0.5">
-                          <span className="text-[13px] font-semibold text-[#1c2024]">OpenWork Enterprise is activated</span>
-                          <span className="text-[11px] text-[#60646c]">The app consumed the one-time link and signed you in to {config.clientName}.</span>
-                        </span>
+                      <div className="flex h-10 w-fit max-w-full items-stretch overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(16,24,40,0.05)]" data-testid="install-workspace-address">
+                        <input
+                          className="min-w-0 grow bg-transparent pl-3.5 pr-3 font-mono text-[13px] font-medium text-slate-950 outline-none"
+                          value={workspaceAddress}
+                          readOnly
+                          size={Math.max(workspaceAddress.length, 12)}
+                          onFocus={(event) => event.currentTarget.select()}
+                        />
+                        <button
+                          type="button"
+                          className="shrink-0 border-l border-slate-200 bg-slate-50 px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 hover:text-slate-950"
+                          onClick={() => void copyWorkspaceAddress()}
+                        >
+                          {addressCopied ? "Copied" : "Copy"}
+                        </button>
                       </div>
-                    ) : handoffStatus.status === "unknown" ? (
-                      <p className="m-0 text-sm text-amber-700">This one-time link expired. Return to step 2 and create a fresh activation link.</p>
-                    ) : null}
 
-                    {handoffStatus.status === "consumed" ? (
-                      <CopyLinkRow value={RETURN_TO_OPENWORK_URL} copied={returnCopied} onCopy={() => void copyReturnLink()} />
-                    ) : connectLink ? (
-                      <div className="grid gap-2">
-                        <p className="m-0 text-[11px] text-[#7a808a]">Nothing opened? Copy this {config.appName} link and open it anywhere links work.</p>
-                        <CopyLinkRow value={connectLink} copied={connectCopied} onCopy={() => void copyConnectionLink()} />
-                      </div>
-                    ) : null}
+                      <p className="m-0 max-w-xl text-[13px] leading-5 text-slate-500">
+                        Then choose Continue — sign-in finishes in this browser and sends you back to the app.
+                      </p>
+
+                      {connectError ? <p className="m-0 text-sm text-red-600" role="alert">{connectError}</p> : null}
                   </div>
             </InstallStep>
           </ol>

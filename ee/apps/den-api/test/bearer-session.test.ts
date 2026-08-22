@@ -166,6 +166,20 @@ function expectAtomicRenewal(update: CapturedUpdate, now: Date) {
   expect(dates).toContainEqual(getDenSessionExpiresAt(now))
 }
 
+function getMockCachedSession(requestedToken: string) {
+  const now = new Date()
+  if (cacheEnabled && cached?.session.token === requestedToken && cached.session.expiresAt > now) {
+    return Promise.resolve({ value: cached, source: "cache" as const })
+  }
+  selects += 1
+  const loaded = stored?.session.token === requestedToken && stored.session.expiresAt > now ? stored : null
+  if (cacheEnabled && loaded) {
+    cached = loaded
+    cacheSets.push(loaded)
+  }
+  return Promise.resolve({ value: loaded, source: "loader" as const })
+}
+
 beforeAll(async () => {
   seedRequiredEnv()
 
@@ -190,6 +204,9 @@ beforeAll(async () => {
         selects += 1
         return {
           from: () => ({
+            where: (condition: unknown) => ({
+              limit: () => Promise.resolve(stored && sqlLeaves(condition).includes(token) ? [{ id: stored.session.id }] : []),
+            }),
             innerJoin: () => ({
               where: (condition: unknown) => ({
                 limit: () => Promise.resolve(selectRows(condition)),
@@ -226,23 +243,29 @@ beforeAll(async () => {
     cache: {
       auth: {
         session: (requestedToken: string) => {
-          const now = new Date()
-          if (cacheEnabled && cached?.session.token === requestedToken && cached.session.expiresAt > now) {
-            return Promise.resolve(cached)
-          }
-          selects += 1
-          const loaded = stored?.session.token === requestedToken && stored.session.expiresAt > now ? stored : null
-          if (cacheEnabled && loaded) {
-            cached = loaded
-            cacheSets.push(loaded)
-          }
-          return Promise.resolve(loaded)
+          return getMockCachedSession(requestedToken).then((result) => result.value)
         },
+        sessionResult: getMockCachedSession,
         deleteSession: (requestedToken: string) => {
           cacheDeletes.push(requestedToken)
           if (cached?.session.token === requestedToken) {
             cached = null
           }
+          return Promise.resolve()
+        },
+        revokeSession: (requestedToken: string) => {
+          cacheDeletes.push(requestedToken)
+          if (cached?.session.token === requestedToken) {
+            cached = null
+          }
+          return Promise.resolve()
+        },
+        deleteSessionId: (requestedSessionId: string) => {
+          cacheDeletes.push(requestedSessionId)
+          return Promise.resolve()
+        },
+        revokeSessionId: (requestedSessionId: string) => {
+          cacheDeletes.push(requestedSessionId)
           return Promise.resolve()
         },
       },
@@ -269,7 +292,7 @@ afterAll(() => {
   mock.restore()
 })
 
-test("active desktop bearer sessions roll forward after updateAge", async () => {
+test("active desktop bearer session cache misses can roll forward after updateAge", async () => {
   const now = new Date("2026-07-09T12:00:00.000Z")
   setSystemTime(now)
   stored = makeStoredSession({
@@ -335,6 +358,23 @@ test("cached desktop bearer sessions avoid the database lookup", async () => {
   expect(selects).toBe(0)
   expect(updates).toHaveLength(0)
   expect(cacheSets).toHaveLength(0)
+})
+
+test("cached desktop bearer sessions do not renew inside the updateAge window", async () => {
+  const now = new Date("2026-07-09T12:00:00.000Z")
+  setSystemTime(now)
+  cacheEnabled = true
+  cached = makeStoredSession({
+    now,
+    updatedAt: now,
+    expiresAt: new Date("2026-07-10T12:00:00.000Z"),
+  })
+
+  const resolved = await sessionModule.getRequestSession(new Headers({ authorization: `Bearer ${token}` }))
+
+  expect(resolved?.session.expiresAt).toEqual(new Date("2026-07-10T12:00:00.000Z"))
+  expect(selects).toBe(0)
+  expect(updates).toHaveLength(0)
 })
 
 test("desktop bearer session cache misses populate from the database lookup", async () => {
@@ -434,7 +474,7 @@ test("desktop bearer sign-out deletes the exact server session", async () => {
   expect(deletes).toHaveLength(1)
   expect(sqlShape(deletes[0])).toContain(`token = ${token}`)
   expect(stored).toBeNull()
-  expect(cacheDeletes).toEqual([token])
+  expect(cacheDeletes).toEqual([token, sessionId])
 })
 
 test("only the Better Auth POST sign-out bypasses session resolution", () => {

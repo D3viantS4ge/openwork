@@ -61,7 +61,7 @@ function EnterpriseAwareAppProviders({ children }: AppProvidersProps) {
           <BrandThemeProvider>
             <RestrictionNoticeProvider>
               <LocalProvider>
-                <AutomationRunnerBridge enabled={isDesktopRuntime()} />
+                <AutomationRunnerBridge />
                 <ReloadCoordinatorProvider>{children}</ReloadCoordinatorProvider>
                 <Toaster />
               </LocalProvider>

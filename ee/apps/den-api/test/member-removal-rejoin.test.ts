@@ -350,6 +350,33 @@ test("an old accepted invitation reports membership_removed for removed users", 
   expect(accepted?.status).toBe("membership_removed")
 })
 
+test("SCIM tombstones block invitation acceptance while the connection exists", async () => {
+  if (!db || !schema || !orgs) {
+    throw new Error("test modules not initialized")
+  }
+
+  const invitationId = createDenTypeId("invitation")
+  const placeholderId = createDenTypeId("member")
+  await db.insert(schema.ScimProviderTable).values({
+    id: createDenTypeId("scimProvider"),
+    providerId: `provider-${scimUserId}`,
+    scimToken: "test-scim-token",
+    organizationId,
+  })
+  await db.insert(schema.ScimUserTombstoneTable).values({
+    id: createDenTypeId("scimUserTombstone"),
+    organizationId,
+    providerId: `provider-${scimUserId}`,
+    email: scimEmail.toLowerCase(),
+  })
+  await createInvitation({ invitationId, memberId: placeholderId, email: scimEmail, role: "member" })
+
+  const accepted = await orgs.acceptInvitationForUser({ userId: scimUserId, email: scimEmail, invitationId })
+
+  expect(accepted?.status).toBe("scim_deprovisioned")
+  expect((await memberById(placeholderId))?.userId).toBeNull()
+})
+
 test("SCIM reactivation clears removed member userId memory", async () => {
   if (!db || !schema || !scim) {
     throw new Error("test modules not initialized")

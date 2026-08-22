@@ -98,6 +98,39 @@ function provisioningInput() {
 }
 
 describe("cloud provisioning state machine", () => {
+  test("marks provisioning failed when provision exceeds the deadline", async () => {
+    const shared = await loadSharedModuleCopy("deadline")
+    const state = makeProvisioningStore("provisioning")
+
+    await shared.continueCloudProvisioning(provisioningInput(), {
+      store: state.store,
+      provisionWorker: () => new Promise<never>(() => {}),
+      deadlineMs: 20,
+    })
+
+    expect(state.updates).toContainEqual({
+      workerId: expect.any(String),
+      status: "failed",
+      onlyWhenStatus: "provisioning",
+    })
+    expect(state.instances).toHaveLength(0)
+  })
+
+  test("records a fast successful provision without a failed write", async () => {
+    const shared = await loadSharedModuleCopy("deadline-success")
+    const state = makeProvisioningStore("provisioning")
+
+    await shared.continueCloudProvisioning(provisioningInput(), {
+      store: state.store,
+      provisionWorker: async () => healthyProvisioned(),
+      deadlineMs: 5000,
+    })
+
+    expect(state.updates.some((update) => update.status === "healthy")).toBe(true)
+    expect(state.updates.some((update) => update.status === "failed")).toBe(false)
+    expect(state.instances).toHaveLength(1)
+  })
+
   test("success wins when a fast stale failure records failed before the winner finishes", async () => {
     const [winnerModule, loserModule] = await Promise.all([
       loadSharedModuleCopy("race-winner"),

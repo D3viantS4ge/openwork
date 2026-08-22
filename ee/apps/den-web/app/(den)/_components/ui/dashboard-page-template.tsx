@@ -9,7 +9,7 @@ import { useWebGlSupported } from "../../_lib/use-webgl-supported";
  *
  * A consistent page shell for all org dashboard pages.
  * Provides:
- *  - A compact gradient hero card (badge + title)
+ *  - A compact gradient hero card with the page title
  *  - A description line below the card
  *  - A children slot for page-specific content
  *
@@ -25,10 +25,6 @@ export type DashboardPageTemplateProps = {
     className?: string;
     strokeWidth?: number;
   }>;
-  /** Short label rendered as a frosted pill badge beside the title. Omit to hide. */
-  badgeLabel?: string;
-  /** Optional content rendered beside the badge inside the gradient band. */
-  badgeCompanion?: ReactNode;
   /** Page heading rendered large inside the card */
   title: string;
   /** One-liner rendered in gray below the card, above children */
@@ -46,8 +42,6 @@ export type DashboardPageTemplateProps = {
 };
 
 export function DashboardPageTemplate({
-  badgeLabel,
-  badgeCompanion,
   title,
   description,
   colors,
@@ -86,12 +80,6 @@ export function DashboardPageTemplate({
 
         <div className="relative z-10 flex min-w-0 items-center gap-2">
           <h1 className="truncate text-[24px] font-semibold leading-[30px] tracking-[-0.02em] text-white">{title}</h1>
-          {badgeLabel ? (
-            <span className="shrink-0 rounded-full border border-white/20 bg-white/20 px-2.5 py-1 text-[10px] uppercase tracking-[1px] text-white backdrop-blur-md">
-              {badgeLabel}
-            </span>
-          ) : null}
-          {badgeCompanion}
         </div>
       </div>
 

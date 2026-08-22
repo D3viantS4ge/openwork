@@ -21,6 +21,8 @@
 #   DEN_ORG_MODE            — single_org or multi_org (default: single_org)
 #   DEN_SINGLE_ORG_NAME / DEN_SINGLE_ORG_SLUG / DEN_SINGLE_ORG_OWNER_EMAILS
 #                           — singleton organization defaults for local private-mode testing
+#   DEN_INITIAL_ADMIN_BOOTSTRAP_CODE / DEN_INITIAL_ADMIN_BOOTSTRAP_CODE_FILE
+#                           — optional one-time /setup code for private zero-user deployments
 #   DEN_PROVISIONER_MODE    — stub, render, or daytona (default: stub)
 #   DEN_WORKER_URL_TEMPLATE — worker URL template used by stub provisioning
 #   DAYTONA_API_URL / DAYTONA_API_KEY / DAYTONA_TARGET / DAYTONA_SNAPSHOT
@@ -125,6 +127,8 @@ services:
       DEN_SINGLE_ORG_SLUG: ${DEN_SINGLE_ORG_SLUG:-default}
       DEN_SINGLE_ORG_OWNER_EMAILS: ${DEN_SINGLE_ORG_OWNER_EMAILS:-}
       DEN_SINGLE_ORG_ALLOW_PUBLIC_SIGNUP: ${DEN_SINGLE_ORG_ALLOW_PUBLIC_SIGNUP:-false}
+      DEN_INITIAL_ADMIN_BOOTSTRAP_CODE: ${DEN_INITIAL_ADMIN_BOOTSTRAP_CODE:-}
+      DEN_INITIAL_ADMIN_BOOTSTRAP_CODE_FILE: ${DEN_INITIAL_ADMIN_BOOTSTRAP_CODE_FILE:-}
       DEN_SINGLE_ORG_ALLOW_EMAIL_PASSWORD_AFTER_SSO: ${DEN_SINGLE_ORG_ALLOW_EMAIL_PASSWORD_AFTER_SSO:-false}
       DEN_REQUIRE_EMAIL_VERIFICATION: ${DEN_REQUIRE_EMAIL_VERIFICATION:-false}
       DEN_MCP_RESOURCE_URL: ${DEN_MCP_RESOURCE_URL:-http://localhost:8788/mcp}

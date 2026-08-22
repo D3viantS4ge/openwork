@@ -10,7 +10,6 @@ export default defineConfig({
     "schema/org": "src/schema/org.ts",
     "schema/subscriptions": "src/schema/subscriptions.ts",
     "schema/teams": "src/schema/teams.ts",
-    "schema/telegram": "src/schema/telegram.ts",
     "schema/workers": "src/schema/workers.ts",
     "schema/system": "src/schema/system.ts",
     "schema/telemetry": "src/schema/telemetry.ts",

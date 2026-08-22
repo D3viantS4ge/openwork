@@ -285,6 +285,8 @@ function chromeArgs(cdpPort: number, profileDir: string, startUrl: string, headl
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-popup-blocking",
+    // Avoid the Daytona preview h2 stall when ~28 dev chunks multiplex; h1.1 loads them, while plain-http local Den never negotiates h2.
+    "--disable-http2",
     startUrl,
   ];
   return headless ? ["--headless=new", ...args] : args;
@@ -337,6 +339,7 @@ async function runPrepareScript(scriptPath: string, outDir: string, desktopRoot:
 }
 
 async function prepareSharedElectronResources(repoRoot: string, log: (message: string) => void): Promise<void> {
+  if (process.env.OPENWORK_EVAL_ELECTRON_RESOURCES_PREPARED === "1") return;
   if (!prepareSharedResourcesPromise) {
     prepareSharedResourcesPromise = (async () => {
       const desktopRoot = join(repoRoot, "apps", "desktop");
@@ -532,7 +535,7 @@ export function createLocalHost(options: LocalHostOptions): DisposableHost {
   const surfacesRootOverride = process.env.OPENWORK_EVAL_SURFACES_DIR?.trim();
   const rootDir = options.rootDir ?? (surfacesRootOverride
     ? surfacesRootOverride
-    : join(options.repoRoot, "evals", "results", ".surfaces"));
+    : join(options.repoRoot, "evals", "results", ".surfaces", String(process.pid)));
   const log = options.log;
   const spawnedSurfaces = new Set<SurfaceHandle>();
   const denPorts = new Set<number>();
@@ -617,8 +620,8 @@ async function clearStaleSurfaces(rootDir: string, log: (message: string) => voi
   await new Promise<void>((resolve) => {
     execFile("pkill", ["--full", rootDir], () => resolve());
   });
-  // Safe because surfaces run one at a time (vitest fileParallelism is off) and
-  // the pkill above already assumes exclusive ownership of rootDir.
+  // The default root is worker-scoped, so parallel files cannot kill or remove
+  // another worker's desktop while pruning their own stale profiles.
   const stale = await readdir(rootDir).catch(() => []);
   let removed = 0;
   for (const entry of stale) {

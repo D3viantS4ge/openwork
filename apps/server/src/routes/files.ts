@@ -16,6 +16,8 @@ const FILE_SESSION_MAX_BATCH_ITEMS = 64;
 const FILE_SESSION_MAX_FILE_BYTES = 5_000_000;
 const FILE_SESSION_CATALOG_DEFAULT_LIMIT = 2000;
 const FILE_SESSION_CATALOG_MAX_LIMIT = 10000;
+const MAX_PATH_COMPONENT_BYTES = 255;
+const WINDOWS_RESERVED_PATH_COMPONENT = /^(?:con|prn|aux|nul|clock\$|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])(?:\..*)?$/i;
 
 type JsonResponse = (data: unknown, status?: number) => Response;
 type ReadJsonBody = (request: Request) => Promise<Record<string, unknown>>;
@@ -44,12 +46,17 @@ function resolveOutboxDir(workspaceRoot: string): string {
 }
 
 export function normalizeWorkspaceRelativePath(input: string, options: { allowSubdirs: boolean }): string {
-  const raw = String(input ?? "").trim();
+  const inputValue = String(input ?? "");
+  const hasTrailingSpace = / \s*$/.test(inputValue);
+  const raw = inputValue.trim();
   if (!raw) {
     throw new ApiError(400, "invalid_path", "Path is required");
   }
   if (raw.includes("\u0000")) {
     throw new ApiError(400, "invalid_path", "Path contains null byte");
+  }
+  if (hasTrailingSpace) {
+    throw new ApiError(400, "invalid_path", "Path components must not end with a dot or space");
   }
 
   // A lot of user-facing surfaces (artifacts, tool logs) reference files as
@@ -74,8 +81,28 @@ export function normalizeWorkspaceRelativePath(input: string, options: { allowSu
     if (part === "." || part === "..") {
       throw new ApiError(400, "invalid_path", "Path traversal is not allowed");
     }
+    if (part.includes(":")) {
+      throw new ApiError(400, "invalid_path", "Path components must not contain colons");
+    }
+    if (/[. ]$/.test(part)) {
+      throw new ApiError(400, "invalid_path", "Path components must not end with a dot or space");
+    }
+    if (WINDOWS_RESERVED_PATH_COMPONENT.test(part)) {
+      throw new ApiError(400, "invalid_path", "Path components must not use Windows reserved device names");
+    }
+    if (Buffer.byteLength(part, "utf8") > MAX_PATH_COMPONENT_BYTES) {
+      throw new ApiError(400, "invalid_path", `Path components must not exceed ${MAX_PATH_COMPONENT_BYTES} UTF-8 bytes`);
+    }
   }
   return parts.join("/");
+}
+
+async function parseMultipartFormData(request: Request): Promise<FormData> {
+  try {
+    return await request.formData();
+  } catch {
+    throw new ApiError(400, "invalid_payload", "Malformed multipart/form-data");
+  }
 }
 
 export function isSupportedWorkspaceTextFilePath(relativePath: string): boolean {
@@ -204,8 +231,8 @@ export async function resolveWorkspaceArtifactTargets(workspaceRoot: string, inp
     if (!item || typeof item !== "object") continue;
     const target = item as ArtifactTargetInput;
     const kind = target.kind === "url" ? "url" : "file";
-    const rawValue = typeof target.value === "string" ? target.value.trim() : "";
-    if (!rawValue) continue;
+    const rawValue = typeof target.value === "string" ? target.value.trimStart() : "";
+    if (!rawValue.trim()) continue;
     const confidence = typeof target.confidence === "number" && Number.isFinite(target.confidence) ? target.confidence : 0;
     const reason = typeof target.reason === "string" ? target.reason : "server";
 
@@ -370,9 +397,8 @@ function parseSessionCursor(input: string | null): number {
 
 function parseCatalogPathFilter(input: string | null): string | null {
   if (!input) return null;
-  const trimmed = input.trim();
-  if (!trimmed) return null;
-  return normalizeWorkspaceRelativePath(trimmed, { allowSubdirs: true });
+  if (!input.trim()) return null;
+  return normalizeWorkspaceRelativePath(input, { allowSubdirs: true });
 }
 
 function matchesCatalogFilter(path: string, filter: string | null): boolean {
@@ -586,15 +612,15 @@ export function registerFileRoutes(options: RegisterFileRoutesOptions): void {
     if (!contentType.toLowerCase().includes("multipart/form-data")) {
       throw new ApiError(400, "invalid_payload", "Expected multipart/form-data");
     }
-    const form = await ctx.request.formData();
+    const form = await parseMultipartFormData(ctx.request);
     const file = form.get("file");
     if (!(file instanceof File)) {
       throw new ApiError(400, "file_required", "Form field 'file' is required");
     }
 
-    const queryPath = (ctx.url.searchParams.get("path") ?? "").trim();
-    const formPath = typeof form.get("path") === "string" ? String(form.get("path") || "").trim() : "";
-    const requestedPath = queryPath || formPath || file.name;
+    const queryPath = ctx.url.searchParams.get("path") ?? "";
+    const formPath = typeof form.get("path") === "string" ? String(form.get("path") || "") : "";
+    const requestedPath = queryPath.trim() ? queryPath : formPath.trim() ? formPath : file.name;
 
     const relativePath = normalizeWorkspaceRelativePath(requestedPath, { allowSubdirs: true });
     const inboxRoot = resolveInboxDir(workspace.path);
@@ -613,7 +639,7 @@ export function registerFileRoutes(options: RegisterFileRoutesOptions): void {
 
     await ensureDir(dirname(dest));
     const bytes = Buffer.from(await file.arrayBuffer());
-    const tmp = `${dest}.tmp-${shortId()}`;
+    const tmp = join(dirname(dest), `.upload-${shortId()}.tmp`);
     await writeFile(tmp, bytes);
     await rename(tmp, dest);
 
@@ -1027,7 +1053,7 @@ export function registerFileRoutes(options: RegisterFileRoutesOptions): void {
 
   addRoute(routes, "GET", "/workspace/:id/files/content", "client", async (ctx) => {
     const workspace = await resolveWorkspace(config, ctx.params.id);
-    const requested = (ctx.url.searchParams.get("path") ?? "").trim();
+    const requested = ctx.url.searchParams.get("path") ?? "";
     const relativePath = normalizeWorkspaceRelativePath(requested, { allowSubdirs: true });
     if (!isSupportedWorkspaceTextFilePath(relativePath)) {
       throw new ApiError(400, "invalid_path", "Only supported text artifact files can be read inline");
@@ -1053,7 +1079,7 @@ export function registerFileRoutes(options: RegisterFileRoutesOptions): void {
 
   addRoute(routes, "GET", "/workspace/:id/files/stat", "client", async (ctx) => {
     const workspace = await resolveWorkspace(config, ctx.params.id);
-    const requested = (ctx.url.searchParams.get("path") ?? "").trim();
+    const requested = ctx.url.searchParams.get("path") ?? "";
     const relativePath = normalizeWorkspaceRelativePath(requested, { allowSubdirs: true });
     const absPath = resolveSafeChildPath(workspace.path, relativePath);
     if (!(await exists(absPath))) {
@@ -1072,7 +1098,7 @@ export function registerFileRoutes(options: RegisterFileRoutesOptions): void {
 
   addRoute(routes, "GET", "/workspace/:id/files/raw", "client", async (ctx) => {
     const workspace = await resolveWorkspace(config, ctx.params.id);
-    const requested = (ctx.url.searchParams.get("path") ?? "").trim();
+    const requested = ctx.url.searchParams.get("path") ?? "";
     const relativePath = normalizeWorkspaceRelativePath(requested, { allowSubdirs: true });
     const absPath = resolveSafeChildPath(workspace.path, relativePath);
     if (!(await exists(absPath))) {

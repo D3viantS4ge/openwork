@@ -296,6 +296,7 @@ async function materialize(input: {
   logger?: Logger
   force?: boolean
   instanceUrl?: string
+  now?: () => number
 }) {
   return materializeCloudWorkerProviders({
     organizationId,
@@ -307,6 +308,7 @@ async function materialize(input: {
     fetchImpl: input.fetchImpl,
     logger: input.logger,
     force: input.force,
+    now: input.now,
   })
 }
 
@@ -634,7 +636,7 @@ describe("Cloud provider materialization", () => {
     ])
   })
 
-  test("does not patch provider blocks when credential env write fails, and retries next resolve", async () => {
+  test("does not patch provider blocks when credential env write fails, and allows a forced retry", async () => {
     const provider = makeAnthropicProvider({ apiKey: "sk-anthropic" })
     const instance = makeInstance({ failEnvWrites: 1 })
 
@@ -655,13 +657,14 @@ describe("Cloud provider materialization", () => {
     const retried = await materialize({
       providers: () => [provider],
       fetchImpl: instance.fetchImpl,
+      force: true,
     })
     expect(retried.ok).toBe(true)
     expect(retried.status).toBe("applied")
     expect(writeCalls(instance.calls).map((call) => call.method)).toEqual(["PUT", "PATCH"])
   })
 
-  test("rolls back credential env and retries when config patch fails", async () => {
+  test("rolls back credential env and allows a forced retry when config patch fails", async () => {
     const provider = makeAnthropicProvider({ apiKey: "sk-anthropic" })
     const instance = makeInstance({ failConfigPatches: 1 })
 
@@ -688,6 +691,7 @@ describe("Cloud provider materialization", () => {
     const retried = await materialize({
       providers: () => [provider],
       fetchImpl: instance.fetchImpl,
+      force: true,
     })
     expect(retried.ok).toBe(true)
     expect(retried.status).toBe("applied")
@@ -766,7 +770,7 @@ describe("Cloud provider materialization", () => {
     expect(repeated.status).toBe("unsupported")
     expect(instance.envValue("ANTHROPIC_API_KEY")).toBe("sk-anthropic")
     expect(logs).toHaveLength(1)
-    expect(instance.calls.some((call) => call.path === "/runtime/versions")).toBe(false)
+    expect(instance.calls).toHaveLength(0)
 
     provider = makeAnthropicProvider({ apiKey: "sk-anthropic-rotated" })
     const changed = await materialize({
@@ -774,6 +778,7 @@ describe("Cloud provider materialization", () => {
       providers: () => [provider],
       fetchImpl: instance.fetchImpl,
       logger,
+      force: true,
     })
 
     expect(changed.status).toBe("unsupported")
@@ -806,5 +811,76 @@ describe("Cloud provider materialization", () => {
     expect(result.ok).toBe(true)
     expect(JSON.stringify({ logs, result, fingerprint })).not.toContain(secret)
     expect(fingerprint).not.toContain(secret)
+  })
+
+  test("cools down a failed materialization without making more preview requests", async () => {
+    const provider = makeAnthropicProvider({ apiKey: "sk-anthropic" })
+    const instance = makeInstance({ failEnvWrites: 1 })
+    const workerId = createDenTypeId("worker")
+    const now = () => 1_000
+
+    const failed = await materialize({ workerId, providers: () => [provider], fetchImpl: instance.fetchImpl, now })
+    instance.calls.length = 0
+    const cooledDown = await materialize({ workerId, providers: () => [provider], fetchImpl: instance.fetchImpl, now })
+
+    expect(failed.ok).toBe(false)
+    expect(cooledDown).toEqual(failed)
+    expect(instance.calls).toHaveLength(0)
+  })
+
+  test("force bypasses a materialization failure cooldown", async () => {
+    const provider = makeAnthropicProvider({ apiKey: "sk-anthropic" })
+    const instance = makeInstance({ failEnvWrites: 1 })
+    const workerId = createDenTypeId("worker")
+    const now = () => 2_000
+
+    await materialize({ workerId, providers: () => [provider], fetchImpl: instance.fetchImpl, now })
+    instance.calls.length = 0
+    const forced = await materialize({ workerId, providers: () => [provider], fetchImpl: instance.fetchImpl, now, force: true })
+
+    expect(forced.ok).toBe(true)
+    expect(instance.calls.length).toBeGreaterThan(0)
+  })
+
+  test("success clears the failure cooldown before the next failure cycle", async () => {
+    let provider = makeAnthropicProvider({ apiKey: "sk-first" })
+    const workerId = createDenTypeId("worker")
+    const now = () => 3_000
+    const firstInstance = makeInstance({ failEnvWrites: 1 })
+
+    await materialize({ workerId, providers: () => [provider], fetchImpl: firstInstance.fetchImpl, now })
+    const succeeded = await materialize({ workerId, providers: () => [provider], fetchImpl: firstInstance.fetchImpl, now, force: true })
+    expect(succeeded.ok).toBe(true)
+
+    provider = makeAnthropicProvider({ apiKey: "sk-second" })
+    const secondInstance = makeInstance({ failEnvWrites: 1 })
+    const freshFailure = await materialize({ workerId, providers: () => [provider], fetchImpl: secondInstance.fetchImpl, now })
+    expect(freshFailure.ok).toBe(false)
+    expect(secondInstance.calls.length).toBeGreaterThan(0)
+
+    secondInstance.calls.length = 0
+    const cooledDown = await materialize({ workerId, providers: () => [provider], fetchImpl: secondInstance.fetchImpl, now })
+    expect(cooledDown).toEqual(freshFailure)
+    expect(secondInstance.calls).toHaveLength(0)
+  })
+
+  test("failure cooldown is scoped to worker and instance URL", async () => {
+    const provider = makeAnthropicProvider({ apiKey: "sk-anthropic" })
+    const workerId = createDenTypeId("worker")
+    const failedInstance = makeInstance({ failEnvWrites: 1 })
+    const otherInstance = makeInstance()
+    const now = () => 4_000
+
+    await materialize({ workerId, providers: () => [provider], fetchImpl: failedInstance.fetchImpl, now })
+    const otherResult = await materialize({
+      workerId,
+      providers: () => [provider],
+      fetchImpl: otherInstance.fetchImpl,
+      instanceUrl: "https://other-worker.example.test",
+      now,
+    })
+
+    expect(otherResult.ok).toBe(true)
+    expect(otherInstance.calls.length).toBeGreaterThan(0)
   })
 })

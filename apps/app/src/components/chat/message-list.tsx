@@ -82,6 +82,7 @@ import {
 } from "@/components/ui/message"
 import { Tool } from "@/components/ui/tool"
 import { CapabilityCallLine } from "@/components/chat/capability-call-line"
+import { hasPreservedMcpAppResult, McpAppFrame } from "@/components/chat/mcp-app-frame"
 import { ReasoningBlock } from "@/components/chat/reasoning-block"
 import { SubagentRunLine } from "@/components/chat/subagent-run-line"
 import { ToolAggregateGroup } from "@/components/chat/tool-aggregate-group"
@@ -937,6 +938,22 @@ const STEPS_STICKY_GAP_PX = 24
 // treated as user input. Events from our own programmatic pins are never
 // preceded by a gesture, so they are ignored entirely.
 const STEPS_GESTURE_WINDOW_MS = 600
+function collectMcpAppParts(items: UIMessageWithIndex[]): DynamicToolUIPart[] {
+  const parts = new Map<string, DynamicToolUIPart>()
+  for (const item of items) {
+    if (item.message.role !== "assistant" || isSessionErrorMessage(item.message)) continue
+    for (const part of item.message.parts) {
+      if (
+        part.type === "dynamic-tool"
+        && (part.state === "output-available" || part.state === "output-error")
+        && hasPreservedMcpAppResult(part)
+      ) {
+        parts.set(part.toolCallId, part)
+      }
+    }
+  }
+  return [...parts.values()]
+}
 
 function MessageGroup({
   items,
@@ -1011,6 +1028,7 @@ function MessageGroup({
 
   const renderableItems = getRenderableMessages(items)
   const lastTextMessage = getLastTextPart(lastItem.message)
+  const mcpAppParts = collectMcpAppParts(items)
 
   // Leading messages without prose (tool/reasoning steps) render inside a
   // height-capped scroll area so long runs stay compact; messages with text
@@ -1163,6 +1181,14 @@ function MessageGroup({
           </div>
         )
       ) : null}
+      {mcpAppParts.map((part) => (
+        <Message
+          key={`mcp-app-${part.toolCallId}`}
+          className="mx-auto flex w-full max-w-3xl flex-col px-2 empty:hidden md:px-10"
+        >
+          <McpAppFrame part={part} />
+        </Message>
+      ))}
       {renderItems(proseItems, stepItems.length, collapseSteps)}
       {/* Paper artifact strip: one FILES row per turn, at the end. */}
       <ArtifactList

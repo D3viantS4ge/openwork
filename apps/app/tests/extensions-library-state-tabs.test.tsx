@@ -58,7 +58,7 @@ describe("Library state tabs", () => {
       />,
     );
 
-    expect(html).toContain("Skills, connections, and tools your agent can use.");
+    expect(html).toContain("Skills, commands, agents, connections, and tools your agent can use.");
     expect(html).toContain("Ready to use");
     expect(html).toContain(">3</span>");
     expect(html.toLowerCase()).not.toContain("app connected");

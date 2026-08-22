@@ -2,8 +2,10 @@ import { createServer, request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { setTimeout as delay } from "node:timers/promises";
 import { allocateFreePort } from "@openwork/cdp";
+import { startFaultProxyOnSandbox } from "@openwork/hosts";
 import type { IncomingHttpHeaders, IncomingMessage, OutgoingHttpHeaders, Server, ServerResponse } from "node:http";
 import type { DenRef } from "@openwork/behaviors";
+import type { Place } from "./place.ts";
 
 export interface FaultRequest {
   method: string;
@@ -16,11 +18,19 @@ export interface FaultRequest {
 export interface FaultProxy extends AsyncDisposable {
   ref: DenRef;
   faults: {
-    status(pathPrefix: string, statusCode: number, opts?: { times?: number; body?: unknown }): void;
-    latency(pathPrefix: string, delayMs: number, opts?: { times?: number }): void;
-    clear(): void;
+    status(pathPrefix: string, statusCode: number, opts?: { times?: number; body?: unknown }): Promise<void>;
+    latency(pathPrefix: string, delayMs: number, opts?: { times?: number }): Promise<void>;
+    clear(): Promise<void>;
   };
+  /** Local lane: the live in-memory log (back-compat). Remote lane: the snapshot from the last requestLog() call. */
   requests: FaultRequest[];
+  /** Authoritative log in both lanes: local returns a copy; remote fetches from the control plane and refreshes `requests`. */
+  requestLog(): Promise<FaultRequest[]>;
+}
+
+export interface FaultProxyOptions {
+  place?: Place;
+  sandbox?: string;
 }
 
 interface RuleBase {
@@ -129,7 +139,7 @@ function forward(
   incoming.pipe(outbound);
 }
 
-export async function faultProxy(ref: DenRef): Promise<FaultProxy> {
+async function localFaultProxy(ref: DenRef): Promise<FaultProxy> {
   const upstream = new URL(ref.webUrl);
   const port = await allocateFreePort();
   const rules: FaultRule[] = [];
@@ -169,21 +179,93 @@ export async function faultProxy(ref: DenRef): Promise<FaultProxy> {
   return {
     ref: { apiUrl: `${url}/api/den`, webUrl: url },
     faults: {
-      status(pathPrefix, statusCode, opts = {}) {
+      async status(pathPrefix, statusCode, opts = {}) {
         rules.push({ kind: "status", pathPrefix, statusCode, body: opts.body, remaining: times(opts.times) });
       },
-      latency(pathPrefix, delayMs, opts = {}) {
+      async latency(pathPrefix, delayMs, opts = {}) {
         rules.push({ kind: "latency", pathPrefix, delayMs, remaining: times(opts.times) });
       },
-      clear() {
+      async clear() {
         rules.length = 0;
       },
     },
     requests,
+    async requestLog(): Promise<FaultRequest[]> {
+      return [...requests];
+    },
     async [Symbol.asyncDispose](): Promise<void> {
       if (disposed) return;
       disposed = true;
       await closeServer(server);
+    },
+  };
+}
+
+function isFaultRequest(value: unknown): value is FaultRequest {
+  if (typeof value !== "object" || value === null) return false;
+  return "method" in value && typeof value.method === "string"
+    && "path" in value && typeof value.path === "string"
+    && "status" in value && typeof value.status === "number"
+    && "faulted" in value && typeof value.faulted === "boolean"
+    && "at" in value && typeof value.at === "number";
+}
+
+export async function faultProxy(ref: DenRef, options: FaultProxyOptions = {}): Promise<FaultProxy> {
+  if (options.place?.kind !== "daytona") return localFaultProxy(ref);
+  if (!options.sandbox) {
+    throw new Error("fault proxy on Daytona needs the Den sandbox id; pass `sandbox: den.placement.sandboxId`.");
+  }
+
+  const remote = await startFaultProxyOnSandbox({ sandbox: options.sandbox });
+  const requests: FaultRequest[] = [];
+  const control = async (path: string, init: RequestInit = {}): Promise<Response> => {
+    const response = await fetch(`${remote.url}/__openwork_faults/${path}`, {
+      ...init,
+      headers: { ...init.headers, "x-openwork-fault-token": remote.token },
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`Fault proxy control ${path} failed: HTTP ${response.status}${body ? ` ${body}` : ""}`);
+    }
+    return response;
+  };
+  const post = async (path: string, body?: unknown): Promise<void> => {
+    await control(path, {
+      method: "POST",
+      headers: body === undefined ? undefined : { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  };
+  let disposed = false;
+  return {
+    ref: { apiUrl: `${remote.url}/api/den`, webUrl: remote.url },
+    faults: {
+      status(pathPrefix, statusCode, opts = {}) {
+        return post("rules", { kind: "status", pathPrefix, statusCode, times: opts.times, body: opts.body });
+      },
+      latency(pathPrefix, delayMs, opts = {}) {
+        return post("rules", { kind: "latency", pathPrefix, delayMs, times: opts.times });
+      },
+      clear() {
+        return post("clear");
+      },
+    },
+    requests,
+    async requestLog(): Promise<FaultRequest[]> {
+      const response = await control("requests");
+      const body: unknown = await response.json();
+      if (typeof body !== "object" || body === null || !("requests" in body) || !Array.isArray(body.requests) || !body.requests.every(isFaultRequest)) {
+        throw new Error("Fault proxy control requests returned an invalid response.");
+      }
+      requests.splice(0, requests.length, ...body.requests);
+      return [...requests];
+    },
+    async [Symbol.asyncDispose](): Promise<void> {
+      if (disposed) return;
+      disposed = true;
+      await remote.stop().catch((error: unknown) => {
+        console.error(`[openwork/testkit] Fault proxy cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
     },
   };
 }

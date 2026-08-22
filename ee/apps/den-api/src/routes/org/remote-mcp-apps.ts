@@ -21,7 +21,8 @@ import type { OrgRouteVariables } from "./shared.js"
 const sourceSchema = z.object({ sourceUrl: z.string().trim().url().max(2048) })
 const importSchema = sourceSchema.extend({
   activate: z.boolean().optional().default(true),
-})
+  pluginId: z.string().trim().min(1).max(160).optional(),
+}).strict()
 const refreshSchema = z.object({
   sourceUrl: z.string().trim().url().max(2048).optional(),
 })

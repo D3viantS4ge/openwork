@@ -80,7 +80,6 @@ export function GithubIntegrationScreen() {
   return (
     <DashboardPageTemplate
       icon={Github}
-      badgeLabel="GitHub"
       title="Connect GitHub"
       description="Choose a connected account from the Integrations page to continue."
       colors={["#E2E8F0", "#0F172A", "#111827", "#94A3B8"]}
@@ -116,7 +115,6 @@ function GithubInstallCompletionRedirect({ installationId, state }: { installati
   return (
     <DashboardPageTemplate
       icon={Github}
-      badgeLabel="GitHub"
       title="Finishing GitHub connection"
       description="OpenWork is finalizing the GitHub App installation for this organization."
       colors={["#E2E8F0", "#0F172A", "#111827", "#94A3B8"]}
@@ -192,7 +190,6 @@ function ConfigurationLoadingState() {
   return (
     <DashboardPageTemplate
       icon={Puzzle}
-      badgeLabel="Repository"
       title="Loading…"
       description="OpenWork is loading this repository's connector configuration."
       colors={["#DBEAFE", "#0F172A", "#1D4ED8", "#BFDBFE"]}
@@ -274,7 +271,6 @@ function GithubConnectorInstanceManagePhase({
   return (
     <DashboardPageTemplate
       icon={Puzzle}
-      badgeLabel="Repository"
       title={repoName}
       description="Manage which plugins OpenWork imports from this repository."
       colors={["#DBEAFE", "#0F172A", "#1D4ED8", "#BFDBFE"]}
@@ -592,7 +588,7 @@ function RemoveRepositoryConfirmDialog({
               </li>
               <li className="flex gap-2">
                 <span className="text-gray-400">•</span>
-                <span>Any marketplace that was created solely from this repository and is now empty</span>
+                <span>Any collection that was created solely from this repository and is now empty</span>
               </li>
             </ul>
             <p className="mt-3 text-[12px] leading-5 text-gray-500">
@@ -682,7 +678,6 @@ function GithubConnectedAccountSelectionPhase({ connectorAccountId }: { connecto
   return (
     <DashboardPageTemplate
       icon={Github}
-      badgeLabel="GitHub"
       title="Add a repository"
       description={ownerLogin
         ? `Pick one of the repositories the @${ownerLogin} installation can already read.`
@@ -1007,7 +1002,6 @@ function GithubDiscoveryPhase({ connectorInstanceId, onBack }: { connectorInstan
   return (
     <DashboardPageTemplate
       icon={Sparkles}
-      badgeLabel="Discovery"
       title={repoName ?? "Discover repository"}
       description="Pick which plugins OpenWork should import from this repository."
       colors={["#DBEAFE", "#0F172A", "#1D4ED8", "#BFDBFE"]}

@@ -197,6 +197,7 @@ export interface SkillItem {
   description: string;
   scope: "project" | "global";
   trigger?: string;
+  error?: string;
 }
 
 export interface CommandItem {

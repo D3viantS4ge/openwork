@@ -6,33 +6,34 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const evalsDir = fileURLToPath(new URL("..", import.meta.url));
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
-const specsDir = join(evalsDir, "specs");
+const testsDir = join(evalsDir, "specs");
 
-const usage = `Usage: node evals/bin/evals.mjs [spec-names...] [flags]
+const usage = `Usage: node evals/bin/evals.mjs [test-names...] [flags]
 
-Run stack-lane specs:
+Run E2E tests:
   --with-llm-vision  Judge vision claims inline (default: defer judging)
-  --daytona         Set OPENWORK_EVAL_DAYTONA=1
-  --den <url>       Set OPENWORK_EVAL_DEN_API_URL=<url>
+  --local            Force isolated local resources and clear inherited remote placement
+  --daytona          Set OPENWORK_EVAL_DAYTONA=1
+  --den <url>        Set OPENWORK_EVAL_DEN_API_URL=<url>
 
 Judge then publish evidence:
   --publish         Enter judge-then-publish mode
   --pr <n>          Publish to pull request n
-  --roll <value>    Select a roll directory, name, or latest (default: latest)
+  --test-run <value> Select a test run path, directory ID, name, or latest (default: latest)
   --dry-run         Render publication output without posting
   --force           Forward force to the publisher
 
 Other:
   --help, -h        Show this help
 
-Publish mode cannot be combined with spec names, --with-llm-vision, --daytona,
-or --den. Named specs auto-consent to opt-in flags declared in their source;
+Publish mode cannot be combined with test names, --with-llm-vision, --daytona,
+--local, or --den. Named tests auto-consent to opt-in flags declared in their source;
 value-bearing environment variables are never auto-set.
 
 Run exit codes:
-  0  Passed, or a bare sweep completed with expected skips
+  0  Passed, or an unfiltered E2E suite completed with expected skips
   1  One or more tests failed
-  2  A named spec skipped and its result is incomplete
+  2  A named test skipped and its result is incomplete
 
 Publish exit codes:
   0  Judge and publisher succeeded
@@ -63,8 +64,9 @@ function valueAfter(args, index, flag) {
 
 export function parseArgs(args) {
   const options = {
-    specNames: [],
+    testNames: [],
     withLlmVision: false,
+    local: false,
     daytona: false,
     publish: false,
     dryRun: false,
@@ -76,27 +78,36 @@ export function parseArgs(args) {
     const arg = args[index];
     if (arg === "--help" || arg === "-h") options.help = true;
     else if (arg === "--with-llm-vision") options.withLlmVision = true;
+    else if (arg === "--local") options.local = true;
     else if (arg === "--daytona") options.daytona = true;
     else if (arg === "--publish") options.publish = true;
     else if (arg === "--dry-run") options.dryRun = true;
     else if (arg === "--force") options.force = true;
-    else if (arg === "--den" || arg === "--pr" || arg === "--roll") {
+    else if (arg === "--den" || arg === "--pr" || arg === "--test-run") {
       const value = valueAfter(args, index, arg);
       if (arg === "--den") options.den = value;
       else if (arg === "--pr") options.pr = value;
-      else options.roll = value;
+      else options.testRun = value;
       index += 1;
     } else if (arg.startsWith("-")) {
       throw new Error(`Unknown flag: ${arg}`);
     } else {
-      options.specNames.push(arg);
+      options.testNames.push(arg);
     }
+  }
+
+  if (options.local && (options.daytona || options.den !== undefined)) {
+    const conflicts = [];
+    if (options.daytona) conflicts.push("--daytona");
+    if (options.den !== undefined) conflicts.push("--den");
+    throw new Error(`--local is mutually exclusive with ${conflicts.join(" and ")}.`);
   }
 
   if (options.publish) {
     const conflicts = [];
-    if (options.specNames.length > 0) conflicts.push("spec names");
+    if (options.testNames.length > 0) conflicts.push("test names");
     if (options.withLlmVision) conflicts.push("--with-llm-vision");
+    if (options.local) conflicts.push("--local");
     if (options.daytona) conflicts.push("--daytona");
     if (options.den !== undefined) conflicts.push("--den");
     if (conflicts.length > 0) {
@@ -108,7 +119,7 @@ export function parseArgs(args) {
   } else {
     const publishFlags = [];
     if (options.pr !== undefined) publishFlags.push("--pr");
-    if (options.roll !== undefined) publishFlags.push("--roll");
+    if (options.testRun !== undefined) publishFlags.push("--test-run");
     if (options.dryRun) publishFlags.push("--dry-run");
     if (options.force) publishFlags.push("--force");
     if (publishFlags.length > 0) {
@@ -119,18 +130,40 @@ export function parseArgs(args) {
   return options;
 }
 
-function specFiles(directory = specsDir) {
+const REMOTE_PLACEMENT_ENV = [
+  "OPENWORK_EVAL_DAYTONA",
+  "OPENWORK_EVAL_DAYTONA_SANDBOX",
+  "OPENWORK_EVAL_DAYTONA_SANDBOX_ID",
+  "OPENWORK_EVAL_DAYTONA_DEN_SANDBOX",
+  "OPENWORK_EVAL_DAYTONA_DESKTOP_SANDBOX",
+  "OPENWORK_EVAL_DEN_API_URL",
+  "OPENWORK_EVAL_DEN_WEB_URL",
+];
+
+/** Resolve the child environment before any test process can provision resources. */
+export function resolveRunEnvironment(options, env = process.env) {
+  const childEnv = { ...env };
+  if (options.local) {
+    for (const name of REMOTE_PLACEMENT_ENV) delete childEnv[name];
+    return childEnv;
+  }
+  if (options.daytona) childEnv.OPENWORK_EVAL_DAYTONA = "1";
+  if (options.den !== undefined) childEnv.OPENWORK_EVAL_DEN_API_URL = options.den;
+  return childEnv;
+}
+
+function testFiles(directory = testsDir) {
   return readdirSync(directory, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile() && /(?:\.slow)?\.test\.ts$/.test(entry.name))
+    .filter((entry) => entry.isFile() && /\.e2e\.test\.ts$/.test(entry.name))
     .map((entry) => join(entry.parentPath, entry.name))
     .sort();
 }
 
-export function resolveSpecNames(names, files = specFiles()) {
+export function resolveTestNames(names, files = testFiles()) {
   const entries = files.map((file) => ({
     file,
     base: basename(file),
-    relative: relative(specsDir, file).split(sep).join("/"),
+    relative: relative(testsDir, file).split(sep).join("/"),
   }));
   const resolved = [];
 
@@ -139,18 +172,18 @@ export function resolveSpecNames(names, files = specFiles()) {
     let matches = entries.filter((entry) => entry.relative === normalized);
     if (matches.length === 0) {
       matches = entries.filter((entry) =>
-        entry.base === `${normalized}.test.ts` || entry.base === `${normalized}.slow.test.ts`
+        entry.base === `${normalized}.e2e.test.ts`
       );
     }
     if (matches.length === 0) {
       matches = entries.filter((entry) => entry.base.startsWith(normalized));
     }
     if (matches.length > 1) {
-      throw new Error(`Spec name "${name}" is ambiguous:\n${matches.map((entry) => `  ${entry.relative}`).join("\n")}`);
+      throw new Error(`Test name "${name}" is ambiguous:\n${matches.map((entry) => `  ${entry.relative}`).join("\n")}`);
     }
     if (matches.length === 0) {
       const close = entries.filter((entry) => entry.base.includes(normalized));
-      throw new Error(`No spec matches "${name}". Close candidates:\n${close.length > 0 ? close.map((entry) => `  ${entry.relative}`).join("\n") : "  (none)"}`);
+      throw new Error(`No test matches "${name}". Close candidates:\n${close.length > 0 ? close.map((entry) => `  ${entry.relative}`).join("\n") : "  (none)"}`);
     }
     if (!resolved.includes(matches[0].file)) resolved.push(matches[0].file);
   }
@@ -206,11 +239,11 @@ function childStatus(result) {
 }
 
 function publish(options) {
-  const roll = options.roll ?? "latest";
+  const testRun = options.testRun ?? "latest";
   const judge = spawnSync(process.execPath, [
-    join(evalsDir, "packages/fraimz/bin/judge.mjs"),
-    "--roll",
-    roll,
+    join(evalsDir, "packages/test-evidence/bin/test-evidence-judge.mjs"),
+    "--test-run",
+    testRun,
   ], { cwd: repoRoot, env: process.env, stdio: "inherit" });
   const judgeStatus = childStatus(judge);
 
@@ -220,9 +253,9 @@ function publish(options) {
   }
   if (![0, 1, 2].includes(judgeStatus)) return judgeStatus;
 
-  const publishArgs = [join(evalsDir, "packages/evidence/bin/publish-pr.mjs")];
+  const publishArgs = [join(evalsDir, "packages/test-artifacts/bin/publish-pr.mjs")];
   if (options.pr) publishArgs.push("--pr", options.pr);
-  if (options.roll) publishArgs.push("--roll", options.roll);
+  if (options.testRun) publishArgs.push("--test-run", options.testRun);
   if (options.dryRun) publishArgs.push("--dry-run");
   if (options.force) publishArgs.push("--force");
   const published = spawnSync(process.execPath, publishArgs, {
@@ -235,9 +268,10 @@ function publish(options) {
 }
 
 function run(options) {
-  const resolved = resolveSpecNames(options.specNames);
-  const childEnv = { ...process.env, OPENWORK_EVAL_APP_SPECS: "1" };
-  const consented = new Set(["OPENWORK_EVAL_APP_SPECS"]);
+  const resolved = resolveTestNames(options.testNames);
+  const childEnv = resolveRunEnvironment(options);
+  childEnv.OPENWORK_EVAL_E2E_TESTS = "1";
+  const consented = new Set(["OPENWORK_EVAL_E2E_TESTS"]);
 
   for (const file of resolved) {
     for (const variable of consentVarsFromSource(readFileSync(file, "utf8"))) {
@@ -248,16 +282,13 @@ function run(options) {
   }
   if (options.withLlmVision) delete childEnv.OPENWORK_EVAL_VISION;
   else childEnv.OPENWORK_EVAL_VISION = "defer";
-  if (options.daytona) childEnv.OPENWORK_EVAL_DAYTONA = "1";
-  if (options.den !== undefined) childEnv.OPENWORK_EVAL_DEN_API_URL = options.den;
-
   const outputDir = join(evalsDir, "results/.testkit");
   mkdirSync(outputDir, { recursive: true });
   const outputFile = join(outputDir, `cli-run-${Date.now()}.json`);
   const vitestArgs = [
     "exec", "vitest", "run",
     "--config", "vitest.config.ts",
-    "--project", "stack",
+    "--project", "e2e",
     "--reporter=default",
     "--reporter=json",
     `--outputFile=${outputFile}`,
@@ -278,11 +309,18 @@ function run(options) {
   const summary = summarize(report);
   const verdict = verdictFor(summary, { childExit: status });
   process.stdout.write(`${JSON.stringify({
-    command: "evals",
-    lane: "stack",
-    daytona: options.daytona,
+    command: "evals:e2e",
+    lane: "e2e",
+    daytona: childEnv.OPENWORK_EVAL_DAYTONA?.trim() === "1",
+    placement: options.local
+      ? "local"
+      : options.daytona
+        ? "daytona"
+        : options.den !== undefined
+          ? "attached"
+          : "automatic",
     vision: options.withLlmVision ? "inline" : "defer",
-    files: options.specNames.length > 0 ? options.specNames : ["all"],
+    files: options.testNames.length > 0 ? options.testNames : ["all"],
     ...summary,
     consented: [...consented].sort(),
     verdict,

@@ -55,7 +55,7 @@ const SAFE_X_RESPONSE_HEADERS = new Set(["x-content-type-options"]);
  */
 const DEN_API_ROUTE_PREFIX = "/api/den";
 const DEFAULT_CLOUD_INSTANCE_ORIGIN_SUFFIXES = [".daytonaproxy01.net"];
-const CORS_ALLOW_HEADERS = "authorization,content-type,x-openwork-org-id,x-request-id,accept";
+const CORS_ALLOW_HEADERS = "authorization,content-type,x-openwork-org-id,x-openwork-legacy-org-id,x-request-id,accept";
 const CORS_ALLOW_METHODS = "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS";
 
 function cloudInstanceOriginSuffixes(): string[] {
@@ -111,7 +111,26 @@ function requestPublicOrigin(request: NextRequest): URL {
     }
   }
 
-  return new URL(request.url);
+  const requestUrl = new URL(request.url);
+  const requestHost = requestUrl.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (requestHost !== "localhost" && requestHost !== "127.0.0.1" && requestHost !== "0.0.0.0" && requestHost !== "::1") {
+    return requestUrl;
+  }
+
+  const forwardedHost = request.headers.get("x-forwarded-host")?.split(",", 1)[0]?.trim();
+  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",", 1)[0]?.trim().toLowerCase();
+  if (forwardedHost && (forwardedProto === "http" || forwardedProto === "https")) {
+    try {
+      const forwarded = new URL(`${forwardedProto}://${forwardedHost}`);
+      if (!forwarded.username && !forwarded.password && forwarded.pathname === "/" && !forwarded.search && !forwarded.hash) {
+        return forwarded;
+      }
+    } catch {
+      // Fall through to the request URL when the ingress headers are malformed.
+    }
+  }
+
+  return requestUrl;
 }
 
 function normalizePathPrefix(value: string): string {
@@ -325,9 +344,14 @@ function errorName(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
 }
 
-async function readRequestBody(request: NextRequest): Promise<Uint8Array | null> {
+async function readRequestBody(request: NextRequest): Promise<Blob | null> {
   if (request.method === "GET" || request.method === "HEAD") return null;
-  return new Uint8Array(await request.arrayBuffer());
+  // Forward a Blob, never an ArrayBuffer or a view: Next 16's patched fetch
+  // hands buffer-backed bodies to undici with their backing ArrayBuffer
+  // detached — even a fresh copy — so every proxied write threw "Cannot
+  // perform ArrayBuffer.prototype.slice on a detached ArrayBuffer" while
+  // GETs (null body) kept working. A Blob owns its bytes and survives the hop.
+  return request.blob();
 }
 
 export async function proxyUpstream(

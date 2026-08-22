@@ -71,7 +71,7 @@ spec:
                 "PORT",
                 "NODE_OPTIONS",
               ];
-              const secretPattern = /(SECRET|PASSWORD|PRIVATE|TOKEN|KEY|DATABASE_URL)/;
+              const secretPattern = /(SECRET|PASSWORD|PRIVATE|TOKEN|KEY|DATABASE_URL|BOOTSTRAP_CODE|SHA256)/;
               const failures = [];
 
               function compactPem(value) {

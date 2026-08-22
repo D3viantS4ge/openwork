@@ -38,6 +38,7 @@ export async function runPostOrganizationMemberChangeHooks(input: {
   memberId: MemberId
   change: OrganizationMemberChange
 }) {
+  // Member add/remove changes both list rendering and membership auth decisions.
   await cache.org.deleteMembers(input.organizationId)
   const memberCount = await countOrganizationMembers(input.organizationId)
   for (const hook of organizationMemberChangeHooks) {

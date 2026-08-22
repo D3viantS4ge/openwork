@@ -244,6 +244,10 @@ async function attachGroupMemberToTeam(input: {
   group: ScimGroup
   member: ScimGroupMember
 }) {
+  if (!input.member.remoteUserId) {
+    return
+  }
+
   const organizationMember = await findActiveOrganizationMember({
     organizationId: input.provider.organizationId,
     remoteUserId: input.member.remoteUserId,
@@ -269,6 +273,7 @@ async function attachGroupMemberToTeam(input: {
         id: teamMemberId,
         teamId: input.group.teamId,
         orgMembershipId: organizationMember.id,
+        userId: organizationMember.userId,
         createdAt: new Date(),
       })
     }
@@ -300,9 +305,14 @@ export async function replaceScimGroupMembers(input: {
   const nextMembers = uniqueMembers(input.members)
   const existing = await loadGroupMembers(group.id)
   const nextValues = new Set(nextMembers.map((member) => member.value))
-  const existingByValue = new Map(existing.map((member) => [member.remoteUserId, member]))
+  const existingByValue = new Map(
+    existing.flatMap((member) => member.remoteUserId ? [[member.remoteUserId, member]] : []),
+  )
 
   for (const member of existing) {
+    if (!member.remoteUserId) {
+      continue
+    }
     if (!nextValues.has(member.remoteUserId)) {
       await detachOwnedTeamMembership(member)
       await db.delete(ScimGroupMemberTable).where(eq(ScimGroupMemberTable.id, member.id))
@@ -317,6 +327,8 @@ export async function replaceScimGroupMembers(input: {
       await db.insert(ScimGroupMemberTable).values({
         id: memberId,
         groupId: group.id,
+        organizationId: input.provider.organizationId,
+        providerId: input.provider.providerId,
         remoteUserId: nextMember.value,
         createdAt: now,
         updatedAt: now,
@@ -365,6 +377,7 @@ export async function createScimGroup(input: {
     id: groupId,
     organizationId: input.provider.organizationId,
     providerId: input.provider.providerId,
+    scimGroupId: groupId,
     externalId: input.value.externalId ?? null,
     displayName,
     createdAt: now,
@@ -494,10 +507,12 @@ export async function serializeScimGroup(group: ScimGroup, baseUrl: string): Pro
     schemas: [SCIM_GROUP_SCHEMA],
     id: group.id,
     displayName: group.displayName,
-    members: members.map((member) => ({
-      value: member.remoteUserId,
-      $ref: `${baseUrl}/Users/${encodeURIComponent(member.remoteUserId)}`,
-    })),
+    members: members.flatMap((member) => member.remoteUserId
+      ? [{
+          value: member.remoteUserId,
+          $ref: `${baseUrl}/Users/${encodeURIComponent(member.remoteUserId)}`,
+        }]
+      : []),
     meta: {
       resourceType: "Group",
       created: group.createdAt.toISOString(),
@@ -528,7 +543,9 @@ export async function setScimGroupMappingMode(input: {
       await replaceScimGroupMembers({
         provider,
         group,
-        members: members.map((member) => ({ value: member.remoteUserId })),
+        members: members.flatMap((member) => member.remoteUserId
+          ? [{ value: member.remoteUserId }]
+          : []),
       })
     }
   }

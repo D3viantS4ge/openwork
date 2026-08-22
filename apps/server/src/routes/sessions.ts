@@ -21,7 +21,7 @@ type ReadJsonBody = (request: Request) => Promise<Record<string, unknown>>;
 type WorkspaceOpencodeClient = ReturnType<typeof createOpencodeClient>;
 type OpencodeClientResult<T, E> =
   | { data: T | undefined; error: undefined; response: Response }
-  | { data: undefined; error: E; response: Response };
+  | { data: undefined; error: E; response?: Response };
 type UnwrapOpencodeResult = <T, E>(result: OpencodeClientResult<T, E>, path: string) => NonNullable<T>;
 
 interface RegisterSessionRoutesOptions {
@@ -237,8 +237,9 @@ export function registerSessionRoutes(options: RegisterSessionRoutesOptions): vo
         parts: [{ type: "text", text: input.prompt }],
       });
       if (result.error !== undefined) {
+        const upstreamStatus = result.response?.status;
         throw new ApiError(502, "opencode_request_failed", "OpenCode request failed", {
-          status: result.response.status,
+          ...(upstreamStatus === undefined ? {} : { status: upstreamStatus }),
           body: result.error,
           path: `/session/${encodeURIComponent(session.id)}/prompt_async`,
         });
@@ -367,10 +368,35 @@ export function registerSessionRoutes(options: RegisterSessionRoutesOptions): vo
     const workspace = await resolveWorkspace(config, ctx.params.id);
     const sessionId = ctx.params.sessionId?.trim();
     if (!sessionId) throw new ApiError(400, "invalid_payload", "sessionId is required");
+    console.info("[openwork-server] abort", {
+      phase: "start",
+      source: "workspace.sessions.abort_route",
+      initiator: "user",
+      reason: "client requested session abort through OpenWork server route",
+      workspaceId: workspace.id,
+      sessionID: sessionId,
+      actorType: ctx.actor?.type ?? "unknown",
+    });
     const result = await createWorkspaceOpencodeClient(config, workspace, { sessionId }).session.abort({ sessionID: sessionId });
     if (result.error !== undefined) {
+      console.info("[openwork-server] abort", {
+        phase: "error",
+        source: "workspace.sessions.abort_route",
+        initiator: "user",
+        workspaceId: workspace.id,
+        sessionID: sessionId,
+        actorType: ctx.actor?.type ?? "unknown",
+      });
       throw new ApiError(502, "opencode_request_failed", "OpenCode abort failed");
     }
+    console.info("[openwork-server] abort", {
+      phase: "done",
+      source: "workspace.sessions.abort_route",
+      initiator: "user",
+      workspaceId: workspace.id,
+      sessionID: sessionId,
+      actorType: ctx.actor?.type ?? "unknown",
+    });
     return jsonResponse({ ok: true });
   });
 

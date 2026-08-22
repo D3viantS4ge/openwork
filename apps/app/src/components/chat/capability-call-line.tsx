@@ -21,7 +21,6 @@ import { normalizeErrorText } from "@/lib/error-text"
 import { trackToolCallDuration } from "@/lib/tool-call-duration"
 import { isToolPartInFlight } from "@/lib/tool-activity"
 import { cn } from "@/lib/utils"
-import { McpAppFrame } from "./mcp-app-frame"
 
 type CapabilityCallLineProps = ChatToolReconnectCallbacks & {
   part: DynamicToolUIPart
@@ -230,7 +229,6 @@ export function CapabilityCallLine({
   const sentence = getCapabilityCallSentence(part)
   const line = inFlight ? sentence.present : sentence.past
   return (
-    <>
     <Collapsible data-capability-call={part.toolName} open={open} onOpenChange={setOpen} className={className}>
       <div className="flex min-w-0 items-center gap-2">
         <CollapsibleTrigger
@@ -252,7 +250,5 @@ export function CapabilityCallLine({
         <TechnicalDetailsPanel part={part} />
       </CollapsibleContent>
     </Collapsible>
-    {part.state === "output-available" ? <McpAppFrame part={part} /> : null}
-    </>
   )
 }

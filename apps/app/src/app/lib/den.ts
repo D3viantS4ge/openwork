@@ -8,6 +8,7 @@ import {
 } from "@openwork/types/automations";
 import type {
   AutomationDetail,
+  AutomationDesktopRunnerPresence,
   AutomationDesktopRunnerRegistration,
   AutomationList,
   AutomationRun,
@@ -68,6 +69,7 @@ const STORAGE_ACTIVE_ORG_NAME = "openwork.den.activeOrgName";
 const DESKTOP_CONFIG_CACHE_PREFIX = "openwork.den.desktopConfig:";
 export const CLOUD_MCP_SYNC_MARKER_STORAGE_KEY = "openwork.den.mcp.sync";
 const ORG_PROXY_HEADER = "x-openwork-legacy-org-id";
+const ORG_SCOPE_HEADER = "x-openwork-org-id";
 const DEFAULT_DEN_TIMEOUT_MS = 12_000;
 
 export const DEFAULT_DEN_AUTH_NAME = "OpenWork User";
@@ -107,6 +109,7 @@ export const DEN_INFERENCE_PATH = "/dashboard/inference";
 export type * from "./den-types";
 import type {
   DenAssignedMarketplaceCapability,
+  DenMeLibraryPlugin,
   DenOrgExtensionProjection,
   DenOrgMarketplace,
   DenOrgPlugin,
@@ -292,7 +295,9 @@ export type DenMemory = {
 
 export type DenMcpToken = {
   token: string;
+  appHostToken?: string;
   expiresAt: string;
+  appHostExpiresAt?: string;
   organizationId: string;
   scopes: string[];
   resource: string;
@@ -1564,7 +1569,7 @@ function parseCloudInstanceUpdateResult(payload: unknown): DenCloudInstanceUpdat
   return null;
 }
 
-function getMcpToken(payload: unknown): DenMcpToken | null {
+export function parseDenMcpToken(payload: unknown): DenMcpToken | null {
   if (
     !isRecord(payload) ||
     typeof payload.token !== "string" ||
@@ -1582,6 +1587,9 @@ function getMcpToken(payload: unknown): DenMcpToken | null {
       ? payload.scopes.filter((entry): entry is string => typeof entry === "string")
       : [],
     resource: payload.resource,
+    ...(typeof payload.appHostToken === "string" && typeof payload.appHostExpiresAt === "string"
+      ? { appHostToken: payload.appHostToken, appHostExpiresAt: payload.appHostExpiresAt }
+      : {}),
   };
 }
 
@@ -1740,8 +1748,9 @@ function parseApiKeysRecord(value: unknown): Record<string, string> | null {
 }
 
 function parsePluginConfigObjectType(value: unknown): DenPluginConfigObjectType | null {
+  if (value === "script") return "workflow";
   return value === "skill" || value === "agent" || value === "command" || value === "tool" ||
-    value === "mcp" || value === "hook" || value === "context" || value === "custom" || value === "script"
+    value === "mcp" || value === "hook" || value === "context" || value === "custom" || value === "workflow"
     ? value
     : null;
 }
@@ -2188,6 +2197,20 @@ function getAssignedMarketplaceCapabilities(payload: unknown): DenAssignedMarket
   });
 }
 
+function getMeLibraryPlugins(payload: unknown): DenMeLibraryPlugin[] {
+  if (!isRecord(payload) || !Array.isArray(payload.items)) return [];
+  return payload.items.flatMap((item) => {
+    if (!isRecord(item) || item.type !== "plugin" || typeof item.id !== "string" || typeof item.name !== "string") {
+      return [];
+    }
+    return [{
+      id: item.id,
+      name: item.name,
+      description: typeof item.description === "string" ? item.description : null,
+    }];
+  });
+}
+
 function getBillingPrice(value: unknown): DenBillingPrice | null {
   if (!isRecord(value)) {
     return null;
@@ -2340,6 +2363,7 @@ async function requestJsonRaw<T>(
   }
   const organizationId = options.organizationId?.trim() ?? "";
   if (organizationId) {
+    headers[ORG_SCOPE_HEADER] = organizationId;
     headers[ORG_PROXY_HEADER] = organizationId;
   }
   if (options.automationModelAttentionCapable) {
@@ -2407,9 +2431,10 @@ async function ensureActiveOrganization(
   });
 }
 
-export function createDenClient(options: { baseUrl: string; token?: string | null }) {
+export function createDenClient(options: { baseUrl: string; apiBaseUrl?: string | null; token?: string | null }) {
   const baseUrls = resolveDenBaseUrls({
     baseUrl: options.baseUrl,
+    apiBaseUrl: options.apiBaseUrl,
   });
   const token = options.token?.trim() ?? null;
 
@@ -2573,7 +2598,7 @@ export function createDenClient(options: { baseUrl: string; token?: string | nul
         organizationId: orgId,
         body: { scopes: ["mcp:read", "mcp:write"] },
       });
-      const minted = getMcpToken(payload);
+      const minted = parseDenMcpToken(payload);
       if (!minted) {
         throw new DenApiError(500, "invalid_mcp_token_payload", "MCP token response was missing required values.");
       }
@@ -2644,6 +2669,25 @@ export function createDenClient(options: { baseUrl: string; token?: string | nul
         organizationId: orgId,
         automationModelAttentionCapable: true,
       });
+    },
+
+    /**
+     * Null when this Den cannot report presence: desktops outlive the Den they
+     * were released against, and self-hosted Dens lag further still. Unknown
+     * presence is not an absent desktop, so callers must not warn on it.
+     */
+    async getAutomationDesktopRunnerPresence(orgId: string): Promise<AutomationDesktopRunnerPresence | null> {
+      try {
+        return await requestJson<AutomationDesktopRunnerPresence>(baseUrls, "/v1/automation-runners/presence", {
+          method: "GET",
+          token,
+          organizationId: orgId,
+          automationModelAttentionCapable: true,
+        });
+      } catch (error) {
+        if (error instanceof DenApiError && error.status === 404) return null;
+        throw error;
+      }
     },
 
     async mintAutomationRunnerToken(orgId: string, registration: AutomationDesktopRunnerRegistration): Promise<AutomationRunnerTokenResponse> {
@@ -2825,6 +2869,15 @@ export function createDenClient(options: { baseUrl: string; token?: string | nul
       return getAssignedMarketplaceCapabilities(payload);
     },
 
+    async listMeLibraryPlugins(orgId: string): Promise<DenMeLibraryPlugin[]> {
+      const payload = await requestJson<unknown>(
+        baseUrls,
+        "/v1/me/library",
+        { method: "GET", token, organizationId: orgId },
+      );
+      return getMeLibraryPlugins(payload);
+    },
+
     async getOrgMarketplaceResolved(orgId: string, marketplaceId: string): Promise<DenOrgMarketplaceResolved> {
       const payload = await requestJson<unknown>(
         baseUrls,
@@ -2845,6 +2898,48 @@ export function createDenClient(options: { baseUrl: string; token?: string | nul
         { method: "GET", token, organizationId: orgId },
       );
       return getOrgPluginResolved(plugin, payload);
+    },
+
+    async createOrgPlugin(
+      orgId: string,
+      input: {
+        name: string;
+        description?: string | null;
+        components: Array<{
+          type: "skill" | "command" | "agent" | "mcp";
+          input: {
+            rawSourceText?: string;
+            normalizedPayloadJson?: Record<string, unknown>;
+            metadata: { name: string; description?: string };
+          };
+        }>;
+        orgWide?: boolean;
+        marketplaceId?: string;
+      },
+    ): Promise<string> {
+      const marketplaceId = input.marketplaceId?.trim() || undefined;
+      const payload = await requestJson<unknown>(
+        baseUrls,
+        "/v1/plugins",
+        {
+          method: "POST",
+          token,
+          organizationId: orgId,
+          body: {
+            name: input.name,
+            description: input.description ?? null,
+            components: input.components,
+            orgWide: input.orgWide === true,
+            ...(marketplaceId ? { marketplaceId } : {}),
+          },
+        },
+      );
+      const item = isRecord(payload) && isRecord(payload.item) ? payload.item : null;
+      const pluginId = item && typeof item.id === "string" ? item.id : null;
+      if (!pluginId) {
+        throw new DenApiError(500, "invalid_plugin_payload", "Plugin was created but no id was returned.");
+      }
+      return pluginId;
     },
 
     async getBillingStatus(options: { includePortal?: boolean; includeInvoices?: boolean } = {}): Promise<DenBillingSummary> {

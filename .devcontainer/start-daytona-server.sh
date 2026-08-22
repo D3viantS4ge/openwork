@@ -28,6 +28,9 @@ DEN_WEB_PUBLIC_HOST="${DEN_WEB_PUBLIC_HOST%%/*}"
 
 export OPENWORK_DEV_MODE="${OPENWORK_DEV_MODE:-1}"
 export DEN_ORG_MODE="${DEN_ORG_MODE:-multi_org}"
+# Eval sign-ups must not depend on the HIBP API.
+export DEN_PASSWORD_BREACH_SCREENING_ENABLED="${DEN_PASSWORD_BREACH_SCREENING_ENABLED:-false}"
+export DEN_GENERATED_ARTIFACT_VIEWS_ENABLED="${DEN_GENERATED_ARTIFACT_VIEWS_ENABLED:-false}"
 export DATABASE_URL="${DATABASE_URL:-mysql://root:password@127.0.0.1:3306/openwork_den}"
 export DEN_DB_ENCRYPTION_KEY="${DEN_DB_ENCRYPTION_KEY:-daytona-den-db-encryption-key-please-change-1234567890}"
 export BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET:-daytona-den-auth-secret-please-change-1234567890}"
@@ -62,6 +65,9 @@ case "$PREVIEW_PROXY_HOST" in
     PREVIEW_PROXY_WILDCARD="https://*.${PREVIEW_PROXY_HOST#*.}"
     ;;
 esac
+# Preview hosts are not app.*: tell den-api the preview domain serves den-web
+# so desktop handoff links point at the den-web /api/den proxy.
+export DEN_WEB_APP_HOSTS="${DEN_WEB_APP_HOSTS:-${PREVIEW_PROXY_WILDCARD:+.${PREVIEW_PROXY_HOST#*.}}}"
 export DEN_BETTER_AUTH_TRUSTED_ORIGINS="${DEN_BETTER_AUTH_TRUSTED_ORIGINS:-$CORS_ORIGINS${PREVIEW_PROXY_WILDCARD:+,$PREVIEW_PROXY_WILDCARD}}"
 
 run_root() {
@@ -134,6 +140,9 @@ fi
 echo "==> Pushing Den DB schema..."
 pnpm --filter @openwork-ee/den-db db:push > /tmp/den-db-push.log 2>&1
 
+echo "==> Building Den API runtime assets..."
+pnpm --filter @openwork-ee/den-api run build:mcp-apps
+
 echo "==> Starting Den API on :$DEN_API_PORT..."
 # The den-api process cmdline is "tsx watch src/main.ts" (cwd-relative), so a
 # pattern anchored on the repo path never matches and restarts silently keep
@@ -146,13 +155,17 @@ nohup env \
   BETTER_AUTH_SECRET="$BETTER_AUTH_SECRET" \
   BETTER_AUTH_URL="$BETTER_AUTH_URL" \
   DEN_API_PUBLIC_URL="$DEN_API_PUBLIC_URL" \
+  DEN_WEB_APP_HOSTS="$DEN_WEB_APP_HOSTS" \
   DEN_MCP_RESOURCE_URL="$DEN_MCP_RESOURCE_URL" \
   DEN_BETTER_AUTH_TRUSTED_ORIGINS="$DEN_BETTER_AUTH_TRUSTED_ORIGINS" \
   CORS_ORIGINS="$CORS_ORIGINS" \
+  DEN_BOOTSTRAP_ADMIN_EMAILS="${DEN_BOOTSTRAP_ADMIN_EMAILS:-}" \
   PROVISIONER_MODE="$DEN_PROVISIONER_MODE" \
   WORKER_URL_TEMPLATE="$DEN_WORKER_URL_TEMPLATE" \
   DAYTONA_WORKER_PROXY_BASE_URL="$DAYTONA_WORKER_PROXY_BASE_URL" \
   DEN_ORG_MODE="$DEN_ORG_MODE" \
+  DEN_PASSWORD_BREACH_SCREENING_ENABLED="$DEN_PASSWORD_BREACH_SCREENING_ENABLED" \
+  DEN_GENERATED_ARTIFACT_VIEWS_ENABLED="$DEN_GENERATED_ARTIFACT_VIEWS_ENABLED" \
   OPENWORK_DEV_MODE="$OPENWORK_DEV_MODE" \
   NODE_OPTIONS="--conditions=development" \
   pnpm --filter @openwork-ee/den-api exec tsx watch src/main.ts > /tmp/den-api.log 2>&1 &
@@ -228,8 +241,27 @@ wait_for_http_status() {
 
 wait_for_http_status "http://127.0.0.1:$DEN_WORKER_PROXY_PORT/unknown" "worker proxy" 120
 
+echo "==> Building Den Web (dev-mode HMR websockets 502 through the preview proxy and block hydration)..."
+if ! env \
+  DEN_WEB_PORT="$DEN_WEB_PORT" \
+  DEN_API_BASE="$DEN_API_BASE" \
+  DEN_AUTH_ORIGIN="$DEN_AUTH_ORIGIN" \
+  DEN_AUTH_FALLBACK_BASE="$DEN_AUTH_FALLBACK_BASE" \
+  NEXT_PUBLIC_OPENWORK_AUTH_CALLBACK_URL="$NEXT_PUBLIC_OPENWORK_AUTH_CALLBACK_URL" \
+  NEXT_PUBLIC_POSTHOG_KEY= \
+  NEXT_PUBLIC_POSTHOG_API_KEY= \
+  DEN_ORG_MODE="$DEN_ORG_MODE" \
+  OPENWORK_DEV_MODE="$OPENWORK_DEV_MODE" \
+  DEN_WEB_ALLOWED_DEV_ORIGINS="$DEN_WEB_ALLOWED_DEV_ORIGINS" \
+  bash -c 'pnpm --filter @openwork/ui build && pnpm --filter @openwork-ee/utils build && pnpm --filter @openwork-ee/den-web build' > /tmp/den-web-build.log 2>&1; then
+  echo "ERROR: Den Web build failed. Last 80 lines:" >&2
+  tail -n 80 /tmp/den-web-build.log >&2
+  exit 1
+fi
+
 echo "==> Starting Den Web on :$DEN_WEB_PORT..."
 pkill -f "next dev --hostname 0.0.0.0 --port $DEN_WEB_PORT" >/dev/null 2>&1 || true
+pkill -f "next start --hostname 0.0.0.0 --port $DEN_WEB_PORT" >/dev/null 2>&1 || true
 nohup env \
   DEN_WEB_PORT="$DEN_WEB_PORT" \
   DEN_API_BASE="$DEN_API_BASE" \
@@ -241,7 +273,7 @@ nohup env \
   DEN_ORG_MODE="$DEN_ORG_MODE" \
   OPENWORK_DEV_MODE="$OPENWORK_DEV_MODE" \
   DEN_WEB_ALLOWED_DEV_ORIGINS="$DEN_WEB_ALLOWED_DEV_ORIGINS" \
-  pnpm --filter @openwork-ee/den-web exec next dev --hostname 0.0.0.0 --port "$DEN_WEB_PORT" > /tmp/den-web.log 2>&1 &
+  pnpm --filter @openwork-ee/den-web exec next start --hostname 0.0.0.0 --port "$DEN_WEB_PORT" > /tmp/den-web.log 2>&1 &
 
 wait_for_http "http://127.0.0.1:$DEN_WEB_PORT/api/den/health" "Den Web" 180
 

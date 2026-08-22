@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test"
-import { codemodeScriptsEnabled } from "../src/capability-sources/codemode-rollout.js"
+import { workflowsEnabled } from "../src/capability-sources/workflow-rollout.js"
 
-describe("codemodeScriptsEnabled", () => {
-  test("is enabled only by a literal nested capability true", () => {
-    expect(codemodeScriptsEnabled({ capabilities: { codemodeScripts: true } })).toBe(true)
-    expect(codemodeScriptsEnabled(JSON.stringify({ capabilities: { codemodeScripts: true } }))).toBe(true)
+describe("workflowsEnabled", () => {
+  test("uses workflows before the legacy codemodeScripts key", () => {
+    expect(workflowsEnabled({ capabilities: { workflows: true } })).toBe(true)
+    expect(workflowsEnabled(JSON.stringify({ capabilities: { workflows: true } }))).toBe(true)
+    expect(workflowsEnabled({ capabilities: { codemodeScripts: true } })).toBe(true)
+    expect(workflowsEnabled({ capabilities: { workflows: false, codemodeScripts: true } })).toBe(false)
+    expect(workflowsEnabled({ capabilities: { workflows: true, codemodeScripts: false } })).toBe(true)
+    expect(workflowsEnabled({ capabilities: { workflows: "invalid", codemodeScripts: true } })).toBe(false)
+    expect(workflowsEnabled({ capabilities: { workflows: null, codemodeScripts: true } })).toBe(false)
   })
 
   test("is disabled for absent, false, legacy flat, malformed, and non-boolean values", () => {
@@ -20,7 +25,7 @@ describe("codemodeScriptsEnabled", () => {
       JSON.stringify({ codemodeScripts: true }),
       JSON.stringify({ capabilities: { codemodeScripts: "true" } }),
     ]) {
-      expect(codemodeScriptsEnabled(metadata)).toBe(false)
+      expect(workflowsEnabled(metadata)).toBe(false)
     }
   })
 })

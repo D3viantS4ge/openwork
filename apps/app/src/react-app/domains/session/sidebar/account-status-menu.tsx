@@ -37,7 +37,7 @@ import {
 } from "../../../../app/lib/den";
 import { markDesktopSignInInitiated } from "../../../../app/lib/den-sign-in-intent";
 import { exchangeHandoffAndSignIn } from "../../../../app/lib/den-handoff";
-import { parseManualAuthInput } from "../../cloud/forced-signin-page";
+import { parseManualAuthInput } from "../../../../app/lib/manual-auth-input";
 import {
   openWorkConnectAttentionTitle,
   resolveOpenWorkConnectStatus,

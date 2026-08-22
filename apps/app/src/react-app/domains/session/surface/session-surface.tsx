@@ -10,7 +10,8 @@ import { captureAnalyticsEvent } from "@/app/lib/analytics";
 import { createClient, unwrap } from "@/app/lib/opencode";
 import { abortSessionSafe } from "@/app/lib/opencode-session";
 import { t } from "@/i18n";
-import { readWorkspaceCloudImports, type CloudImportedPlugin } from "@/app/cloud/import-state";
+import type { ComposerSettingsSection } from "@/react-app/domains/settings/library";
+import { type CloudImportedPlugin } from "@/app/cloud/import-state";
 import { createDenClient, readDenSettings } from "@/app/lib/den";
 import { denSettingsChangedEvent } from "@/app/lib/den-session-events";
 import type {
@@ -108,11 +109,12 @@ import {
 } from "@/react-app/domains/settings/pages/environment-variable-provider";
 import {
   clearCloudInventoryCache,
+  CLOUD_INVENTORY_CHANGED_EVENT,
   loadSessionConnectCapabilities,
   readCachedConnectCapabilities,
   readCloudInventoryScope,
 } from "@/react-app/domains/connections/cloud-inventory-cache";
-import { EMPTY_CONNECT_CAPABILITY_INVENTORY } from "@/react-app/domains/session/surface/connect-capability-inventory";
+import { connectPluginsForComposer, EMPTY_CONNECT_CAPABILITY_INVENTORY } from "@/react-app/domains/session/surface/connect-capability-inventory";
 import { consumeComposerAutoSend } from "./composer-auto-send";
 
 const EMPTY_TRANSCRIPT: UIMessage[] = [];
@@ -320,7 +322,7 @@ export type SessionSurfaceProps = {
   openWorkModelsSyncing?: boolean;
   onRefreshOrganizationModels?: () => void | Promise<void>;
   onModelPickerOpenChange: (open: boolean) => void;
-  onModelChange: (model: ModelRef) => void;
+  onModelChange: (model: ModelRef, variant?: string | null) => void;
   onSendDraft: (draft: ComposerDraft, sessionId: string) => Promise<CloudMcpSubmissionResult>;
   cloudMcpSubmissionState: CloudMcpSubmissionGateState;
   onOpenConnect: () => void;
@@ -351,7 +353,7 @@ export type SessionSurfaceProps = {
   onChangeModel?: (model: { providerID: string; modelID: string }) => void;
   onUploadInboxFiles?: ((files: File[], options?: { notify?: boolean }) => void | Promise<unknown>) | null;
   providerConnectedCount?: number;
-  onOpenSettingsSection?: ((section: "commands" | "skills" | "mcps" | "plugins" | "extensions" | "providers") => void) | undefined;
+  onOpenSettingsSection?: ((section: ComposerSettingsSection) => void) | undefined;
   onRevertToMessage?: (messageId: string, sessionId: string) => Promise<boolean>;
   onRestoreRevertedSession?: (sessionId: string) => Promise<boolean>;
   onForkAtMessage?: (messageId: string | null, sessionId: string) => void;
@@ -643,30 +645,12 @@ function sameAttachments(left: ComposerAttachment[], right: ComposerAttachment[]
   return left.length === right.length && left.every((attachment, index) => attachment.id === right[index]?.id);
 }
 
-// Combine multiple queued follow-up drafts into a single send. Their text and
-// parts are concatenated with blank-line separators and attachments are
-// merged, so the whole queue is delivered to the agent as one message.
-function mergeDrafts(drafts: ComposerDraft[]): ComposerDraft | null {
-  if (drafts.length === 0) return null;
-  if (drafts.length === 1) return withoutRevertTarget(drafts[0] ?? null);
-  const separator: ComposerPart = { type: "text", text: "\n\n" };
-  const parts: ComposerPart[] = [];
-  const attachments: ComposerAttachment[] = [];
-  const texts: string[] = [];
-  const resolvedTexts: string[] = [];
-  drafts.forEach((draft, index) => {
-    if (index > 0) parts.push(separator);
-    parts.push(...draft.parts);
-    attachments.push(...draft.attachments);
-    texts.push(draft.text);
-    resolvedTexts.push(draft.resolvedText ?? draft.text);
-  });
+function draftWithEditedText(draft: ComposerDraft, text: string): ComposerDraft {
   return {
-    mode: "prompt",
-    parts,
-    attachments,
-    text: texts.join("\n\n"),
-    resolvedText: resolvedTexts.join("\n\n"),
+    ...draft,
+    text,
+    resolvedText: text,
+    parts: [{ type: "text", text }],
     command: undefined,
   };
 }
@@ -714,9 +698,11 @@ export function SessionSurface(props: SessionSurfaceProps) {
   // id. That keeps a queued message in session A from being drained into
   // session B when the route swaps the same surface component to another
   // session.
-  const queuedDrafts = useComposerStateStore((state) => getComposerQueuedDrafts(state, props.sessionId));
+  const queuedItems = useComposerStateStore((state) => getComposerQueuedDrafts(state, props.sessionId));
   const appendQueuedDraft = useComposerStateStore((state) => state.appendQueuedDraft);
   const removeQueuedDraftFromStore = useComposerStateStore((state) => state.removeQueuedDraft);
+  const updateQueuedDraftInStore = useComposerStateStore((state) => state.updateQueuedDraft);
+  const reorderQueuedDrafts = useComposerStateStore((state) => state.reorderQueuedDrafts);
   const clearQueuedDrafts = useComposerStateStore((state) => state.clearQueuedDrafts);
   const prependQueuedDrafts = useComposerStateStore((state) => state.prependQueuedDrafts);
   // Per-conversation model controls: each pane resolves its own remembered
@@ -738,10 +724,15 @@ export function SessionSurface(props: SessionSurfaceProps) {
     // Preserve route side effects (cloud provider sync on open).
     props.onModelPickerOpenChange(open);
   }, [props.onModelPickerOpenChange]);
-  const handleModelChange = useCallback((nextModel: ModelRef) => {
-    sessionModel.setModel(nextModel);
+  const handleModelChange = useCallback((nextModel: ModelRef, variant?: string | null) => {
+    sessionModel.setModel(nextModel, variant);
+    props.onModelChange(nextModel, variant);
     setModelPickerOpen(false);
-  }, [sessionModel]);
+  }, [props.onModelChange, sessionModel]);
+  const handleModelVariantChange = useCallback((value: string | null) => {
+    sessionModel.setVariant(value);
+    props.onModelVariantChange(value);
+  }, [props.onModelVariantChange, sessionModel]);
   const handleOpenModelPicker = useCallback(() => {
     props.onModelClick(props.sessionId);
   }, [props.onModelClick, props.sessionId]);
@@ -757,6 +748,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
   const [toolImportedPlugins, setToolImportedPlugins] = useState<CloudImportedPlugin[]>([]);
   const skillsConnectPushRef = useRef(0);
   const mcpConnectPushRef = useRef(0);
+  const pluginConnectPushRef = useRef(0);
   const [steering, setSteering] = useState(false);
   const [verifiedOpenTargets, setVerifiedOpenTargets] = useState<OpenTarget[]>([]);
   const [cloudQueueRetryVersion, setCloudQueueRetryVersion] = useState(0);
@@ -764,6 +756,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
   const cloudQueueBlockedRef = useRef(false);
   // Shared with promote-to-send so a manual send-now cannot race the idle drain.
   const drainingQueueRef = useRef(false);
+  const awaitingQueueBusyRef = useRef(false);
   const composerShellRef = useRef<HTMLDivElement>(null);
   const hydratedKeyRef = useRef<string | null>(null);
   const autoOpenedTargetRef = useRef<string | null>(null);
@@ -1112,7 +1105,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
       if (pasteMatch) {
         const target = pasteParts.find((item) => item.label === pasteMatch[1]);
         if (target) {
-          return [{ type: "paste", id: target.id, label: target.label, text: target.text, lines: target.lines }];
+          return [{ type: "paste", id: target.id, label: target.label, text: target.text, lines: target.lines } satisfies ComposerDraft["parts"][number]];
         }
       }
       const connectSkill = parseConnectSkillToken(segment);
@@ -1275,38 +1268,45 @@ export function SessionSurface(props: SessionSurfaceProps) {
     clearComposer();
   }, [appendQueuedDraft, attachments, buildDraft, clearComposer, draft, props.sessionId]);
 
-  const removeQueuedDraft = useCallback((index: number) => {
-    const target = queuedDrafts[index];
-    removeQueuedDraftFromStore(props.sessionId, index);
-    target?.attachments.forEach(revokeAttachmentPreview);
-  }, [props.sessionId, queuedDrafts, removeQueuedDraftFromStore]);
+  const removeQueuedDraft = useCallback((id: string) => {
+    const target = queuedItems.find((item) => item.id === id);
+    removeQueuedDraftFromStore(props.sessionId, id);
+    target?.draft.attachments.forEach(revokeAttachmentPreview);
+  }, [props.sessionId, queuedItems, removeQueuedDraftFromStore]);
+
+  const editQueuedDraft = useCallback((id: string, text: string) => {
+    const target = queuedItems.find((item) => item.id === id);
+    if (!target) return;
+    updateQueuedDraftInStore(props.sessionId, id, draftWithEditedText(target.draft, text));
+  }, [props.sessionId, queuedItems, updateQueuedDraftInStore]);
 
   // Promote a queued follow-up to an immediate send (steer-style), instead of
   // waiting for the idle drain. Guarded against the drain effect so the same
   // draft cannot be delivered twice.
   const [sendingQueued, setSendingQueued] = useState(false);
-  const sendQueuedDraftNow = useCallback(async (index: number) => {
+  const sendQueuedDraftNow = useCallback(async (id: string) => {
     if (drainingQueueRef.current || sendingQueued) return;
-    const target = withoutRevertTarget(queuedDrafts[index] ?? null);
-    if (!target) return;
+    const item = queuedItems.find((queued) => queued.id === id);
+    const target = withoutRevertTarget(item?.draft ?? null);
+    if (!item || !target) return;
     setSendingQueued(true);
-    removeQueuedDraftFromStore(props.sessionId, index);
+    removeQueuedDraftFromStore(props.sessionId, id);
     try {
       const result = await sendDraft(target);
       if (result.outcome === "blocked" || result.outcome === "cancelled") {
-        prependQueuedDrafts(props.sessionId, [target]);
+        prependQueuedDrafts(props.sessionId, [{ id: item.id, draft: target }]);
         return;
       }
       target.attachments.forEach(revokeAttachmentPreview);
     } catch {
-      prependQueuedDrafts(props.sessionId, [target]);
+      prependQueuedDrafts(props.sessionId, [{ id: item.id, draft: target }]);
     } finally {
       setSendingQueued(false);
     }
   }, [
     prependQueuedDrafts,
     props.sessionId,
-    queuedDrafts,
+    queuedItems,
     removeQueuedDraftFromStore,
     sendDraft,
     sendingQueued,
@@ -1318,7 +1318,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
     // Stop means stop: drop queued follow-ups before aborting, otherwise the
     // queue-drain effect below re-prompts the agent the moment the abort
     // lands and the session reports idle (#2014).
-    queuedDrafts.forEach((draftItem) => draftItem.attachments.forEach(revokeAttachmentPreview));
+    queuedItems.forEach((item) => item.draft.attachments.forEach(revokeAttachmentPreview));
     clearQueuedDrafts(props.sessionId);
     // The prompt was sent through a directory-scoped client (session-route
     // passes the workspace root), so the abort must target the same scope —
@@ -1328,6 +1328,11 @@ export function SessionSurface(props: SessionSurfaceProps) {
       opencodeClient,
       props.sessionId,
       props.workspaceRoot.trim() || undefined,
+      {
+        source: "composer.stop",
+        initiator: "user",
+        reason: "stop active session run",
+      },
     );
     if (!aborted) {
       setError({ message: t("session.stop_failed") });
@@ -1341,45 +1346,63 @@ export function SessionSurface(props: SessionSurfaceProps) {
     queryClient.setQueryData(questionKey(props.workspaceId, props.sessionId), []);
     captureAnalyticsEvent("task_run_stopped", {});
     await snapshotQuery.refetch();
-  }, [chatStreaming, clearQueuedDrafts, opencodeClient, props.sessionId, props.workspaceRoot, queuedDrafts, snapshotQuery.refetch]);
+  }, [chatStreaming, clearQueuedDrafts, opencodeClient, props.sessionId, props.workspaceRoot, queuedItems, snapshotQuery.refetch]);
 
   const handleDismissError = useCallback(() => {
     setError(null);
     useSessionActivityStore.getState().clearError(props.workspaceId, props.sessionId);
   }, [props.sessionId, props.workspaceId]);
 
-  // Drain the queued follow-ups once the session goes idle. OpenCode has no
-  // server-side queue, so we send everything that's queued as a single merged
-  // message. The ref guards against re-entrancy while the send is in flight.
+  // Drain one queued follow-up each time the session goes idle, so prompts
+  // run as separate turns instead of one merged message. The busy-wait is
+  // grounded in the engine's own run status (liveStatus), not chatStreaming:
+  // the client-side `sending` pulse would release the wait before the engine
+  // actually went busy and the next idle render could steer the following
+  // item into the still-starting turn.
+  useEffect(() => {
+    if (liveStatus.type !== "idle") {
+      awaitingQueueBusyRef.current = false;
+    }
+  }, [liveStatus.type]);
+
   useEffect(() => {
     if (drainingQueueRef.current || sendingQueued) return;
     if (cloudQueueBlockedRef.current) return;
-    if (queuedDrafts.length === 0) return;
+    if (awaitingQueueBusyRef.current) return;
+    if (queuedItems.length === 0) return;
     if (chatStreaming || liveStatus.type !== "idle") return;
-    const merged = mergeDrafts(queuedDrafts);
-    if (!merged) return;
-    const drained = queuedDrafts;
+    const nextItem = queuedItems[0];
+    if (!nextItem) return;
+    const nextDraft = withoutRevertTarget(nextItem.draft);
+    if (!nextDraft) return;
     drainingQueueRef.current = true;
-    clearQueuedDrafts(props.sessionId);
+    removeQueuedDraftFromStore(props.sessionId, nextItem.id);
+    // Arm the busy-wait BEFORE the send can resolve: the engine's busy status
+    // can render before the send promise's continuation runs, and arming late
+    // would erase that observation — the next idle would then never drain the
+    // following item. Failure paths below disarm so retries stay possible.
+    awaitingQueueBusyRef.current = true;
     void (async () => {
       try {
-        const result = await sendDraft(merged);
+        const result = await sendDraft(nextDraft);
         if (result.outcome === "blocked") {
           cloudQueueBlockedRef.current = true;
-          prependQueuedDrafts(props.sessionId, drained);
+          awaitingQueueBusyRef.current = false;
+          prependQueuedDrafts(props.sessionId, [{ id: nextItem.id, draft: nextDraft }]);
         } else if (result.outcome === "cancelled") {
-          prependQueuedDrafts(props.sessionId, drained);
+          awaitingQueueBusyRef.current = false;
+          prependQueuedDrafts(props.sessionId, [{ id: nextItem.id, draft: nextDraft }]);
         } else {
-          drained.forEach((draftItem) => draftItem.attachments.forEach(revokeAttachmentPreview));
+          nextDraft.attachments.forEach(revokeAttachmentPreview);
         }
       } catch {
-        // Restore the queue so the user can retry / edit on failure.
-        prependQueuedDrafts(props.sessionId, drained);
+        awaitingQueueBusyRef.current = false;
+        prependQueuedDrafts(props.sessionId, [{ id: nextItem.id, draft: nextDraft }]);
       } finally {
         drainingQueueRef.current = false;
       }
     })();
-  }, [chatStreaming, clearQueuedDrafts, cloudQueueRetryVersion, liveStatus.type, prependQueuedDrafts, props.sessionId, queuedDrafts, sendDraft, sendingQueued]);
+  }, [chatStreaming, cloudQueueRetryVersion, liveStatus.type, prependQueuedDrafts, props.sessionId, queuedItems, removeQueuedDraftFromStore, sendDraft, sendingQueued]);
 
   useEffect(() => {
     if (props.cloudMcpSubmissionState.status !== "failed") {
@@ -1655,9 +1678,15 @@ export function SessionSurface(props: SessionSurfaceProps) {
   };
 
   const listImportedPlugins = async (): Promise<CloudImportedPlugin[]> => {
-    const response = await props.client.getConfig(props.workspaceId);
-    const plugins = Object.values(readWorkspaceCloudImports(response.openwork).plugins)
-      .sort((left, right) => left.name.localeCompare(right.name));
+    const pushId = ++pluginConnectPushRef.current;
+    const scope = readCloudInventoryScope();
+    const cachedConnect = (scope ? readCachedConnectCapabilities(scope) : null) ?? EMPTY_CONNECT_CAPABILITY_INVENTORY;
+    const connectPromise = loadSessionConnectCapabilities();
+    void connectPromise.then((connect) => {
+      if (pluginConnectPushRef.current !== pushId) return;
+      setToolImportedPlugins(connectPluginsForComposer(connect.plugins));
+    });
+    const plugins = connectPluginsForComposer(cachedConnect.plugins);
     setToolImportedPlugins(plugins);
     return plugins;
   };
@@ -1746,8 +1775,15 @@ export function SessionSurface(props: SessionSurfaceProps) {
         Object.entries(current).filter(([key]) => !key.startsWith("openwork-connect:")),
       ));
     };
+    const refreshImportedPlugins = () => {
+      void listImportedPlugins();
+    };
     window.addEventListener(denSettingsChangedEvent, resetReconnectState);
-    return () => window.removeEventListener(denSettingsChangedEvent, resetReconnectState);
+    window.addEventListener(CLOUD_INVENTORY_CHANGED_EVENT, refreshImportedPlugins);
+    return () => {
+      window.removeEventListener(denSettingsChangedEvent, resetReconnectState);
+      window.removeEventListener(CLOUD_INVENTORY_CHANGED_EVENT, refreshImportedPlugins);
+    };
   }, []);
 
   const handleMcpReconnect = useCallback(async (
@@ -2004,7 +2040,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
               <SessionErrorCard
                 error={error}
                 onDismiss={handleDismissError}
-                onChangeModel={sessionModel.setModel}
+                onChangeModel={handleModelChange}
                 onOpenModelPicker={handleOpenModelPicker}
               />
             ) : null}
@@ -2020,7 +2056,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
                   <SessionErrorCard
                     error={error}
                     onDismiss={handleDismissError}
-                    onChangeModel={sessionModel.setModel}
+                    onChangeModel={handleModelChange}
                     onOpenModelPicker={handleOpenModelPicker}
                   />
                 ) : (
@@ -2037,7 +2073,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
               <SessionErrorCard
                 error={error}
                 onDismiss={handleDismissError}
-                onChangeModel={sessionModel.setModel}
+                onChangeModel={handleModelChange}
                 onOpenModelPicker={handleOpenModelPicker}
               />
             ) : (
@@ -2138,7 +2174,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
         busy={chatStreaming}
         steering={steering}
         submissionPreparing={preparingCloudTools}
-        queuedCount={queuedDrafts.length}
+        queuedCount={queuedItems.length}
         disabled={model.transitionState !== "idle" || Boolean(props.modelUnavailable)}
         modelUnavailable={Boolean(props.modelUnavailable)}
         modelUnavailableMessage={props.modelUnavailableMessage}
@@ -2161,7 +2197,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
         modelVariantLabel={sessionModel.modelVariantLabel}
         modelVariant={sessionModel.modelVariant}
         modelBehaviorOptions={sessionModel.modelBehaviorOptions}
-        onModelVariantChange={sessionModel.setVariant}
+        onModelVariantChange={handleModelVariantChange}
         agentLabel={props.agentLabel}
         selectedAgent={props.selectedAgent}
         listAgents={props.listAgents}
@@ -2188,15 +2224,17 @@ export function SessionSurface(props: SessionSurfaceProps) {
         isRemoteWorkspace={props.isRemoteWorkspace}
           isSandboxWorkspace={props.isSandboxWorkspace}
           onUploadInboxFiles={props.onUploadInboxFiles ?? handleUploadInboxFiles}
-          compactTopSpacing={Boolean(props.activeQuestion || (props.todos ?? []).some((todo) => todo.content.trim()) || props.activePermission || queuedDrafts.length > 0)}
+          compactTopSpacing={Boolean(props.activeQuestion || (props.todos ?? []).some((todo) => todo.content.trim()) || props.activePermission || queuedItems.length > 0)}
           topAccessory={
-            props.activeQuestion || (props.todos ?? []).some((todo) => todo.content.trim()) || props.activePermission || queuedDrafts.length > 0 ? (
+            props.activeQuestion || (props.todos ?? []).some((todo) => todo.content.trim()) || props.activePermission || queuedItems.length > 0 ? (
               <div>
-                {queuedDrafts.length > 0 ? (
+                {queuedItems.length > 0 ? (
                   <QueuedMessagesPanel
-                    drafts={queuedDrafts}
+                    items={queuedItems}
                     onRemove={removeQueuedDraft}
-                    onSendNow={(index) => void sendQueuedDraftNow(index)}
+                    onSendNow={(id) => void sendQueuedDraftNow(id)}
+                    onReorder={(ids) => reorderQueuedDrafts(props.sessionId, ids)}
+                    onEdit={editQueuedDraft}
                     sending={sendingQueued}
                   />
                 ) : null}

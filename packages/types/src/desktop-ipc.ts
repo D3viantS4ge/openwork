@@ -418,6 +418,11 @@ export type DesktopCommandMap = {
     args: [input: DesktopNotificationInput];
     result: DesktopNotificationResult;
   };
+  desktopSentrySetSession: {
+    args: [input: { userId: string; orgId: string }];
+    result: { enabled: boolean };
+  };
+  desktopSentryClearSession: { args: []; result: { enabled: boolean } };
   desktopIntegrationStatus: { args: []; result: DesktopIntegrationStatus };
   desktopIntegrationInstall: {
     args: [options?: { useExternalLauncher?: boolean }];

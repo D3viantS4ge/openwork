@@ -249,6 +249,10 @@ test("legacy SSO connections move to the canonical provider and recover a strand
     providerId: canonicalProviderIds.first,
     domain: "first.example.test",
   })
+  expect(JSON.parse(firstProviders[0]?.samlConfig ?? "{}")).toMatchObject({
+    audience: "http://127.0.0.1:8790",
+    callbackUrl: `http://127.0.0.1:8790/api/auth/sso/saml2/sp/acs/${canonicalProviderIds.first}`,
+  })
   expect(recoveryProviders).toHaveLength(1)
   expect(recoveryProviders[0]).toMatchObject({
     providerId: canonicalProviderIds.recovery,

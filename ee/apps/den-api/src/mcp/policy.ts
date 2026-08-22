@@ -22,6 +22,7 @@ const SAFE_INCLUDED_TAGS = new Set([
   "Capability Sources",
   "Automations",
   "Codemode Runs",
+  "Workflows",
 ])
 
 const BLOCKED_OPERATION_IDS = new Set([

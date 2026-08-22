@@ -31,13 +31,23 @@ import {
   type CodemodeConnectionNamespaceContext,
 } from "./codemode-namespaces.js"
 import {
+  connectedConnectionActionPayload,
+  connectionActionErrorCard,
+  connectionActionLaunch,
+  connectionActionPayloadFromStatus,
+  connectionActionTextFallback,
+} from "./connection-action-app.js"
+import {
+  buildExternalCapabilityName,
   executeExternalCapability,
   externalMcpSearchCoverageHint,
   parseExternalCapabilityName,
+  probeExternalConnectionStatus,
   searchExternalCapabilities,
   type ExternalCapabilityExecuteResult,
   type McpMemberIdentity,
 } from "./external-capabilities.js"
+import { attachPluginFlowCard } from "./plugin-flow-app.js"
 import { invokeMcpOperation, normalizeToolBody, normalizeToolRecord } from "./invoke.js"
 import {
   executeMarketplaceCapability,
@@ -54,8 +64,10 @@ import {
 } from "./native-capabilities.js"
 import {
   compareCapabilityMatches,
+  EXECUTE_CAPABILITY_TOOL_NAME,
   searchCapabilities,
   searchCapabilitySourceFilter,
+  SEARCH_CAPABILITIES_TOOL_NAME,
   type CapabilityMatch,
   type SearchCapabilityType,
 } from "./search.js"
@@ -76,6 +88,8 @@ export type ParsedCapability =
 export type ExecuteCapabilityToolResult = {
   isError?: boolean
   content: AgentToolContentPart[]
+  structuredContent?: Record<string, unknown>
+  _meta?: Record<string, unknown>
 }
 
 export type CapabilityExecuteInput = {
@@ -95,7 +109,9 @@ export type CapabilityRegistryContext = {
   member: McpMemberIdentity | null
   redirectUriBase: string
   codemodeEnabled: boolean
+  generatedArtifactViewsEnabled: boolean
   externalMcpConnectionsEnabled: boolean
+  mcpAppsEnabled: boolean
   resolvePlatformAdmin: () => Promise<boolean>
   resolveNamespaceContext: () => Promise<CodemodeConnectionNamespaceContext>
 }
@@ -109,8 +125,10 @@ export type CapabilityRegistryContextInput = {
   member: McpMemberIdentity | null
   redirectUriBase: string
   codemodeEnabled: boolean
+  generatedArtifactViewsEnabled: boolean
   organizationMetadata: Parameters<typeof memberFacingMcpConnectionsEnabled>[0]
   mcpConnectionsGatingEnabled: boolean
+  mcpAppsEnabled?: boolean
 }
 
 export function createCapabilityRegistryContext(input: CapabilityRegistryContextInput): CapabilityRegistryContext {
@@ -140,10 +158,24 @@ export function createCapabilityRegistryContext(input: CapabilityRegistryContext
     member: input.member,
     redirectUriBase: input.redirectUriBase,
     codemodeEnabled: input.codemodeEnabled,
+    generatedArtifactViewsEnabled: input.generatedArtifactViewsEnabled,
     externalMcpConnectionsEnabled,
+    mcpAppsEnabled: input.mcpAppsEnabled === true,
     resolvePlatformAdmin,
     resolveNamespaceContext,
   }
+}
+
+export function catalogOperationAvailableToCapabilities(
+  context: Pick<CapabilityRegistryContext, "generatedArtifactViewsEnabled">,
+  operation: Pick<McpToolOperation, "method" | "path">,
+) {
+  // Standalone URL-App operations are deferred and never enter the generic
+  // capability gateway, even if their retained storage routes are reworked.
+  if (operation.path.startsWith("/v1/remote-mcp-apps")) return false
+  if (context.generatedArtifactViewsEnabled) return true
+  return operation.path !== "/v1/workflows/{configObjectId}/views"
+    && !operation.path.startsWith("/v1/artifact-views/")
 }
 
 type CapabilitySearchContext = CapabilityRegistryContext & {
@@ -213,11 +245,15 @@ const externalCapabilityErrorPayloadSchema = z.object({
     searchRequired: z.boolean(),
   }).optional(),
   schemaGuidance: z.unknown().optional(),
+  connectionCard: z.string().optional(),
 })
 
 export function externalCapabilityErrorToolResult(
   result: Exclude<ExternalCapabilityExecuteResult, { ok: true }>,
 ): ExecuteCapabilityToolResult {
+  const statusCapability = result.connectionStatus
+    ? buildExternalCapabilityName(result.connectionStatus.connectionId, "*")
+    : undefined
   const payload = externalCapabilityErrorPayloadSchema.parse({
     error: result.error,
     message: result.message,
@@ -231,10 +267,22 @@ export function externalCapabilityErrorToolResult(
     ...(result.sameArgumentsRetryable === false ? { sameArgumentsRetryable: false } : {}),
     ...(result.retry ? { retry: result.retry } : {}),
     ...(result.schemaGuidance ? { schemaGuidance: result.schemaGuidance } : {}),
+    ...(statusCapability
+      ? { connectionCard: `Execute "${statusCapability}" once to show the member an actionable connection card, then relay the action in text.` }
+      : {}),
   })
+  if (!result.connectionStatus) {
+    return {
+      isError: true,
+      content: textContent(JSON.stringify(payload)),
+    }
+  }
+  const card = connectionActionErrorCard(result.connectionStatus)
   return {
     isError: true,
     content: textContent(JSON.stringify(payload)),
+    structuredContent: card.structuredContent,
+    _meta: card.meta,
   }
 }
 
@@ -242,12 +290,43 @@ export function externalCapabilitySuccessToolResult(
   result: Extract<ExternalCapabilityExecuteResult, { ok: true }>,
 ): ExecuteCapabilityToolResult {
   const content = externalToolContent(result.result)
-  if (!result.schemaGuidance) return { content }
+  const providerStructuredContent = isRecord(result.result)
+    && isRecord(result.result.structuredContent)
+    ? result.result.structuredContent
+    : undefined
+  const structuredContent = result.mcpApp
+    ? {
+        ...(providerStructuredContent ?? {}),
+        serverTools: {
+          searchCapabilities: SEARCH_CAPABILITIES_TOOL_NAME,
+          executeCapability: EXECUTE_CAPABILITY_TOOL_NAME,
+        },
+      }
+    : providerStructuredContent
+  const providerMeta = isRecord(result.result) && isRecord(result.result._meta)
+    ? result.result._meta
+    : {}
+  const meta = {
+    ...providerMeta,
+    ...(result.mcpApp ? { "openwork/mcpApp": result.mcpApp } : {}),
+  }
+  if (!result.schemaGuidance) {
+    return {
+      content,
+      ...(structuredContent ? { structuredContent } : {}),
+      ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
+    }
+  }
   return {
     content: [
       ...content,
       ...textContent(JSON.stringify({ schemaGuidance: result.schemaGuidance })),
     ],
+    structuredContent: {
+      ...(structuredContent ?? {}),
+      schemaGuidance: result.schemaGuidance,
+    },
+    ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
   }
 }
 
@@ -342,6 +421,7 @@ async function executeMarketplaceSource(
     configObjectId: parsed.configObjectId,
     body: input.body,
     codemodeEnabled: ctx.codemodeEnabled,
+    validateScriptOutput: true,
     enabled: ctx.externalMcpConnectionsEnabled,
     redirectUriBase: ctx.redirectUriBase,
   })
@@ -357,31 +437,42 @@ const catalogSource: CapabilitySource = {
   search: async (ctx, query, limit) => {
     if (!ctx.sourceFilter.api) return []
     return searchCapabilities(
-      ctx.catalog.filter((operation) => !isCredentialBoundNativeOperation(operation)),
+      ctx.catalog.filter((operation) => (
+        !isCredentialBoundNativeOperation(operation)
+        && catalogOperationAvailableToCapabilities(ctx, operation)
+      )),
       query,
       limit,
     ).map((match) => ctx.codemodeEnabled
       ? { ...match, scriptPath: codemodeScriptPath("den", match.name) }
       : match)
   },
-  enumerate: (ctx) => Promise.resolve(leavesFromBuilt(buildDenCatalogToolTree(ctx))),
+  enumerate: (ctx) => Promise.resolve(leavesFromBuilt(buildDenCatalogToolTree({
+    ...ctx,
+    catalog: ctx.catalog.filter((operation) => catalogOperationAvailableToCapabilities(ctx, operation)),
+  }))),
   execute: async (ctx, parsed, input) => {
     if (!parsedForKind(parsed, "catalog")) return unknownCapabilityResult(input.name)
     const operation = ctx.catalog.find((candidate) => (
-      candidate.name === parsed.name && !isCredentialBoundNativeOperation(candidate)
+      candidate.name === parsed.name
+      && !isCredentialBoundNativeOperation(candidate)
+      && catalogOperationAvailableToCapabilities(ctx, candidate)
     ))
     if (!operation) return unknownCapabilityResult(input.name)
-    return invokeMcpOperation({
+    const path = normalizeToolRecord(input.path)
+    const body = normalizeToolBody(input.body)
+    const result = await invokeMcpOperation({
       app: ctx.app,
       env: ctx.env,
       operation,
       principal: ctx.principal,
       toolInput: {
-        path: normalizeToolRecord(input.path),
+        path,
         query: normalizeToolRecord(input.query),
-        body: normalizeToolBody(input.body),
+        body,
       },
     })
+    return attachPluginFlowCard({ name: parsed.name, path, body, result })
   },
 }
 
@@ -441,6 +532,7 @@ const externalMcpSource: CapabilitySource = {
       limit,
       includeScriptPaths: ctx.codemodeEnabled,
       namespaceContext: ctx.codemodeEnabled ? await ctx.resolveNamespaceContext() : undefined,
+      mcpAppsEnabled: ctx.mcpAppsEnabled,
       reportCoverage: (coverage) => ctx.reportExternalCoverage(externalMcpSearchCoverageHint(coverage)),
     })
   },
@@ -464,6 +556,27 @@ const externalMcpSource: CapabilitySource = {
         })),
       }
     }
+    if (parsed.toolName === "*") {
+      // A connection_status match: probing is the capability. Report the live
+      // state as a successful result carrying the first-party connection
+      // card, so compatible hosts render the exact human action inline.
+      const probe = await probeExternalConnectionStatus({
+        organizationId: ctx.organizationId,
+        member: ctx.member,
+        connectionId: parsed.connectionId,
+      })
+      if (!probe.ok) {
+        return { isError: true, content: textContent(JSON.stringify({ error: probe.error, message: probe.message })) }
+      }
+      const payload = probe.connected
+        ? connectedConnectionActionPayload({ connectionId: probe.connection.id, connectionName: probe.connection.name })
+        : connectionActionPayloadFromStatus(probe.status)
+      return {
+        content: textContent(connectionActionTextFallback(payload)),
+        structuredContent: { ...payload },
+        _meta: { "openwork/mcpApp": connectionActionLaunch(payload) },
+      }
+    }
     const result = await executeExternalCapability({
       organizationId: ctx.organizationId,
       member: ctx.member,
@@ -472,6 +585,7 @@ const externalMcpSource: CapabilitySource = {
       args: normalizeToolBody(input.body),
       schemaDigest: input.schemaDigest,
       redirectUriBase: ctx.redirectUriBase,
+      mcpAppsEnabled: ctx.mcpAppsEnabled,
     })
     return result.ok
       ? externalCapabilitySuccessToolResult(result)
@@ -496,7 +610,7 @@ const marketplaceSource: CapabilitySource = {
       limit,
       enabled: ctx.externalMcpConnectionsEnabled,
     })
-    return matches.map((match) => ctx.codemodeEnabled && match.kind !== "script"
+    return matches.map((match) => ctx.codemodeEnabled && match.kind !== "workflow"
       ? { ...match, scriptPath: codemodeScriptPath("marketplace", match.name) }
       : match)
   },
@@ -508,7 +622,7 @@ const marketplaceSource: CapabilitySource = {
       enabled: ctx.externalMcpConnectionsEnabled,
     })
     const uniqueReferences = new Map(references
-      .filter((reference) => reference.objectType !== "script")
+      .filter((reference) => reference.objectType !== "workflow")
       .map((reference) => [`${reference.pluginId}:${reference.configObjectId}`, reference]))
     return [...uniqueReferences.values()].map((reference) => {
       const capabilityName = `plugin:${reference.pluginId}:${reference.configObjectId}`
@@ -542,7 +656,10 @@ const marketplaceSource: CapabilitySource = {
         ? unknownCapabilityResult(input.name)
         : marketplaceCapabilityErrorToolResult(result)
     }
-    return { content: textContent(JSON.stringify(result.result, null, 2)) }
+    return {
+      content: textContent(JSON.stringify(result.result, null, 2)),
+      structuredContent: result.result,
+    }
   },
 }
 

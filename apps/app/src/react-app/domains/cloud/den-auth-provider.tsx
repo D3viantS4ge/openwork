@@ -26,7 +26,7 @@ import {
 } from "../../../app/lib/den";
 import { exchangeHandoffAndSignIn } from "../../../app/lib/den-handoff";
 import { readOrgSelectionPending } from "../../../app/lib/den-sign-in-intent";
-import { readDesktopDistributionInfo } from "../../../app/lib/desktop";
+import { desktopBridge, readDesktopDistributionInfo } from "../../../app/lib/desktop";
 import {
   denSessionUpdatedEvent,
   denSettingsChangedEvent,
@@ -201,6 +201,20 @@ export function DenAuthProvider({ children }: DenAuthProviderProps) {
     setStatus(nextStatus);
   }, []);
 
+  const syncDesktopSentrySession = useCallback((nextUser: DenUser | null) => {
+    if (typeof window === "undefined" || !window.__OPENWORK_ELECTRON__) return;
+    const settings = readDenSettings();
+    const userId = nextUser?.id?.trim() ?? "";
+    const orgId = settings.activeOrgId?.trim() ?? "";
+    if (!settings.authToken?.trim() || !userId || !orgId) return;
+    void desktopBridge.desktopSentrySetSession({ userId, orgId }).catch(() => undefined);
+  }, []);
+
+  const clearDesktopSentrySession = useCallback(() => {
+    if (typeof window === "undefined" || !window.__OPENWORK_ELECTRON__) return;
+    void desktopBridge.desktopSentryClearSession().catch(() => undefined);
+  }, []);
+
   const refresh = useCallback(async () => {
     const currentRun = ++refreshTokenRef.current;
     const settings = readDenSettings();
@@ -211,6 +225,7 @@ export function DenAuthProvider({ children }: DenAuthProviderProps) {
       setError(null);
       lastSignalRetryAtRef.current = null;
       updateStatus("signed_out");
+      clearDesktopSentrySession();
       return;
     }
 
@@ -247,6 +262,7 @@ export function DenAuthProvider({ children }: DenAuthProviderProps) {
       setError(null);
       lastSignalRetryAtRef.current = null;
       updateStatus("signed_in");
+      syncDesktopSentrySession(nextUser);
     } catch (nextError) {
       if (currentRun !== refreshTokenRef.current) return;
 
@@ -255,6 +271,7 @@ export function DenAuthProvider({ children }: DenAuthProviderProps) {
         clearDenSession();
         setUser(null);
         lastSignalRetryAtRef.current = null;
+        clearDesktopSentrySession();
       }
 
       setError(
@@ -264,7 +281,7 @@ export function DenAuthProvider({ children }: DenAuthProviderProps) {
       );
       updateStatus(failureStatus);
     }
-  }, [updateStatus]);
+  }, [clearDesktopSentrySession, syncDesktopSentrySession, updateStatus]);
 
   useEffect(() => {
     void refresh();
@@ -280,6 +297,20 @@ export function DenAuthProvider({ children }: DenAuthProviderProps) {
       window.removeEventListener(denSessionUpdatedEvent, handleSessionUpdated);
     };
   }, [refresh]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!window.__OPENWORK_ELECTRON__) return;
+
+    if (status === "signed_out") return clearDesktopSentrySession();
+
+    const settings = readDenSettings();
+    const userId = user?.id?.trim() ?? "";
+    const orgId = settings.activeOrgId?.trim() ?? "";
+    if (!hasRetainedDenSession(status) || !userId || !orgId || !settings.authToken?.trim()) return;
+
+    syncDesktopSentrySession(user);
+  }, [clearDesktopSentrySession, status, syncDesktopSentrySession, user, user?.id]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

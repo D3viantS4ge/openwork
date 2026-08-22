@@ -29,6 +29,7 @@ const redirectUriBase = "http://127.0.0.1:8790"
 type FakeTool = {
   name: string
   description: string
+  _meta?: Record<string, unknown>
 }
 
 type FakeMcpServer = {
@@ -63,6 +64,7 @@ let listUsableExternalMcpConnections: typeof import("../src/capability-sources/e
 let saveExternalMcpTokens: typeof import("../src/capability-sources/external-mcp-connections.js").saveExternalMcpTokens
 let searchExternalCapabilities: typeof import("../src/mcp/external-capabilities.js").searchExternalCapabilities
 let executeExternalCapability: typeof import("../src/mcp/external-capabilities.js").executeExternalCapability
+let externalCapabilitySuccessToolResult: typeof import("../src/mcp/capability-registry.js").externalCapabilitySuccessToolResult
 let slackServer: FakeMcpServer | undefined
 let authedSlackServer: FakeMcpServer | undefined
 let notionServer: FakeMcpServer | undefined
@@ -70,6 +72,7 @@ let refreshErrorServer: FakeMcpServer | undefined
 let providerErrorServer: FakeMcpServer | undefined
 let needleServer: FakeMcpServer | undefined
 let mutableSchemaServer: MutableSchemaMcpServer | undefined
+let mcpAppServer: FakeMcpServer | undefined
 
 const slackTools: FakeTool[] = [
   { name: "slack-send-message", description: "Send a message to a Slack channel or DM." },
@@ -135,6 +138,7 @@ function startFakeMcpServer(name: string, tools: FakeTool[], requiredBearer?: st
         {
           description: tool.description,
           inputSchema: z.object({ text: z.string().optional() }),
+          ...(tool._meta ? { _meta: tool._meta } : {}),
         },
         async ({ text }) => ({ content: textContent(text ?? `${tool.name} ok`) }),
       )
@@ -389,6 +393,7 @@ function standaloneConnection(
     name: "Standalone Slack",
     url,
     authType,
+    kind: "external_mcp",
     credentialMode: "shared",
     apiKey,
     accessToken,
@@ -449,13 +454,14 @@ async function expectConnectionListed(seed: SeededOrganization, connectionId: De
   expect(connections.map((connection) => connection.id)).toContain(connectionId)
 }
 
-function search(seed: SeededOrganization, query: string) {
+function search(seed: SeededOrganization, query: string, mcpAppsEnabled = false) {
   return searchExternalCapabilities({
     organizationId: seed.organizationId,
     member: { orgMembershipId: seed.memberId, teamIds: [] },
     query,
     redirectUriBase,
     limit: 10,
+    mcpAppsEnabled,
   })
 }
 
@@ -472,12 +478,13 @@ beforeAll(async () => {
   }).db
   mock.module("../src/db.js", () => ({ db: realDb }))
 
-  const [dbMod, schemaMod, clientMod, connectionsMod, capabilitiesMod, envMod] = await Promise.all([
+  const [dbMod, schemaMod, clientMod, connectionsMod, capabilitiesMod, registryMod, envMod] = await Promise.all([
     import("../src/db.js"),
     import("@openwork-ee/den-db/schema"),
     import("../src/capability-sources/external-mcp-client.js"),
     import("../src/capability-sources/external-mcp-connections.js"),
     import("../src/mcp/external-capabilities.js"),
+    import("../src/mcp/capability-registry.js"),
     import("../src/env.js"),
   ])
   // Another co-run test file's static src import may have parsed env.ts before
@@ -494,6 +501,7 @@ beforeAll(async () => {
   saveExternalMcpTokens = connectionsMod.saveExternalMcpTokens
   searchExternalCapabilities = capabilitiesMod.searchExternalCapabilities
   executeExternalCapability = capabilitiesMod.executeExternalCapability
+  externalCapabilitySuccessToolResult = registryMod.externalCapabilitySuccessToolResult
   slackServer = startFakeMcpServer("fake-slack", slackTools)
   authedSlackServer = startFakeMcpServer("fake-authed-slack", slackTools, "valid-key")
   notionServer = startFakeMcpServer("fake-notion", notionTools)
@@ -504,6 +512,11 @@ beforeAll(async () => {
     description: "The only catalog entry matching the coverage test keyword.",
   }])
   mutableSchemaServer = startMutableSchemaMcpServer()
+  mcpAppServer = startFakeMcpServer("fake-mcp-app", [{
+    name: "open_project_atlas",
+    description: "Open the Project Atlas MCP App.",
+    _meta: { ui: { resourceUri: "ui://atlas/1.0.0/index.html" } },
+  }])
 })
 
 afterAll(() => {
@@ -514,7 +527,80 @@ afterAll(() => {
   providerErrorServer?.stop()
   needleServer?.stop()
   mutableSchemaServer?.stop()
+  mcpAppServer?.stop()
   mock.restore()
+})
+
+test("the rollout flag controls MCP App launch metadata without removing regular search and execute", async () => {
+  if (!mcpAppServer) throw new Error("MCP App server missing")
+  const seed = await seedOrganization("mcp-app-gateway")
+  const connection = await createGrantedConnection(seed, {
+    name: "Project Atlas",
+    url: mcpAppServer.url,
+    authType: "none",
+    credentialMode: "shared",
+  })
+
+  const disabledMatches = await search(seed, "Project Atlas")
+  const disabledMatch = disabledMatches.find((candidate) => candidate.name.endsWith(":open_project_atlas"))
+  expect(disabledMatch).toBeTruthy()
+  expect(disabledMatch?.kind).toBeUndefined()
+  expect(disabledMatch?.mcpApp).toBeUndefined()
+
+  const disabledExecution = await executeExternalCapability({
+    organizationId: seed.organizationId,
+    member: { orgMembershipId: seed.memberId, teamIds: [] },
+    connectionId: connection.id,
+    toolName: "open_project_atlas",
+    args: { text: "migration" },
+    redirectUriBase,
+  })
+  expect(disabledExecution.ok).toBe(true)
+  if (!disabledExecution.ok) throw new Error(disabledExecution.message)
+  expect(disabledExecution.mcpApp).toBeUndefined()
+  expect(externalCapabilitySuccessToolResult(disabledExecution)._meta).toBeUndefined()
+
+  const matches = await search(seed, "Project Atlas", true)
+  const match = matches.find((candidate) => candidate.name.endsWith(":open_project_atlas"))
+  expect(match).toMatchObject({
+    kind: "mcp_app",
+    mcpApp: { resourceUri: "ui://atlas/1.0.0/index.html" },
+  })
+
+  const executed = await executeExternalCapability({
+    organizationId: seed.organizationId,
+    member: { orgMembershipId: seed.memberId, teamIds: [] },
+    connectionId: connection.id,
+    toolName: "open_project_atlas",
+    args: { text: "migration" },
+    redirectUriBase,
+    mcpAppsEnabled: true,
+  })
+  expect(executed).toMatchObject({
+    ok: true,
+    mcpApp: {
+      connectionId: connection.id,
+      toolName: "open_project_atlas",
+      resourceUri: "ui://atlas/1.0.0/index.html",
+      arguments: { text: "migration" },
+    },
+  })
+  if (!executed.ok) throw new Error(executed.message)
+  const launchResult = externalCapabilitySuccessToolResult(executed)
+  expect(launchResult.structuredContent).toMatchObject({
+    serverTools: {
+      searchCapabilities: "search_capabilities",
+      executeCapability: "execute_capability",
+    },
+  })
+  expect(launchResult._meta).toMatchObject({
+    "openwork/mcpApp": {
+      connectionId: connection.id,
+      toolName: "open_project_atlas",
+      resourceUri: "ui://atlas/1.0.0/index.html",
+      arguments: { text: "migration" },
+    },
+  })
 })
 
 test("fake MCP server helper lists tools with the external MCP client", async () => {

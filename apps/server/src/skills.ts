@@ -9,6 +9,29 @@ import { validateDescription, validateSkillName } from "./validators.js";
 import { ApiError } from "./errors.js";
 import { projectSkillsDir } from "./workspace-files.js";
 
+const INVALID_SKILL_DESCRIPTION = "ERROR: Invalid skill frontmatter";
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function summarizeError(message: string): string {
+  return message.split(/\r?\n/, 1)[0] ?? "Unknown error";
+}
+
+export function renderSkillContentForResponse(item: SkillItem, content: string): string {
+  if (!item.error) return content;
+  return [
+    "ERROR: This skill has invalid YAML frontmatter and may not load correctly.",
+    "",
+    item.error,
+    "",
+    "Original SKILL.md:",
+    "",
+    content,
+  ].join("\n");
+}
+
 async function findWorkspaceRoots(workspaceRoot: string): Promise<string[]> {
   const roots: string[] = [];
   let current = resolve(workspaceRoot);
@@ -55,8 +78,46 @@ async function parseSkillEntry(
   entryName: string,
   scope: "project" | "global",
 ): Promise<SkillItem | null> {
-  const content = await readFile(skillPath, "utf8");
-  const { data, body } = parseFrontmatter(content);
+  let content: string;
+  try {
+    content = await readFile(skillPath, "utf8");
+  } catch (error) {
+    console.warn("[openwork:skills] Skipping unreadable skill file", {
+      path: skillPath,
+      entryName,
+      scope,
+      error: errorMessage(error),
+    });
+    return null;
+  }
+
+  let data: Record<string, unknown>;
+  let body: string;
+  try {
+    const parsed = parseFrontmatter(content);
+    data = parsed.data;
+    body = parsed.body;
+  } catch (error) {
+    const message = errorMessage(error);
+    try {
+      validateSkillName(entryName);
+    } catch {
+      return null;
+    }
+    console.warn("[openwork:skills] Found invalid skill frontmatter", {
+      path: skillPath,
+      entryName,
+      scope,
+      error: message,
+    });
+    return {
+      name: entryName,
+      description: `${INVALID_SKILL_DESCRIPTION}: ${summarizeError(message)}`,
+      path: skillPath,
+      scope,
+      error: message,
+    };
+  }
   const name = typeof data.name === "string" ? data.name : entryName;
   const description = typeof data.description === "string" ? data.description : "";
   const trigger =

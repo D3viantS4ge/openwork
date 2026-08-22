@@ -23,7 +23,7 @@ export type DenBase =
   | { kind: "local"; apiHost: "127.0.0.1"; webHost: "127.0.0.1" }
   | { kind: "daytona"; ref: string };
 
-/** One placement decision shared by every resource in a spec. */
+/** One placement decision shared by every resource in a test. */
 export interface Place {
   kind: "local" | "daytona";
   host(): Host | undefined;
@@ -77,7 +77,7 @@ async function canConnect(port: number, host: string): Promise<boolean> {
       resolve(open);
     };
     // 750ms missed Docker Desktop's lazy port-proxy under load and skipped
-    // specs that should have run; 2.5s keeps the probe honest without stalling.
+    // tests that should have run; 2.5s keeps the probe honest without stalling.
     socket.setTimeout(2_500);
     socket.once("connect", () => done(true));
     socket.once("error", () => done(false));
@@ -165,13 +165,24 @@ class DaytonaPlacementHost implements Host {
   readonly kind = "daytona";
   readonly workspaceRoot = "/workspace";
   readonly #ref: string;
+  readonly #preparedSandbox: string | undefined;
+  readonly #preparedHost: Host | undefined;
   readonly #surfaces = new Map<SurfaceHandle, PlacedSurface>();
 
-  constructor(ref: string) {
+  constructor(ref: string, preparedSandbox?: string) {
     this.#ref = ref;
+    this.#preparedSandbox = preparedSandbox;
+    this.#preparedHost = preparedSandbox ? daytonaSandbox(preparedSandbox) : undefined;
   }
 
   async #provision(name: string): Promise<PlacedSurface> {
+    if (this.#preparedSandbox && this.#preparedHost) {
+      return {
+        host: this.#preparedHost,
+        sandbox: this.#preparedSandbox,
+        created: false,
+      };
+    }
     const provisioned = await provisionDesktopSandbox({
       ref: this.#ref,
       name,
@@ -233,9 +244,9 @@ class DaytonaPlace implements Place {
   readonly #ref: string;
   readonly #host: Host;
 
-  constructor(ref: string) {
+  constructor(ref: string, preparedDesktopSandbox?: string) {
     this.#ref = ref;
-    this.#host = new DaytonaPlacementHost(ref);
+    this.#host = new DaytonaPlacementHost(ref, preparedDesktopSandbox);
   }
 
   host(): Host {
@@ -264,7 +275,7 @@ export function resolvePlace(env: NodeJS.ProcessEnv = process.env): Place {
   const useDaytona = env.OPENWORK_EVAL_DAYTONA?.trim() === "1";
   if (useDaytona) {
     const ref = env.OPENWORK_EVAL_REF?.trim() || env.GITHUB_SHA?.trim() || "dev";
-    return new DaytonaPlace(ref);
+    return new DaytonaPlace(ref, env.OPENWORK_EVAL_DAYTONA_DESKTOP_SANDBOX?.trim());
   }
   return new LocalPlace(env.OPENWORK_EVAL_MYSQL_URL?.trim() || DEFAULT_MYSQL_URL);
 }

@@ -6,7 +6,7 @@ import { normalizeDenTypeId } from "@openwork-ee/utils/typeid"
 import type { AutomationAction, AutomationError, AutomationUsage } from "@openwork/types/automations"
 import { db } from "../db.js"
 import { env } from "../env.js"
-import { loadTelegramWorkerAccess, type TelegramWorkerAccess } from "../capability-sources/telegram-worker.js"
+import { loadCloudWorkerAccess, type CloudWorkerAccess } from "../workers/worker-access.js"
 import { organizationCloudEnabled } from "../capability-sources/cloud-rollout.js"
 import { CLOUD_INSTANCE_BACKEND } from "../workers/cloud-constants.js"
 import { wakeCloudWorker } from "../workers/cloud-lifecycle.js"
@@ -151,7 +151,7 @@ export async function cloudAgentRuntimeAvailable(scope: OwnerScope): Promise<boo
     && worker !== null && worker.status !== "failed"
 }
 
-function workerHeaders(access: TelegramWorkerAccess) {
+function workerHeaders(access: CloudWorkerAccess) {
   return {
     Accept: "application/json",
     Authorization: `Bearer ${access.clientToken}`,
@@ -159,7 +159,7 @@ function workerHeaders(access: TelegramWorkerAccess) {
   }
 }
 
-async function readWorkspace(access: TelegramWorkerAccess, signal: AbortSignal) {
+async function readWorkspace(access: CloudWorkerAccess, signal: AbortSignal) {
   for (const baseUrl of access.candidates) {
     try {
       const response = await fetch(`${baseUrl}/workspaces`, {
@@ -185,7 +185,7 @@ async function readyWorker(scope: OwnerScope, signal: AbortSignal) {
   if (worker.status === "stopped") await abortable(wakeCloudWorker(worker.id), signal)
   const deadline = Date.now() + WORKER_READY_TIMEOUT_MS
   while (!signal.aborted && Date.now() < deadline) {
-    const access = await loadTelegramWorkerAccess({
+    const access = await loadCloudWorkerAccess({
       organizationId: normalizeDenTypeId("organization", scope.organizationId),
       workerId: worker.id,
     })
@@ -204,7 +204,7 @@ async function readyWorker(scope: OwnerScope, signal: AbortSignal) {
 async function connectHealth(input: {
   baseUrl: string
   workspaceId: string
-  access: TelegramWorkerAccess
+  access: CloudWorkerAccess
   action: AgentAction
   signal: AbortSignal
 }): Promise<{ ok: true } | { ok: false; code: "connect_access_unavailable" | "model_access_lost"; message: string }> {

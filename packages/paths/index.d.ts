@@ -9,6 +9,7 @@ export interface PathOptions {
 
 export declare const MAX_CONFIG_ROOT_LENGTH: 4096;
 
+export declare function normalizeWorkspaceRootPath(value: unknown, opts?: PathOptions): string;
 export declare function openworkConfigDir(opts?: PathOptions): string;
 export declare function openworkServerConfigPath(opts?: PathOptions): string;
 export declare function openworkEnvStorePath(opts?: PathOptions): string;

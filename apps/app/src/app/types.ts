@@ -346,6 +346,8 @@ export type McpServerEntry = {
   marketplaceName?: string;
   pluginName?: string;
   connectCapabilityName?: string;
+  /** Den organization connection this MCP is backed by, when sign-in is member-owned. */
+  orgMcpConnectionId?: string;
   managedOAuth?: ManagedMcpOAuthConnection | null;
 };
 
@@ -354,6 +356,7 @@ export type McpStatus =
   | { status: "disabled" }
   | { status: "failed"; error: string }
   | { status: "needs_auth" }
+  | { status: "reconnect_required" }
   | { status: "needs_client_registration"; error: string };
 
 export type McpStatusMap = Record<string, McpStatus>;

@@ -173,6 +173,7 @@ test("login-options returns SSO as the first step for verified SSO domains", asy
     email: "invited@verified.example.test",
     nextStep: "sso",
     allowPublicSignup: true,
+    allowInvitationSignup: false,
     organizationSlug: "invite-sso",
     signInPath: "/sso/invite-sso",
     signInUrl: "http://127.0.0.1:8790/sso/invite-sso",

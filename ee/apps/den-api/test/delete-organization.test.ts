@@ -28,7 +28,6 @@ const installLinkId = createDenTypeId("installLink")
 const teamId = createDenTypeId("team")
 const scimGroupId = createDenTypeId("scimGroup")
 const ledgerEntryId = createDenTypeId("inferenceUsageLedgerEntry")
-const telegramConnectionId = createDenTypeId("telegramConnection")
 const memoryId = createDenTypeId("memory")
 const llmProviderId = createDenTypeId("llmProvider")
 const organizationName = "Acme Robotics"
@@ -77,8 +76,6 @@ function selectRows(table: unknown): unknown[] {
       return [{ id: scimGroupId }]
     case "inference_usage_ledger_entries":
       return [{ id: ledgerEntryId }]
-    case "telegram_connection":
-      return [{ id: telegramConnectionId }]
     case "memory":
       return [{ id: memoryId }]
     case "llm_provider":

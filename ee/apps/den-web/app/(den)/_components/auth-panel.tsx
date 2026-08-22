@@ -220,6 +220,7 @@ export function AuthPanel({
   emailFirstInvitationId,
   resolveEmailFirstOnPrefill = false,
   eyebrow = "Account",
+  hideIntro = false,
   bare = false,
   signUpContent,
   signInContent,
@@ -236,6 +237,7 @@ export function AuthPanel({
   emailFirstInvitationId?: string;
   resolveEmailFirstOnPrefill?: boolean;
   eyebrow?: string;
+  hideIntro?: boolean;
   // When true the panel renders without its own `den-frame`/padding, so a parent
   // (the unified split auth card) can own the surface. Defaults to a self-framed
   // card for standalone callers (invite, workspace-claim).
@@ -302,10 +304,10 @@ export function AuthPanel({
   }
 
   useEffect(() => {
-    if (isSingleOrgPrivateSignup && authMode === "sign-up") {
+    if (isSingleOrgPrivateSignup && !emailFirstInvite && authMode === "sign-up") {
       setAuthMode("sign-in");
     }
-  }, [authMode, isSingleOrgPrivateSignup, setAuthMode]);
+  }, [authMode, emailFirstInvite, isSingleOrgPrivateSignup, setAuthMode]);
 
   useEffect(() => {
     if (!isSingleOrgSsoMode || pathname === "/" || pathname === "/join-org") {
@@ -390,6 +392,7 @@ export function AuthPanel({
           title: "Create your account.",
           copy: "Set up your OpenWork Cloud account.",
           submitLabel: "Sign up",
+          ...signUpContent,
         };
 
   const desktopGrant = getDesktopGrant(desktopRedirectUrl);
@@ -674,13 +677,15 @@ export function AuthPanel({
   if (emailFirstPanelActive) {
     return (
       <div className={shellClass("gap-4 sm:gap-5", "p-5 sm:p-6 md:p-7")}>
-        <div className="grid gap-3">
-          <p className="den-eyebrow">{eyebrow}</p>
-          <div className="grid gap-2">
-            <h2 className="den-title-lg">{activeContent.title}</h2>
-            <p className="den-copy">{activeContent.copy}</p>
+        {!hideIntro ? (
+          <div className="grid gap-3">
+            <p className="den-eyebrow">{eyebrow}</p>
+            <div className="grid gap-2">
+              <h2 className="den-title-lg">{activeContent.title}</h2>
+              <p className="den-copy">{activeContent.copy}</p>
+            </div>
           </div>
-        </div>
+        ) : null}
 
         {desktopAuthRequested && desktopRedirectUrl ? (
           <DesktopHandoffAction
@@ -855,7 +860,7 @@ export function AuthPanel({
               <PasswordFeedbackList messages={signupPasswordFeedback} />
             </label>
             <button type="submit" className="den-button-primary w-full" disabled={formBusy}>
-              {formBusy ? "Working..." : "Sign up"}
+              {formBusy ? "Working..." : activeContent.submitLabel}
               {!formBusy ? <ArrowRight className="h-4 w-4" /> : null}
             </button>
           </form>
@@ -866,8 +871,13 @@ export function AuthPanel({
             className="den-frame-inset grid gap-1 rounded-[1.5rem] px-4 py-3 text-center text-[13px] text-[var(--dls-text-secondary)]"
             aria-live="polite"
           >
-            {loginOptionError ? <p className="font-medium text-rose-600">{loginOptionError}</p> : <p>{authInfo}</p>}
-            {!loginOptionError && authError ? <p className="font-medium text-rose-600">{authError}</p> : null}
+            {loginOptionError ? (
+              <p className="font-medium text-rose-600">{loginOptionError}</p>
+            ) : authError ? (
+              <p className="font-medium text-rose-600">{authError}</p>
+            ) : (
+              <p>{authInfo}</p>
+            )}
           </div>
         ) : null}
       </div>
@@ -876,13 +886,15 @@ export function AuthPanel({
 
   return (
     <div className={shellClass("gap-4 sm:gap-5", "p-5 sm:p-6 md:p-7")}>
-      <div className="grid gap-3">
-        <p className="den-eyebrow">{eyebrow}</p>
-        <div className="grid gap-2">
-          <h2 className="den-title-lg">{activeContent.title}</h2>
-          <p className="den-copy">{activeContent.copy}</p>
+      {!hideIntro ? (
+        <div className="grid gap-3">
+          <p className="den-eyebrow">{eyebrow}</p>
+          <div className="grid gap-2">
+            <h2 className="den-title-lg">{activeContent.title}</h2>
+            <p className="den-copy">{activeContent.copy}</p>
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {showModeTabs ? (
         <div

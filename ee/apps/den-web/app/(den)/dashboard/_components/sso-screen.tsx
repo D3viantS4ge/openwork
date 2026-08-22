@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, KeyRound, RefreshCw, Shield, Trash2 } from "lucide-react";
+import { CheckCircle2, Copy, KeyRound, RefreshCw, Shield, ShieldAlert, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { DashboardPageTemplate } from "../../_components/ui/dashboard-page-template";
 import { DenButton } from "../../_components/ui/button";
@@ -307,7 +307,7 @@ export function SsoScreen() {
 
   if (!orgContext) {
     return (
-      <DashboardPageTemplate icon={Shield} badgeLabel="Admin" title="SSO" description="Set up enterprise single sign-on for this workspace." colors={["#F5F3FF", "#4C1D95", "#8B5CF6", "#DDD6FE"]}>
+      <DashboardPageTemplate icon={Shield} title="SSO" description="Set up enterprise single sign-on for this workspace." colors={["#F5F3FF", "#4C1D95", "#8B5CF6", "#DDD6FE"]}>
         <div className="rounded-[28px] border border-gray-200 bg-white px-6 py-10 text-[15px] text-gray-500">Loading organization details...</div>
       </DashboardPageTemplate>
     );
@@ -316,7 +316,7 @@ export function SsoScreen() {
   const ssoFormDisabled = formReadOnly || saving || !orgContext.entitlements.sso;
 
   return (
-    <DashboardPageTemplate icon={Shield} badgeLabel="Admin" title="SSO" description="Configure one enterprise SSO connection per workspace and share the generated sign-in URL with your team." colors={["#F5F3FF", "#4C1D95", "#8B5CF6", "#DDD6FE"]}>
+    <DashboardPageTemplate icon={Shield} title="SSO" description="Configure one enterprise SSO connection per workspace and share the generated sign-in URL with your team." colors={["#F5F3FF", "#4C1D95", "#8B5CF6", "#DDD6FE"]}>
       {!access.canViewSettings ? (
         <div className="rounded-[28px] border border-amber-200 bg-amber-50 px-6 py-5 text-[14px] text-amber-900">Only workspace admins can view SSO.</div>
       ) : (
@@ -443,20 +443,80 @@ export function SsoScreen() {
 
             {connection ? (
               <div className="mt-5 space-y-4">
-                {[
-                  ["Sign-in URL", connection.signInUrl, "signin"],
-                  ["Redirect URL", connection.redirectUrl, "redirect"],
-                  ["ACS URL", connection.acsUrl, "acs"],
-                  ["Metadata URL", connection.metadataUrl, "metadata"],
-                ].map(([label, value, key]) => (
-                  <div key={key as string} className="rounded-[20px] border border-gray-200 bg-gray-50 p-4">
-                    <div className="mb-2 flex items-center justify-between gap-3">
-                      <p className="text-[13px] font-semibold uppercase tracking-[0.12em] text-gray-500">{label as string}</p>
-                      <DenButton variant="secondary" icon={Copy} onClick={() => void copyValue((value as string | null) ?? null, key as string)} disabled={!value}>{copiedValue === key ? "Copied" : "Copy"}</DenButton>
+                {!connection.domainVerified ? (
+                  <section data-testid="sso-domain-verification" className="overflow-hidden rounded-[24px] border border-amber-300 bg-[#FFFBEB] text-[14px] text-amber-950 shadow-[0_18px_46px_-34px_rgba(146,64,14,0.55)]">
+                    <div className="flex flex-col gap-4 border-b border-amber-200 bg-amber-100/70 px-5 py-5 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="flex items-start gap-3">
+                        <span className="mt-0.5 rounded-full bg-amber-900 p-2 text-amber-50"><ShieldAlert size={18} aria-hidden="true" /></span>
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-[16px] font-semibold tracking-[-0.02em]">Verify your domain first</p>
+                            <span className="rounded-full border border-amber-300 bg-white/80 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-800">Pending verification</span>
+                          </div>
+                          <p className="mt-1 max-w-2xl leading-6 text-amber-900/80">
+                            SSO remains inactive and is not offered to users until this DNS check proves that your workspace controls <strong>{connection.domain}</strong>.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 flex-wrap gap-2">
+                        <DenButton variant="secondary" icon={KeyRound} onClick={() => void handleRequestDomainToken()} disabled={requestingDomainToken || !access.canManageSso}>
+                          {requestingDomainToken ? "Requesting..." : "Request token"}
+                        </DenButton>
+                        <DenButton variant="primary" icon={RefreshCw} onClick={() => void handleVerifyDomain()} disabled={verifyingDomain || !access.canManageSso || !domainVerificationToken}>
+                          {verifyingDomain ? "Verifying..." : "Verify domain"}
+                        </DenButton>
+                      </div>
                     </div>
-                    <code className="block break-all text-[13px] leading-6 text-gray-700">{(value as string | null) ?? "Not applicable"}</code>
+
+                    <div className="grid gap-px bg-amber-200 md:grid-cols-2">
+                      {[
+                        { label: "Record type", value: "TXT", key: "domain-record-type" },
+                        { label: "Host / name", value: connection.domainVerificationHost, key: "domain-record-host" },
+                        { label: "Full DNS name", value: connection.domainVerificationDnsName, key: "domain-record-name" },
+                        { label: "Value", value: domainVerificationToken, key: "domain-token" },
+                      ].map((record) => (
+                        <div key={record.key} className="bg-[#FFFEF7] px-5 py-4">
+                          <div className="mb-2 flex items-center justify-between gap-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700">{record.label}</p>
+                            {record.value ? (
+                              <button type="button" className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[12px] font-medium text-amber-900 transition hover:bg-amber-100" onClick={() => void copyValue(record.value, record.key)}>
+                                <Copy size={13} aria-hidden="true" /> {copiedValue === record.key ? "Copied" : "Copy"}
+                              </button>
+                            ) : null}
+                          </div>
+                          <code className="block break-all text-[13px] leading-6 text-gray-800">{record.value ?? "Request a token to reveal the TXT value"}</code>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="grid gap-3 px-5 py-4 text-[13px] leading-5 text-amber-900/80 sm:grid-cols-2">
+                      <p><strong className="text-amber-950">DNS providers differ:</strong> use the host value when your provider appends the domain automatically; otherwise use the full DNS name.</p>
+                      <p><strong className="text-amber-950">One-time proof:</strong> tokens expire after seven days. After verification succeeds, you may remove the TXT record. Changing the domain requires verification again.</p>
+                    </div>
+                  </section>
+                ) : (
+                  <div className="flex items-start gap-3 rounded-[20px] border border-emerald-200 bg-emerald-50 px-5 py-4 text-[14px] text-emerald-900">
+                    <CheckCircle2 className="mt-0.5 shrink-0" size={18} aria-hidden="true" />
+                    <div><p className="font-semibold">Domain verified · SSO active</p><p className="mt-1 text-emerald-800">The DNS TXT record was a one-time proof and may now be removed.</p></div>
                   </div>
-                ))}
+                )}
+
+                <div data-testid="sso-provider-setup" className="space-y-4">
+                  {[
+                    ["Sign-in URL", connection.signInUrl, "signin"],
+                    ["Redirect URL", connection.redirectUrl, "redirect"],
+                    ["ACS URL", connection.acsUrl, "acs"],
+                    ["Metadata URL", connection.metadataUrl, "metadata"],
+                  ].map(([label, value, key]) => (
+                    <div key={key as string} className="rounded-[20px] border border-gray-200 bg-gray-50 p-4">
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <p className="text-[13px] font-semibold uppercase tracking-[0.12em] text-gray-500">{label as string}</p>
+                        <DenButton variant="secondary" icon={Copy} onClick={() => void copyValue((value as string | null) ?? null, key as string)} disabled={!value}>{copiedValue === key ? "Copied" : "Copy"}</DenButton>
+                      </div>
+                      <code className="block break-all text-[13px] leading-6 text-gray-700">{(value as string | null) ?? "Not applicable"}</code>
+                    </div>
+                  ))}
+                </div>
 
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="rounded-[20px] border border-gray-200 bg-gray-50 p-4 text-[14px] text-gray-700">
@@ -472,34 +532,6 @@ export function SsoScreen() {
                     <p className="mt-2">Updated: {formatDateTime(connection.updatedAt)}</p>
                   </div>
                 </div>
-
-                {!connection.domainVerified ? (
-                  <div className="rounded-[20px] border border-violet-200 bg-violet-50 p-4 text-[14px] text-violet-900">
-                    <p className="font-medium">Domain verification</p>
-                    <p className="mt-2 text-violet-800">
-                      Request a DNS TXT token, publish it for `{connection.domain}`, then verify the domain before using this connection in production.
-                    </p>
-                    <div className="mt-4 flex flex-wrap gap-3">
-                      <DenButton variant="secondary" icon={KeyRound} onClick={() => void handleRequestDomainToken()} disabled={requestingDomainToken || !access.canManageSso}>
-                        {requestingDomainToken ? "Requesting..." : "Request token"}
-                      </DenButton>
-                      <DenButton variant="secondary" icon={RefreshCw} onClick={() => void handleVerifyDomain()} disabled={verifyingDomain || !access.canManageSso}>
-                        {verifyingDomain ? "Verifying..." : "Verify domain"}
-                      </DenButton>
-                    </div>
-                    {domainVerificationToken ? (
-                      <div className="mt-4 rounded-[16px] border border-violet-200 bg-white px-4 py-3">
-                        <div className="mb-2 flex items-center justify-between gap-3">
-                          <p className="text-[12px] font-semibold uppercase tracking-[0.16em] text-violet-500">TXT token</p>
-                          <DenButton variant="secondary" icon={Copy} onClick={() => void copyValue(domainVerificationToken, "domain-token")}>
-                            {copiedValue === "domain-token" ? "Copied" : "Copy"}
-                          </DenButton>
-                        </div>
-                        <code className="block break-all text-[13px] leading-6 text-gray-700">{domainVerificationToken}</code>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
 
                 {connection.lastError ? <div className="rounded-[20px] border border-red-200 bg-red-50 p-4 text-[14px] text-red-700">{connection.lastError}</div> : null}
               </div>

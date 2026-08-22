@@ -170,7 +170,7 @@ export function isOrgMcpConnectionItem(item: ExtensionItem): item is ExtensionIt
   return item.source === "org-connection" && Boolean(item.orgMcpConnection);
 }
 
-function orgConnectionCanRender(connection: DenExternalMcpConnection) {
+export function orgConnectionCanRender(connection: DenExternalMcpConnection) {
   return connection.credentialMode === "per_member" || connection.connected;
 }
 

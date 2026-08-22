@@ -93,6 +93,7 @@ import { useLocal } from "@/react-app/kernel/local-provider";
 import { usePlatform } from "@/react-app/kernel/platform";
 import { SessionPage, type OpenSessionTab } from "@/react-app/domains/session/chat/session-page";
 import { AutomationsPage } from "@/react-app/domains/automations/automations-page";
+import { useAutomationDeploymentEnabled } from "@/react-app/domains/automations/automation-availability";
 import { automationsStateChangedEvent } from "@/react-app/domains/automations/automation-events";
 import type { NewTaskComposerContext } from "@/react-app/domains/session/chat/new-task-composer";
 import { isDesktopProviderBlocked } from "@/app/cloud/desktop-app-restrictions";
@@ -207,6 +208,7 @@ import {
 } from "./cloud-workspace-status";
 import { getReactQueryClient } from "@/react-app/infra/query-client";
 import { useSessionControlActions } from "@/react-app/domains/session/control/session-control-actions";
+import { openComposerConfigure, isLibraryAgent, type ComposerSettingsSection } from "@/react-app/domains/settings/library";
 import {
   globalExtensionsRoute,
   legacySessionRoute,
@@ -472,7 +474,8 @@ export function SessionRoute() {
   const denAuth = useDenAuth();
   const { config: shellConfig } = useShellConfig();
   const local = useLocal();
-  const automationsEnabled = isDesktopRuntime();
+  const automationDeploymentEnabled = useAutomationDeploymentEnabled();
+  const automationsEnabled = isDesktopRuntime() && automationDeploymentEnabled;
   const automationsRouteActive = automationsEnabled && automationsRouteRequested;
   const denSettings = readDenSettings();
   const [automationsSupported, setAutomationsSupported] = useState(false);
@@ -505,7 +508,7 @@ export function SessionRoute() {
         });
     };
     refreshAutomationState();
-    const interval = window.setInterval(refreshAutomationState, 15_000);
+    const interval = window.setInterval(refreshAutomationState, 5 * 60_000);
     window.addEventListener(automationsStateChangedEvent, refreshAutomationState);
     return () => {
       cancelled = true;
@@ -1211,7 +1214,7 @@ export function SessionRoute() {
     void engineReloadVersion;
     if (!opencodeClient) return [];
     const list = unwrap(await opencodeClient.app.agents());
-    return list.filter((agent) => !agent.hidden && agent.mode !== "subagent");
+    return list.filter(isLibraryAgent);
   }, [engineReloadVersion, opencodeClient]);
 
   const handleOpenSettings = useCallback((route = "/settings/general", workspaceId = sidebarActiveWorkspaceId) => {
@@ -1292,23 +1295,24 @@ export function SessionRoute() {
           void refreshCloudProviderSync("model_picker_open");
         }
       },
-      onModelChange: (model: ModelRef) => {
+      onModelChange: (model: ModelRef, variant?: string | null) => {
         local.setPrefs((previous) => ({
           ...previous,
           defaultModel: model,
-          modelVariant: previous.defaultModel?.providerID === model.providerID && previous.defaultModel.modelID === model.modelID
-            ? previous.modelVariant
-            : null,
+          modelVariant: variant !== undefined
+            ? variant
+            : previous.defaultModel?.providerID === model.providerID && previous.defaultModel.modelID === model.modelID
+              ? previous.modelVariant
+              : null,
         }));
         modelPicker.setCompactOpen(false);
       },
       providerConnectedCount: hasUsableModel ? 1 : providerConnectedIds.length,
-      onOpenSettingsSection: (section: "commands" | "skills" | "mcps" | "plugins" | "extensions" | "providers") => {
-        if (section === "providers") {
-          handleOpenSettings("/settings/ai");
-          return;
-        }
-        handleOpenExtensions(section === "skills" ? "skills" : section === "mcps" ? "mcps" : section === "plugins" ? "plugins" : "");
+      onOpenSettingsSection: (section: ComposerSettingsSection) => {
+        openComposerConfigure(section, {
+          openLibrary: handleOpenExtensions,
+          openSettings: handleOpenSettings,
+        });
       },
       onSendDraft: async (draft: ComposerDraft, sessionId: string): Promise<CloudMcpSubmissionResult> => {
         const targetSessionId = sessionId.trim() || selectedSessionId;
@@ -1331,7 +1335,11 @@ export function SessionRoute() {
           send: async () => {
             await sendWithRevertRollback({
               revertMessageId: draft.revertMessageId,
-              abort: () => abortSessionSafe(opencodeClient, targetSessionId, selectedWorkspaceRoot || undefined),
+              abort: () => abortSessionSafe(opencodeClient, targetSessionId, selectedWorkspaceRoot || undefined, {
+                source: "session.edit_resend.before_revert",
+                initiator: "user",
+                reason: "abort active run before replacing a reverted message",
+              }),
               revert: async (messageId) => {
                 const reverted = await revertSession(opencodeClient, targetSessionId, messageId);
                 applySessionRevert(selectedWorkspaceId, reverted);
@@ -1461,7 +1469,11 @@ export function SessionRoute() {
         if (!targetSessionId) return false;
         try {
           // Abort any running generation first; OpenCode rejects revert on busy sessions.
-          await abortSessionSafe(opencodeClient, targetSessionId, selectedWorkspaceRoot || undefined);
+          await abortSessionSafe(opencodeClient, targetSessionId, selectedWorkspaceRoot || undefined, {
+            source: "session.revert_to_message.before_revert",
+            initiator: "user",
+            reason: "abort active run before reverting transcript",
+          });
           const reverted = await revertSession(opencodeClient, targetSessionId, messageId);
           // Stamp the revert cursor into the local caches so the transcript
           // rewinds immediately instead of waiting for a full reload.
@@ -1594,13 +1606,15 @@ export function SessionRoute() {
           void refreshCloudProviderSync("model_picker_open");
         }
       },
-      onModelChange: (model: ModelRef) => {
+      onModelChange: (model: ModelRef, variant?: string | null) => {
         local.setPrefs((previous) => ({
           ...previous,
           defaultModel: model,
-          modelVariant: previous.defaultModel?.providerID === model.providerID && previous.defaultModel.modelID === model.modelID
-            ? previous.modelVariant
-            : null,
+          modelVariant: variant !== undefined
+            ? variant
+            : previous.defaultModel?.providerID === model.providerID && previous.defaultModel.modelID === model.modelID
+              ? previous.modelVariant
+              : null,
         }));
         modelPicker.setCompactOpen(false);
       },
@@ -1632,8 +1646,11 @@ export function SessionRoute() {
       },
       isRemoteWorkspace: selectedWorkspace?.workspaceType === "remote",
       isSandboxWorkspace: selectedWorkspace ? isSandboxWorkspace(selectedWorkspace) : false,
-      onOpenSettingsSection: (section: "commands" | "skills" | "mcps" | "plugins" | "extensions") => {
-        handleOpenExtensions(section === "skills" ? "skills" : section === "mcps" ? "mcps" : section === "plugins" ? "plugins" : "");
+      onOpenSettingsSection: (section: ComposerSettingsSection) => {
+        openComposerConfigure(section, {
+          openLibrary: handleOpenExtensions,
+          openSettings: handleOpenSettings,
+        });
       },
     };
   }, [
@@ -1787,6 +1804,24 @@ export function SessionRoute() {
   );
 
 
+  const applyLastUsedModelToSession = useCallback((sessionId: string) => {
+    const previous = selectedSessionId ? getSessionModelSelection(selectedSessionId) : null;
+    const model = previous?.model ?? local.prefs.defaultModel;
+    if (!model?.providerID || !model.modelID) return;
+    const variant = previous ? previous.variant : (local.prefs.modelVariant ?? null);
+    useSessionModelStore.getState().setModel(sessionId, model, variant);
+    local.setPrefs((current) => {
+      if (
+        current.defaultModel?.providerID === model.providerID
+        && current.defaultModel.modelID === model.modelID
+        && (current.modelVariant ?? null) === variant
+      ) {
+        return current;
+      }
+      return { ...current, defaultModel: model, modelVariant: variant };
+    });
+  }, [local, selectedSessionId]);
+
   const handleCreateTaskInWorkspace = useCallback(async (workspaceId: string): Promise<string | null> => {
     const workspace = workspaces.find((item) => item.id === workspaceId);
     if (
@@ -1824,6 +1859,7 @@ export function SessionRoute() {
       writeActiveWorkspaceId(workspaceId || null);
       writeLastSessionFor(workspaceId, session.id);
       rememberPendingCreatedSession(workspaceId, session.id);
+      applyLastUsedModelToSession(session.id);
       setSessionsByWorkspaceId((current) => {
         const next = {
           ...current,
@@ -1860,7 +1896,7 @@ export function SessionRoute() {
       }
       return null;
     }
-  }, [endpointForWorkspace, loading, navigateToWorkspaceSession, refreshCloudProviderSync, refreshRouteState, rememberPendingCreatedSession, retryingWorkspaceIds, selectedWorkspaceId, workspaces]);
+  }, [applyLastUsedModelToSession, endpointForWorkspace, loading, navigateToWorkspaceSession, refreshCloudProviderSync, refreshRouteState, rememberPendingCreatedSession, retryingWorkspaceIds, selectedWorkspaceId, workspaces]);
 
   // Latest session-list state for prev/next session tab navigation. The
   // `options` field is updated by `onSessionTabsChange` from SessionPage so we
@@ -2074,7 +2110,7 @@ export function SessionRoute() {
     });
   }, [handleOpenSettings, restrictionNotice, sessionProviderAuthStore]);
 
-  // "Your API keys → Connect" in the compact model picker (and anything else
+  // "Connect more providers" in the compact model picker (and anything else
   // outside this route's prop tree) requests the provider auth modal here.
   useEffect(() => {
     const handler = () => handleOpenProviderAuth();
@@ -2761,6 +2797,7 @@ export function SessionRoute() {
               writeActiveWorkspaceId(workspaceId || null);
               writeLastSessionFor(workspaceId, session.id);
               rememberPendingCreatedSession(workspaceId, session.id);
+              applyLastUsedModelToSession(session.id);
               setSessionsByWorkspaceId((current) => ({
                 ...current,
                 [workspaceId]: [session, ...(current[workspaceId] ?? [])],
@@ -2989,9 +3026,16 @@ export function SessionRoute() {
       }
       onSelect={(next: ModelRef) => {
         if (modelPickerSessionId) {
-          // Opened from a session composer: remember for that conversation
-          // only, so the other split pane keeps its own model.
+          // Keep the conversation's own model, and also remember it as the
+          // last used default so a newly created session starts on it.
           useSessionModelStore.getState().setModel(modelPickerSessionId, next);
+          local.setPrefs((previous) => ({
+            ...previous,
+            defaultModel: next,
+            modelVariant: previous.defaultModel?.providerID === next.providerID && previous.defaultModel.modelID === next.modelID
+              ? previous.modelVariant
+              : null,
+          }));
           setModelPickerSessionId(null);
         } else {
           local.setPrefs((previous) => ({

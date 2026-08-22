@@ -13,7 +13,6 @@ import {
   createConfigObjectVersion,
   createPlugin,
   syncPluginMcpRequirementAccessForResource,
-  updatePlugin,
 } from "./routes/org/plugin-system/store.js"
 import {
   requirePluginArchResourceRole,
@@ -193,15 +192,15 @@ export function inspectRemoteMcpAppHtml(html: string) {
   }
 }
 
-function validateSourceUrl(rawUrl: string) {
+export function validateRemoteMcpAppSourceUrl(rawUrl: string, allowInsecureHttp = false) {
   let url: URL
   try {
     url = new URL(rawUrl)
   } catch {
-    throw new RemoteMcpAppError(400, "invalid_source_url", "Enter a valid HTTP or HTTPS URL.")
+    throw new RemoteMcpAppError(400, "invalid_source_url", "Enter a valid HTTPS URL.")
   }
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new RemoteMcpAppError(400, "invalid_source_url", "Remote MCP App URLs must use HTTP or HTTPS.")
+  if (url.protocol !== "https:" && !(allowInsecureHttp && url.protocol === "http:")) {
+    throw new RemoteMcpAppError(400, "invalid_source_url", "Remote MCP App URLs must use HTTPS.")
   }
   if (url.hash) throw new RemoteMcpAppError(400, "invalid_source_url", "Remote MCP App URLs must not contain a fragment.")
   if (url.username || url.password) {
@@ -218,6 +217,25 @@ function validateSourceUrl(rawUrl: string) {
     }
   }
   return url.toString()
+}
+
+export function validateRemoteMcpAppContentType(contentType: string | null) {
+  if (!contentType) {
+    throw new RemoteMcpAppError(422, "invalid_content_type", "Remote MCP Apps must be served as text/html or application/xhtml+xml.")
+  }
+  const [rawMimeType, ...parameters] = contentType.split(";")
+  const mimeType = rawMimeType?.trim().toLowerCase()
+  if (mimeType !== "text/html" && mimeType !== "application/xhtml+xml") {
+    throw new RemoteMcpAppError(422, "invalid_content_type", "Remote MCP Apps must be served as text/html or application/xhtml+xml.")
+  }
+  for (const parameter of parameters) {
+    const match = parameter.trim().match(/^charset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s]+))$/i)
+    const charset = (match?.[1] ?? match?.[2] ?? match?.[3])?.toLowerCase()
+    if (charset && charset !== "utf-8" && charset !== "utf8") {
+      throw new RemoteMcpAppError(422, "invalid_encoding", "Remote MCP Apps must be UTF-8 HTML.")
+    }
+  }
+  return mimeType
 }
 
 async function boundedResponseText(response: Response) {
@@ -251,15 +269,17 @@ async function boundedResponseText(response: Response) {
     offset += chunk.byteLength
   }
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+    // Preserve a leading UTF-8 BOM as U+FEFF so encoding the stored string
+    // reproduces the exact downloaded bytes and therefore the stored digest.
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes)
   } catch {
     throw new RemoteMcpAppError(422, "invalid_encoding", "Remote MCP Apps must be UTF-8 HTML.")
   }
 }
 
 export async function fetchRemoteMcpApp(sourceUrl: string) {
-  const normalizedUrl = validateSourceUrl(sourceUrl)
   const { env } = await import("./env.js")
+  const normalizedUrl = validateRemoteMcpAppSourceUrl(sourceUrl, env.allowPrivateMcpUrls)
   const guardedFetch = env.allowPrivateMcpUrls ? createRealmSafeFetch() : createGuardedFetch()
   let response: Response
   try {
@@ -275,15 +295,22 @@ export async function fetchRemoteMcpApp(sourceUrl: string) {
     await response.body?.cancel()
     throw new RemoteMcpAppError(502, "source_fetch_failed", `The app URL returned HTTP ${response.status}.`)
   }
+  const contentType = response.headers.get("content-type")
+  try {
+    validateRemoteMcpAppContentType(contentType)
+  } catch (error) {
+    await response.body?.cancel()
+    throw error
+  }
   const html = await boundedResponseText(response)
   const inspected = inspectRemoteMcpAppHtml(html)
-  const resolvedSourceUrl = validateSourceUrl(response.url || normalizedUrl)
+  const resolvedSourceUrl = validateRemoteMcpAppSourceUrl(response.url || normalizedUrl, env.allowPrivateMcpUrls)
   return {
     ...inspected,
     html,
     sourceUrl: normalizedUrl,
     resolvedSourceUrl,
-    contentType: response.headers.get("content-type"),
+    contentType,
     fetchedAt: new Date().toISOString(),
   }
 }
@@ -402,20 +429,42 @@ export async function previewRemoteMcpApp(sourceUrl: string) {
 
 export async function importRemoteMcpApp(input: {
   context: PluginArchActorContext
+  pluginId?: string
   sourceUrl: string
   activate?: boolean
+  requireFreshSession?: boolean
 }) {
+  let pluginId: DenTypeId<"plugin"> | null = null
+  if (input.pluginId) {
+    try {
+      pluginId = normalizeDenTypeId("plugin", input.pluginId)
+    } catch {
+      throw new RemoteMcpAppError(404, "plugin_not_found", "Plugin not found.")
+    }
+    // Reject an unavailable target before performing any outbound download.
+    await requirePluginArchResourceRole({
+      context: input.context,
+      requireFreshSession: input.requireFreshSession,
+      resourceId: pluginId,
+      resourceKind: "plugin",
+      role: "editor",
+    })
+  }
   const fetched = await fetchRemoteMcpApp(input.sourceUrl)
-  const plugin = await createPlugin({
-    context: input.context,
-    name: fetched.metadata.name,
-    description: fetched.metadata.description,
-    sourceRepositoryUrl: fetched.sourceUrl.length <= 1024 ? fetched.sourceUrl : null,
-  })
+  if (!pluginId) {
+    const plugin = await createPlugin({
+      context: input.context,
+      name: fetched.metadata.name,
+      description: fetched.metadata.description,
+      sourceRepositoryUrl: fetched.sourceUrl.length <= 1024 ? fetched.sourceUrl : null,
+    })
+    pluginId = normalizeDenTypeId("plugin", plugin.id)
+  }
   const configObject = await createConfigObject({
     context: input.context,
     objectType: "app",
-    pluginIds: [normalizeDenTypeId("plugin", plugin.id)],
+    pluginIds: [pluginId],
+    requireFreshSession: input.requireFreshSession,
     sourceMode: "import",
     value: {
       normalizedPayloadJson: payloadForFetchedApp(fetched) as unknown as Record<string, unknown>,
@@ -429,7 +478,7 @@ export async function importRemoteMcpApp(input: {
   const app: RemoteMcpAppRow = {
     configObjectId: normalizeDenTypeId("configObject", configObject.id),
     organizationId: input.context.organizationContext.organization.id,
-    pluginId: normalizeDenTypeId("plugin", plugin.id),
+    pluginId,
     activeVersionId: input.activate === false ? null : normalizeDenTypeId("configObjectVersion", versionId),
     sourceUrl: fetched.sourceUrl,
     resolvedSourceUrl: fetched.resolvedSourceUrl,
@@ -512,12 +561,6 @@ export async function activateRemoteMcpAppRevision(input: {
   const updatedAt = new Date()
   await db.update(RemoteMcpAppTable).set({ activeVersionId: versionId, status: "active", retiredAt: null, updatedAt })
     .where(eq(RemoteMcpAppTable.configObjectId, app.configObjectId))
-  await updatePlugin({
-    context: input.context,
-    pluginId: app.pluginId,
-    name: payload.metadata.name,
-    description: payload.metadata.description ?? null,
-  })
   return serializeApp({ ...app, activeVersionId: versionId, status: "active", retiredAt: null, updatedAt }, "editor")
 }
 

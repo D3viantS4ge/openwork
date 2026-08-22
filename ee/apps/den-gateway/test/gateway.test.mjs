@@ -41,7 +41,7 @@ function serverBase(server) {
 }
 
 function startGateway(options) {
-  const app = createGatewayApp({ ...options, logger: silentLogger, logRequests: false })
+  const app = createGatewayApp({ fetchImpl: fetch, ...options, logger: silentLogger, logRequests: false })
   return startServer(app.fetch)
 }
 
@@ -76,6 +76,18 @@ function readyResolvePayload(url, input = {}) {
     clientToken: input.clientToken ?? "client-token",
     hostToken: input.hostToken ?? "host-token",
   }
+}
+
+function injectedInstanceFetch(instanceHandler) {
+  const observed = { upstreamCalls: 0 }
+  const fetchImpl = async (url, init) => {
+    if (new URL(url).pathname === "/v1/cloud/gateway/resolve") {
+      return Response.json(readyResolvePayload("https://instance.example"))
+    }
+    observed.upstreamCalls += 1
+    return instanceHandler(url, init, observed.upstreamCalls)
+  }
+  return { fetchImpl, observed }
 }
 
 function startPassthroughDenApi() {
@@ -234,6 +246,93 @@ describe("den-gateway static UI", () => {
 })
 
 describe("den-gateway proxy", () => {
+  test("retries one connect-phase failure and passes through success", async () => {
+    const injected = injectedInstanceFetch((_url, _init, call) => {
+      if (call === 1) {
+        throw new Error("connect failed", { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } })
+      }
+      return new Response("ok")
+    })
+    const gateway = startGateway({ fetchImpl: injected.fetchImpl, denApiBase: "https://den.example", gatewayKey: "gateway-secret" })
+
+    const response = await fetch(`${serverBase(gateway)}/status`, { headers: { Authorization: "Bearer den-token" } })
+
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe("ok")
+    expect(injected.observed.upstreamCalls).toBe(2)
+  })
+
+  test("does not retry an instance request that succeeds first try", async () => {
+    const injected = injectedInstanceFetch(() => new Response("ok"))
+    const gateway = startGateway({ fetchImpl: injected.fetchImpl, denApiBase: "https://den.example", gatewayKey: "gateway-secret" })
+
+    const response = await fetch(`${serverBase(gateway)}/status`, { headers: { Authorization: "Bearer den-token" } })
+
+    expect(response.status).toBe(200)
+    expect(injected.observed.upstreamCalls).toBe(1)
+  })
+
+  test("does not retry a non-connect instance failure", async () => {
+    const injected = injectedInstanceFetch(() => {
+      throw new Error("boom")
+    })
+    const gateway = startGateway({ fetchImpl: injected.fetchImpl, denApiBase: "https://den.example", gatewayKey: "gateway-secret" })
+
+    const response = await fetch(`${serverBase(gateway)}/status`, { headers: { Authorization: "Bearer den-token" } })
+
+    expect(response.status).toBe(502)
+    await expect(response.json()).resolves.toEqual({ error: "gateway_upstream_failed" })
+    expect(injected.observed.upstreamCalls).toBe(1)
+  })
+
+  test("caps connect-phase retries at one", async () => {
+    const injected = injectedInstanceFetch(() => {
+      const error = new Error("connect failed")
+      error.code = "ECONNRESET"
+      throw error
+    })
+    const gateway = startGateway({ fetchImpl: injected.fetchImpl, denApiBase: "https://den.example", gatewayKey: "gateway-secret" })
+
+    const response = await fetch(`${serverBase(gateway)}/status`, { headers: { Authorization: "Bearer den-token" } })
+
+    expect(response.status).toBe(502)
+    await expect(response.json()).resolves.toEqual({ error: "gateway_upstream_failed" })
+    expect(injected.observed.upstreamCalls).toBe(2)
+  })
+
+  test("resends identical buffered POST body bytes and headers after a connect failure", async () => {
+    const attempts = []
+    const injected = injectedInstanceFetch(async (_url, init, call) => {
+      attempts.push({
+        body: Array.from(new Uint8Array(init.body)),
+        contentType: new Headers(init.headers).get("content-type"),
+        testHeader: new Headers(init.headers).get("x-test-header"),
+      })
+      if (call === 1) {
+        throw new Error("connect failed", { cause: { code: "ETIMEDOUT" } })
+      }
+      return new Response("created", { status: 201 })
+    })
+    const gateway = startGateway({ fetchImpl: injected.fetchImpl, denApiBase: "https://den.example", gatewayKey: "gateway-secret" })
+
+    const response = await fetch(`${serverBase(gateway)}/workspaces`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer den-token",
+        "Content-Type": "application/octet-stream",
+        "X-Test-Header": "preserved",
+      },
+      body: new Uint8Array([0, 1, 2, 255]),
+    })
+
+    expect(response.status).toBe(201)
+    expect(injected.observed.upstreamCalls).toBe(2)
+    expect(attempts).toEqual([
+      { body: [0, 1, 2, 255], contentType: "application/octet-stream", testHeader: "preserved" },
+      { body: [0, 1, 2, 255], contentType: "application/octet-stream", testHeader: "preserved" },
+    ])
+  })
+
   test("passes /api/den through to den-api with the caller bearer, no cookies, and the prefix stripped", async () => {
     const denApi = startPassthroughDenApi()
     const upstream = startUpstream()

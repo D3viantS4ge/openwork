@@ -14,6 +14,7 @@ import {
   wakeWorkerOnDaytona,
   type StopWorkerOnDaytonaResult,
 } from "./daytona.js"
+import { withProvisionDeadline } from "./provision-deadline.js"
 
 type WorkerId = typeof WorkerTable.$inferSelect.id
 type WorkerStatus = typeof WorkerTable.$inferSelect.status
@@ -37,6 +38,7 @@ type WakeCloudWorkerOptions = {
   wakeWorker?: WakeWorkerOnDaytona
   provisionWorker?: ProvisionWorkerOnDaytona
   materializeProviders?: typeof materializeCloudWorkerProviders
+  deadlineMs?: number
 }
 
 type StopIdleCloudWorkersOptions = {
@@ -179,6 +181,7 @@ async function runWakeCloudWorker(workerId: WorkerId, options: WakeCloudWorkerOp
   const wakeWorker = options.wakeWorker ?? wakeWorkerOnDaytona
   const provisionWorker = options.provisionWorker ?? provisionWorkerOnDaytona
   const materializeProviders = options.materializeProviders ?? materializeCloudWorkerProviders
+  const deadlineMs = options.deadlineMs ?? env.cloudProvisionDeadlineMs
 
   try {
     const worker = await store.getWorker(workerId)
@@ -213,17 +216,22 @@ async function runWakeCloudWorker(workerId: WorkerId, options: WakeCloudWorkerOp
       clientToken,
       activityToken,
     }
-    let woken: Awaited<ReturnType<WakeWorkerOnDaytona>>
-    try {
-      woken = await wakeWorker(wakeInput)
-    } catch (error) {
-      if (!isDaytonaSandboxMissingError(error)) {
-        throw error
-      }
+    const woken = await withProvisionDeadline({
+      promise: (async () => {
+        try {
+          return await wakeWorker(wakeInput)
+        } catch (error) {
+          if (!isDaytonaSandboxMissingError(error)) {
+            throw error
+          }
 
-      logger.warn("worker wake sandbox missing; reprovisioning", { worker_id: workerId, error })
-      woken = await provisionWorker(wakeInput)
-    }
+          logger.warn("worker wake sandbox missing; reprovisioning", { worker_id: workerId, error })
+          return provisionWorker(wakeInput)
+        }
+      })(),
+      deadlineMs,
+      label: `cloud wake for ${workerId}`,
+    })
 
     if (woken.status === "healthy" && worker.org_id) {
       try {

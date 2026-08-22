@@ -33,7 +33,7 @@ type UseSessionControlActionsInput = {
   opencodeClient: ReturnType<typeof createClient> | null;
   navigateToSession: (sessionId: string) => void;
   navigateToSessionRoot: () => void;
-  createTaskInWorkspace: (workspaceId: string) => Promise<unknown> | unknown;
+  createTaskInWorkspace: (workspaceId: string) => Promise<string | null> | string | null;
   openModelPicker: () => void;
   refreshRouteState: () => Promise<unknown> | unknown;
 };
@@ -89,9 +89,10 @@ export function useSessionControlActions(input: UseSessionControlActionsInput) {
     sideEffect: "mutation",
     disabled: !canCreateTask || !selectedWorkspaceId,
     execute: async () => {
-      if (!selectedWorkspaceId) return false;
-      await createTaskInWorkspace(selectedWorkspaceId);
-      return true;
+      if (!selectedWorkspaceId) throw new Error("Cannot create a task without a selected workspace.");
+      const sessionId = await createTaskInWorkspace(selectedWorkspaceId);
+      if (sessionId === null) throw new Error("Task creation did not return a session ID.");
+      return sessionId;
     },
   }), [canCreateTask, createTaskInWorkspace, selectedWorkspaceId]);
   useControlAction(createTaskControlAction);

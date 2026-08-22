@@ -149,6 +149,13 @@ describe("Den desktop config client", () => {
     }).allowAlphaUpdates).toBeUndefined();
   });
 
+  test("normalizes only explicit Automation deployment availability", () => {
+    expect(normalizeDenDesktopConfig({ automationsEnabled: false }).automationsEnabled).toBe(false);
+    expect(normalizeDenDesktopConfig({ automationsEnabled: true }).automationsEnabled).toBe(true);
+    expect(normalizeDenDesktopConfig({ automationsEnabled: "false" }).automationsEnabled).toBeUndefined();
+    expect(normalizeDenDesktopConfig({}).automationsEnabled).toBeUndefined();
+  });
+
   test("selects targeted onboarding prompts by priority before default fallback", () => {
     const defaultPrompts = ["Default task one", "Default task two"];
 

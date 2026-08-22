@@ -62,6 +62,7 @@ type ScopedCache<T, C> = {
 
 function createScopedCache<T, C>(
   fetcher: (input: { client: C; scope: CloudInventoryScope }) => Promise<T>,
+  options?: { isFresh?: (value: T) => boolean },
 ): ScopedCache<T, C> {
   let slot: CacheSlot<T> | null = null;
 
@@ -73,7 +74,9 @@ function createScopedCache<T, C>(
     async load({ client, scope, maxAgeMs = DEFAULT_MAX_AGE_MS }) {
       const key = cloudInventoryScopeKey(scope);
       const current = slot && slot.key === key ? slot : null;
-      if (current?.value && Date.now() - current.fetchedAt < maxAgeMs) return current.value;
+      const cached = current?.value;
+      const cacheable = cached != null && (options?.isFresh?.(cached) ?? true);
+      if (cacheable && current && Date.now() - current.fetchedAt < maxAgeMs) return cached;
       if (current?.inflight) return current.inflight;
 
       const inflight = fetcher({ client, scope });
@@ -102,6 +105,13 @@ function createScopedCache<T, C>(
 
 const connectCapabilitiesCache = createScopedCache<ConnectCapabilityInventory, ConnectCapabilityClient>(
   ({ client, scope }) => listAssignedConnectCapabilities({ client, organizationId: scope.organizationId }),
+  {
+    isFresh: (inventory) => (
+      inventory.plugins.length > 0
+      || inventory.skills.length > 0
+      || inventory.mcpServers.length > 0
+    ),
+  },
 );
 
 const orgMcpConnectionsCache = createScopedCache<DenExternalMcpConnection[], OrgMcpConnectionClient>(
@@ -134,14 +144,23 @@ export function loadOrgMcpConnections(input: {
   return orgMcpConnectionsCache.load(input);
 }
 
+export const CLOUD_INVENTORY_CHANGED_EVENT = "openwork-cloud-inventory-changed";
+
 export function clearCloudInventoryCache() {
   connectCapabilitiesCache.clear();
   orgMcpConnectionsCache.clear();
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(CLOUD_INVENTORY_CHANGED_EVENT));
+  }
 }
 
 function denClientForCurrentSession() {
   const settings = readDenSettings();
-  return createDenClient({ baseUrl: settings.baseUrl, token: settings.authToken?.trim() ?? "" });
+  return createDenClient({
+    baseUrl: settings.baseUrl,
+    apiBaseUrl: settings.apiBaseUrl,
+    token: settings.authToken?.trim() ?? "",
+  });
 }
 
 /**

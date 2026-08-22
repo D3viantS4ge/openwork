@@ -38,6 +38,7 @@ type MarketplaceGrantRow = Pick<typeof MarketplaceAccessGrantTable.$inferSelect,
 type PluginGrantRow = Pick<typeof PluginAccessGrantTable.$inferSelect, "orgMembershipId" | "orgWide" | "removedAt" | "role" | "teamId">
 type ConnectorInstanceGrantRow = Pick<typeof ConnectorInstanceAccessGrantTable.$inferSelect, "orgMembershipId" | "orgWide" | "removedAt" | "role" | "teamId">
 type GrantRow = ConfigObjectGrantRow | MarketplaceGrantRow | PluginGrantRow | ConnectorInstanceGrantRow
+type ExposureGrantRow = Pick<PluginGrantRow, "orgMembershipId" | "orgWide" | "teamId">
 
 type MarketplaceResourceLookupInput = {
   context: PluginArchActorContext
@@ -68,6 +69,8 @@ type ResourceLookupInput =
   | ConnectorInstanceResourceLookupInput
   | MarketplaceResourceLookupInput
   | ConfigObjectResourceLookupInput
+
+type ExposureResourceLookupInput = PluginResourceLookupInput | ConfigObjectResourceLookupInput
 
 type RequireResourceRoleInput = ResourceLookupInput & {
   requireFreshSession?: boolean
@@ -208,6 +211,74 @@ export function resolvePluginArchGrantRole(input: {
   }
 
   return resolved
+}
+
+export function pluginArchGrantExpandsAudience(grant: ExposureGrantRow, memberId: MemberId) {
+  return grant.orgWide
+    || grant.teamId !== null
+    || (grant.orgMembershipId !== null && grant.orgMembershipId !== memberId)
+}
+
+async function pluginIdsHaveExpandedAudience(context: PluginArchActorContext, pluginIds: PluginId[]) {
+  if (pluginIds.length === 0) return false
+
+  const organizationId = context.organizationContext.organization.id
+  const memberId = context.organizationContext.currentMember.id
+  const grants = await db
+    .select({
+      orgMembershipId: PluginAccessGrantTable.orgMembershipId,
+      orgWide: PluginAccessGrantTable.orgWide,
+      teamId: PluginAccessGrantTable.teamId,
+    })
+    .from(PluginAccessGrantTable)
+    .where(and(
+      eq(PluginAccessGrantTable.organizationId, organizationId),
+      inArray(PluginAccessGrantTable.pluginId, pluginIds),
+      isNull(PluginAccessGrantTable.removedAt),
+    ))
+  if (grants.some((grant) => pluginArchGrantExpandsAudience(grant, memberId))) return true
+
+  const marketplaceMemberships = await db
+    .select({ id: MarketplacePluginTable.id })
+    .from(MarketplacePluginTable)
+    .where(and(
+      eq(MarketplacePluginTable.organizationId, organizationId),
+      inArray(MarketplacePluginTable.pluginId, pluginIds),
+      isNull(MarketplacePluginTable.removedAt),
+    ))
+  return marketplaceMemberships.length > 0
+}
+
+export async function pluginArchResourceHasExpandedAudience(input: ExposureResourceLookupInput) {
+  if (input.resourceKind === "plugin") {
+    return pluginIdsHaveExpandedAudience(input.context, [input.resourceId])
+  }
+
+  const organizationId = input.context.organizationContext.organization.id
+  const memberId = input.context.organizationContext.currentMember.id
+  const grants = await db
+    .select({
+      orgMembershipId: ConfigObjectAccessGrantTable.orgMembershipId,
+      orgWide: ConfigObjectAccessGrantTable.orgWide,
+      teamId: ConfigObjectAccessGrantTable.teamId,
+    })
+    .from(ConfigObjectAccessGrantTable)
+    .where(and(
+      eq(ConfigObjectAccessGrantTable.organizationId, organizationId),
+      eq(ConfigObjectAccessGrantTable.configObjectId, input.resourceId),
+      isNull(ConfigObjectAccessGrantTable.removedAt),
+    ))
+  if (grants.some((grant) => pluginArchGrantExpandsAudience(grant, memberId))) return true
+
+  const memberships = await db
+    .select({ pluginId: PluginConfigObjectTable.pluginId })
+    .from(PluginConfigObjectTable)
+    .where(and(
+      eq(PluginConfigObjectTable.organizationId, organizationId),
+      eq(PluginConfigObjectTable.configObjectId, input.resourceId),
+      isNull(PluginConfigObjectTable.removedAt),
+    ))
+  return pluginIdsHaveExpandedAudience(input.context, memberships.map((membership) => membership.pluginId))
 }
 
 async function resolveGrantRole(input: {
@@ -375,9 +446,9 @@ export async function resolvePluginArchResourceRole(input: ResourceLookupInput) 
   return resolved
 }
 
-export async function requirePluginArchCapability(context: PluginArchActorContext, capability: PluginArchCapability) {
+export async function requirePluginArchCapability(context: PluginArchActorContext, capability: PluginArchCapability, requireFreshSession?: boolean) {
   if (hasPluginArchCapability(context, capability)) {
-    ensureFreshPluginArchAdmin(context)
+    if (requireFreshSession !== false) ensureFreshPluginArchAdmin(context)
     return
   }
 

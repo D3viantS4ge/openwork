@@ -71,7 +71,7 @@ async function executeControl(app: Surface, action: string, args?: unknown): Pro
 }
 
 async function openModelPicker(app: Surface): Promise<void> {
-  const open = await evalIn(app, `Boolean(document.querySelector(${JSON.stringify(MODEL_SEARCH_INPUT)}))`);
+  const open = await evalIn(app, `Boolean(document.querySelector(${JSON.stringify(MODEL_SEARCH_INPUT)}))`).catch(() => false);
   if (open !== true) {
     await waitFor(app, `window.__openworkControl?.listActions().some((entry) => entry.id === "session.model_picker.open" && entry.disabled === false)`, {
       timeoutMs: 30_000,
@@ -145,21 +145,39 @@ export async function readAvailableModels(app: Surface): Promise<ModelFacts[]> {
   return parseModels(value);
 }
 
-export async function selectModel(app: Surface, name: string): Promise<ModelFacts> {
+export async function selectModel(app: Surface, name: string, options?: { provider?: string }): Promise<ModelFacts> {
   await openModelPicker(app);
   await fill(app, MODEL_SEARCH_INPUT, name);
   await waitFor(app, `(() => {
     const dialog = document.querySelector(${JSON.stringify(MODEL_DIALOG)});
+    const expectedProvider = ${JSON.stringify(options?.provider?.trim())};
     return [...(dialog?.querySelectorAll("button") ?? [])].some((button) => {
       const id = button.querySelector("span.font-mono")?.textContent?.trim() ?? "";
-      return !button.disabled && (id === ${JSON.stringify(name)} || (button.textContent ?? "").includes(${JSON.stringify(name)}));
+      let group = button.parentElement;
+      while (group && !group.querySelector(':scope > div > button')) group = group.parentElement;
+      const providerHeader = group?.querySelector(':scope > div > button');
+      const providerName = providerHeader?.querySelector("span.text-dls-text")?.textContent?.trim()
+        ?? providerHeader?.textContent?.replace(/\\d+ models?.*$/, "").trim()
+        ?? "";
+      return !button.disabled
+        && (id === ${JSON.stringify(name)} || (button.textContent ?? "").includes(${JSON.stringify(name)}))
+        && (expectedProvider === undefined || providerName === expectedProvider);
     });
   })()`, { timeoutMs: 30_000, label: `selectable model ${name}` });
   const selected = await evalIn(app, `(() => {
     const dialog = document.querySelector(${JSON.stringify(MODEL_DIALOG)});
+    const expectedProvider = ${JSON.stringify(options?.provider?.trim())};
     const button = [...(dialog?.querySelectorAll("button") ?? [])].find((candidate) => {
       const id = candidate.querySelector("span.font-mono")?.textContent?.trim() ?? "";
-      return !candidate.disabled && (id === ${JSON.stringify(name)} || (candidate.textContent ?? "").includes(${JSON.stringify(name)}));
+      let group = candidate.parentElement;
+      while (group && !group.querySelector(':scope > div > button')) group = group.parentElement;
+      const providerHeader = group?.querySelector(':scope > div > button');
+      const providerName = providerHeader?.querySelector("span.text-dls-text")?.textContent?.trim()
+        ?? providerHeader?.textContent?.replace(/\\d+ models?.*$/, "").trim()
+        ?? "";
+      return !candidate.disabled
+        && (id === ${JSON.stringify(name)} || (candidate.textContent ?? "").includes(${JSON.stringify(name)}))
+        && (expectedProvider === undefined || providerName === expectedProvider);
     });
     if (!button) return null;
     const id = button.querySelector("span.font-mono")?.textContent?.trim() ?? "";

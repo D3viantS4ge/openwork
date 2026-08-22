@@ -4,10 +4,10 @@ import { OrganizationTable } from "@openwork-ee/den-db/schema"
 import { z } from "zod"
 import { organizationCloudEnabled } from "../capability-sources/cloud-rollout.js"
 import { db } from "../db.js"
+import { getDesktopReleaseMetadata } from "../desktop-releases.js"
 import { parseOrganizationPlan, type PlanTier } from "../entitlements.js"
 import { env } from "../env.js"
 import { normalizeOrganizationMetadata } from "../organization-limits.js"
-import { denApiAppVersion } from "../version.js"
 
 /**
  * den-admin MCP toolset: read-only Den analytics for allowlisted platform
@@ -421,12 +421,13 @@ export function applyDefaultRowLimit(sqlText: string, limit?: number): { sql: st
   return { sql: sqlText, cap }
 }
 
-export function buildAdminMcpVersionInfo() {
+export async function buildAdminMcpVersionInfo() {
+  const { minAppVersion, latestAppVersion } = await getDesktopReleaseMetadata()
   return {
     name: "den-admin",
     transport: "streamable-http",
     toolsetVersion: DEN_ADMIN_MCP_VERSION,
-    denApi: denApiAppVersion,
+    denApi: { minAppVersion, latestAppVersion },
     node: process.version,
     serverStartedAt: SERVER_STARTED_AT,
   }

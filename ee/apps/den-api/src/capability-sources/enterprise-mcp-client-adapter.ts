@@ -304,11 +304,13 @@ export async function listExternalMcpTools(
   member?: ExternalMcpMemberContext,
   diagnosticReferenceId?: string,
   lifecycleDeadline?: ExternalMcpLifecycleDeadline,
+  operationTimeoutMs?: number,
 ) {
   return runEnterpriseMcpOperation({
     connection,
     diagnosticReferenceId,
     lifecycleDeadline,
+    operationTimeoutMs,
     operation: (client) => client.listTools({
       connection: toEnterpriseConnection(connection, member),
       redirectUri,

@@ -3,7 +3,6 @@ import { useMemo, type ReactNode } from "react";
 import { Cpu } from "lucide-react";
 
 import { t } from "../../../../i18n";
-import { Button } from "@/components/ui/button";
 
 import type { ExtensionInventoryFilter, ExtensionInventoryState } from "../extension-taxonomy";
 import { PluginsView, type PluginsExtensionsStore } from "./plugins-view";
@@ -14,6 +13,8 @@ export type ExtensionsSection =
   | "connections"
   | "mcps"
   | "skills"
+  | "commands"
+  | "agents"
   | "plugins"
   | "needs-sign-in"
   | "needs-admin-setup"
@@ -30,6 +31,10 @@ function filterForSection(section: ExtensionsSection | undefined): ExtensionInve
       return "mcp";
     case "skills":
       return "skill";
+    case "commands":
+      return "command";
+    case "agents":
+      return "agent";
     case "plugins":
       return "plugin";
     default:
@@ -47,6 +52,10 @@ function sectionForFilter(filter: ExtensionInventoryFilter): ExtensionsSection {
       return "mcps";
     case "skill":
       return "skills";
+    case "command":
+      return "commands";
+    case "agent":
+      return "agents";
     case "plugin":
       return "plugins";
     case "all":
@@ -103,6 +112,7 @@ export type ExtensionsViewProps = {
     onStateChange: (state: ExtensionInventoryState, filter: ExtensionInventoryFilter) => void;
     detailId: string | null;
     onDetailIdChange?: (id: string | null) => void;
+    onRefresh: () => void;
   }) => ReactNode;
   onRefresh: () => void;
   initialSection?: ExtensionsSection;
@@ -134,32 +144,20 @@ export function ExtensionsView(props: ExtensionsViewProps) {
     onStateChange: setStateRoute,
     detailId,
     onDetailIdChange: props.onDetailIdChange,
+    onRefresh: props.onRefresh,
   };
-
-  if (detailId) {
-    return <>{props.mcpView(mcpRouting)}</>;
-  }
 
   return (
     <section className="space-y-6 max-w-3xl w-full animate-in fade-in duration-300">
-      <div className="flex items-center justify-between">
-        {props.hideDescription === true ? <div /> : (
-          <div className="flex min-w-0 flex-col gap-1">
-            <p className="text-sm text-dls-secondary">
-              {t("extensions.inventory_description")}
-            </p>
-          </div>
-        )}
-        <Button variant="outline" onClick={props.onRefresh}>
-          {t("common.refresh")}
-        </Button>
-      </div>
+      {detailId || props.hideDescription === true ? null : (
+        <p className="text-sm text-dls-secondary">
+          {t("extensions.inventory_description")}
+        </p>
+      )}
 
-      {/* Runtime extensions and organization-assigned capabilities share one inventory. */}
       {props.mcpView(mcpRouting)}
 
-      {/* OpenCode plugins -- advanced, collapsed */}
-      {pluginCount > 0 && initialState === "all" ? (
+      {!detailId && pluginCount > 0 && initialState === "all" ? (
         <details className="group" open={props.initialSection === "plugins"}>
           <summary className="flex cursor-pointer items-center gap-2 rounded-lg px-1 py-2 text-sm font-medium text-dls-secondary transition-colors hover:text-dls-text">
             <Cpu size={14} />

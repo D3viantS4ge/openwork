@@ -3,12 +3,15 @@ import test from "node:test";
 
 import {
   deleteSandboxes,
-  parseConnectorSpecEnv,
+  desktopSandboxName,
+  parseConnectorE2eTestEnv,
   provisionDesktopSandbox,
-  renderConnectorSpecEnv,
+  renderConnectorE2eTestEnv,
+  serverSandboxName,
+  startFaultProxyOnSandbox,
   startMockOnSandbox,
 } from "../src/provision.ts";
-import type { ConnectorSpecEnv } from "../src/provision.ts";
+import type { ConnectorE2eTestEnv } from "../src/provision.ts";
 import type { DaytonaExec } from "../src/daytona.ts";
 
 interface ExecCall {
@@ -51,8 +54,8 @@ function assertRemoteCommandsAreSingleArgument(calls: ExecCall[]): void {
   }
 }
 
-test("renderConnectorSpecEnv and parseConnectorSpecEnv round-trip the connector spec contract", () => {
-  const facts: ConnectorSpecEnv = {
+test("connector E2E test env rendering and parsing round-trip the provision contract", () => {
+  const facts: ConnectorE2eTestEnv = {
     denApiUrl: "https://den-api.example.test",
     denWebUrl: "https://den-web.example.test",
     sandboxA: "desktop-a",
@@ -61,14 +64,30 @@ test("renderConnectorSpecEnv and parseConnectorSpecEnv round-trip the connector 
     ref: "feat/eval-connector-two-members",
     created: ["den", "desktop-a"],
   };
-  const content = renderConnectorSpecEnv(facts);
+  const content = renderConnectorE2eTestEnv(facts);
 
-  assert.deepEqual(parseConnectorSpecEnv(content), facts);
+  assert.deepEqual(parseConnectorE2eTestEnv(content), facts);
   assert.match(content, /^# provisioned for org-connector-two-members — generated .*; ref=feat\/eval-connector-two-members$/m);
   assert.match(content, /^# provision-created=den,desktop-a$/m);
   assert.match(content, /OPENWORK_EVAL_MODEL=big-pickle/);
   const missingApi = content.split("\n").filter((line) => !line.startsWith("OPENWORK_EVAL_DEN_API_URL=")).join("\n");
-  assert.throws(() => parseConnectorSpecEnv(missingApi), /OPENWORK_EVAL_DEN_API_URL/);
+  assert.throws(() => parseConnectorE2eTestEnv(missingApi), /OPENWORK_EVAL_DEN_API_URL/);
+});
+
+test("server sandbox names are unique within the same CI process and second", () => {
+  const first = serverSandboxName();
+  const second = serverSandboxName();
+
+  assert.match(first, new RegExp(`^openwork-server-\\d{8}-\\d{6}-${process.pid}-[0-9a-f]{8}$`));
+  assert.notEqual(first, second);
+});
+
+test("desktop sandbox names stay unique when parallel workers use the same surface name", () => {
+  const first = desktopSandboxName("testkit admin");
+  const second = desktopSandboxName("testkit admin");
+
+  assert.match(first, new RegExp(`^openwork-connector-testkit-admin-\\d{8}-\\d{6}-${process.pid}-[0-9a-f]{8}$`));
+  assert.notEqual(first, second);
 });
 
 test("provisionDesktopSandbox reuses a sandbox and keeps every remote command in one argument", async () => {
@@ -101,7 +120,7 @@ test("provisionDesktopSandbox resolves the snapshot id and creates with connecto
 
 test("rendered values are shell-quoted, because the env file is meant to be sourced", () => {
   const nasty = "$(touch /tmp/pwned); echo it's-here";
-  const content = renderConnectorSpecEnv({
+  const content = renderConnectorE2eTestEnv({
     denApiUrl: "https://a",
     denWebUrl: "https://w",
     sandboxA: nasty,
@@ -112,7 +131,7 @@ test("rendered values are shell-quoted, because the env file is meant to be sour
   });
 
   assert(content.includes(`OPENWORK_EVAL_DAYTONA_SANDBOX_A='$(touch /tmp/pwned); echo it'"'"'s-here'`));
-  assert.equal(parseConnectorSpecEnv(content).sandboxA, nasty);
+  assert.equal(parseConnectorE2eTestEnv(content).sandboxA, nasty);
 });
 
 test("an unsafe ref is refused before it can reach a remote shell or a sourced file", async () => {
@@ -123,7 +142,7 @@ test("an unsafe ref is refused before it can reach a remote shell or a sourced f
       provisionDesktopSandbox({ ref, name: "a", reuse: "existing-a", exec, log: () => undefined }),
       /Unsafe git ref/,
     );
-    assert.throws(() => renderConnectorSpecEnv({
+    assert.throws(() => renderConnectorE2eTestEnv({
       denApiUrl: "https://a",
       denWebUrl: "https://w",
       sandboxA: "a",
@@ -173,6 +192,77 @@ test("startMockOnSandbox rejects a health response with the wrong issuer", async
     /https:\/\/wrong-issuer\.example\.test.*https:\/\/mock\.example\.test/,
   );
   assertRemoteCommandsAreSingleArgument(calls);
+});
+
+test("Daytona preview URL lookup retries a transient control-plane failure", async () => {
+  let previewAttempts = 0;
+  const exec: DaytonaExec = async (args) => {
+    if (args[0] === "preview-url") {
+      previewAttempts += 1;
+      return previewAttempts === 1
+        ? { stdout: "", stderr: "unexpected EOF", code: 1 }
+        : { stdout: "Preview URL: https://mock.example.test\n", stderr: "", code: 0 };
+    }
+    return { stdout: "", stderr: "", code: 0 };
+  };
+  const fetchImpl: typeof fetch = async () => new Response(
+    JSON.stringify({ ok: true, issuer: "https://mock.example.test" }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+
+  await startMockOnSandbox({ sandbox: "den-1", exec, fetchImpl, log: () => undefined });
+
+  assert.equal(previewAttempts, 2);
+});
+
+test("startFaultProxyOnSandbox uploads and detaches the proxy after resolving its preview URL", async () => {
+  const calls: ExecCall[] = [];
+  const exec: DaytonaExec = async (args, opts) => {
+    calls.push({ args: [...args], opts });
+    if (args[0] === "preview-url") {
+      return { stdout: "Preview URL: https://fault.example.test\n", stderr: "", code: 0 };
+    }
+    return { stdout: "", stderr: "", code: 0 };
+  };
+  const fetchImpl: typeof fetch = async () => new Response(
+    JSON.stringify({ ok: true, issuer: "https://fault.example.test" }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+
+  const proxy = await startFaultProxyOnSandbox({ sandbox: "den-1", exec, fetchImpl, log: () => undefined });
+
+  assert.equal(proxy.url, "https://fault.example.test");
+  assert.match(proxy.token, /^[0-9a-f]{32}$/);
+  assert.deepEqual(calls[0]?.args, ["preview-url", "den-1", "-p", "3985", "--expires", "86400"]);
+  const scripts = calls.filter((call) => call.args[0] === "exec").map((call) => call.args[3]?.slice(10, -1) ?? "");
+  assert.match(scripts[0] ?? "", /pkill -f openwork-fault-proxy/);
+  assert.match(scripts[1] ?? "", /^printf %s [A-Za-z0-9+/=]+ \| base64 -d > \/tmp\/openwork-fault-proxy\.mjs$/);
+  assert(!scripts[1]?.includes("'"));
+  assert.match(scripts[2] ?? "", /start_new_session=True/);
+  assert.match(scripts[2] ?? "", /UPSTREAM=http:\/\/127\.0\.0\.1:3005/);
+  assert.match(scripts[2] ?? "", /node \/tmp\/openwork-fault-proxy\.mjs/);
+  assertRemoteCommandsAreSingleArgument(calls);
+
+  await proxy.stop();
+  assert.match(calls.at(-1)?.args[3] ?? "", /pkill -f openwork-fault-proxy\.mjs/);
+});
+
+test("startFaultProxyOnSandbox rejects a health response with the wrong issuer", async () => {
+  const exec: DaytonaExec = async (args) => {
+    if (args[0] === "preview-url") {
+      return { stdout: "Preview URL: https://fault.example.test\n", stderr: "", code: 0 };
+    }
+    return { stdout: "", stderr: "", code: 0 };
+  };
+  const fetchImpl: typeof fetch = async () => new Response(
+    JSON.stringify({ ok: true, issuer: "https://wrong-issuer.example.test" }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+
+  await assert.rejects(
+    startFaultProxyOnSandbox({ sandbox: "den-1", exec, fetchImpl, log: () => undefined }),
+    /https:\/\/wrong-issuer\.example\.test.*https:\/\/fault\.example\.test/,
+  );
 });
 
 test("deleteSandboxes answers the confirmation prompt and tolerates a missing sandbox", async () => {

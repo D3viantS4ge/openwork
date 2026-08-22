@@ -16,6 +16,10 @@ import {
   getSsoProviderForConnection,
   registerOrganizationSsoConnection,
 } from "../../sso.js"
+import {
+  getSsoDomainVerificationDnsName,
+  getSsoDomainVerificationHost,
+} from "../../sso-domain-verification.js"
 import { orgMemberRoute } from "../../middleware/index.js"
 import type { OrgRouteVariables } from "./shared.js"
 import { ensureSsoManager, ensureSsoReader, orgAccessFailureStatus } from "./shared.js"
@@ -95,6 +99,8 @@ const ssoConnectionSchema = z.object({
   acsUrl: z.string().url().nullable(),
   metadataUrl: z.string().url().nullable(),
   domainVerified: z.boolean(),
+  domainVerificationHost: z.string(),
+  domainVerificationDnsName: z.string(),
   oidc: oidcConnectionConfigSchema.nullable(),
   saml: samlConnectionConfigSchema.nullable(),
   lastTestedAt: z.string().datetime().nullable(),
@@ -175,13 +181,15 @@ function serializeConnection(input: {
     kind: connection.kind === "saml" ? "saml" : "oidc",
     issuer: connection.issuer,
     domain: connection.domain,
-    status: connection.status,
+    status: domainVerified && connection.status === "enabled" ? "enabled" : "pending_verification",
     signInPath: connection.signInPath,
     signInUrl,
     redirectUrl,
     acsUrl,
     metadataUrl,
     domainVerified,
+    domainVerificationHost: getSsoDomainVerificationHost(connection.providerId),
+    domainVerificationDnsName: getSsoDomainVerificationDnsName(connection.providerId, connection.domain),
     oidc,
     saml,
     lastTestedAt: connection.lastTestedAt ? connection.lastTestedAt.toISOString() : null,

@@ -22,6 +22,8 @@ import {
 import { markDesktopSignInInitiated } from "@/app/lib/den-sign-in-intent";
 import { clearDesktopBootstrapConfig } from "@/app/lib/desktop";
 import { exchangeHandoffAndSignIn } from "@/app/lib/den-handoff";
+import { parseManualAuthInput } from "@/app/lib/manual-auth-input";
+import { normalizeOrganizationServerInput } from "@/app/lib/organization-server-input";
 import {
   denSessionUpdatedEvent,
   type DenSessionUpdatedDetail,
@@ -66,33 +68,6 @@ async function runBeforeSignedOut(callback: UseDenSessionProps["onBeforeSignedOu
   } finally {
     if (timeout) clearTimeout(timeout);
   }
-}
-
-function parseManualAuthInput(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  try {
-    const url = new URL(trimmed);
-    const protocol = url.protocol.toLowerCase();
-    const routeHost = url.hostname.toLowerCase();
-    const routePath = url.pathname.replace(/^\/+/, "").toLowerCase();
-    const routeSegments = routePath.split("/").filter(Boolean);
-    const routeTail = routeSegments[routeSegments.length - 1] ?? "";
-    if (
-      (protocol === "openwork:" || protocol === "openwork-dev:") &&
-      (routeHost === "den-auth" || routePath === "den-auth" || routeTail === "den-auth")
-    ) {
-      const grant = url.searchParams.get("grant")?.trim() ?? "";
-      const nextBaseUrl =
-        normalizeDenBaseUrl(url.searchParams.get("denBaseUrl")?.trim() ?? "") ?? undefined;
-      return grant ? { grant, baseUrl: nextBaseUrl } : null;
-    }
-  } catch {
-    // Treat non-URL input as a raw handoff grant.
-  }
-
-  return trimmed.length >= 12 ? { grant: trimmed } : null;
 }
 
 export function useDenSession({
@@ -259,7 +234,8 @@ export function useDenSession({
   );
 
   const applyBaseUrl = React.useCallback(async () => {
-    const normalized = normalizeDenBaseUrl(baseUrlDraft);
+    const serverOrigin = normalizeOrganizationServerInput(baseUrlDraft);
+    const normalized = serverOrigin ? normalizeDenBaseUrl(serverOrigin) : null;
     if (!normalized) {
       setBaseUrlError(t("den.error_base_url"));
       return;

@@ -47,7 +47,7 @@ guidance, not a different OpenWork packaging format.
 ## Prerequisites
 
 - Google Cloud CLI authenticated to the target project.
-- `kubectl` and `helm`.
+- `kubectl`, `helm`, and `gke-gcloud-auth-plugin`.
 - Permission to create GKE, Compute Engine networking and global addresses,
   Cloud SQL, Service Networking, DNS, IAM, and Kubernetes resources.
 - Enabled APIs: Kubernetes Engine API, Compute Engine API, Cloud SQL Admin API,
@@ -88,6 +88,9 @@ gcloud container clusters create-auto "$GKE_CLUSTER" \
   --location "$GCP_REGION" \
   --project "$GCP_PROJECT"
 
+# If the cluster command reports that the auth plugin is missing:
+gcloud components install gke-gcloud-auth-plugin --quiet
+
 gcloud container clusters get-credentials "$GKE_CLUSTER" \
   --location "$GCP_REGION" \
   --project "$GCP_PROJECT"
@@ -97,6 +100,11 @@ kubectl get nodes
 
 GKE enables HTTP load balancing by default. Do not disable it; GKE Ingress needs
 that add-on.
+
+Some standalone Google Cloud SDK installations do not include
+`gke-gcloud-auth-plugin`. If `kubectl` cannot authenticate after cluster
+creation, install the component as shown above, rerun `get-credentials`, and
+verify with `kubectl get nodes` before debugging Kubernetes resources.
 
 ## 2. Create Cloud SQL for MySQL
 
@@ -236,6 +244,8 @@ spec:
     type: HTTP
     requestPath: /ready
     port: 8788
+    checkIntervalSec: 15
+    timeoutSec: 5
 ---
 apiVersion: cloud.google.com/v1
 kind: BackendConfig
@@ -246,6 +256,8 @@ spec:
     type: HTTP
     requestPath: /api/ready
     port: 3005
+    checkIntervalSec: 15
+    timeoutSec: 5
 YAML
 ```
 
@@ -473,12 +485,24 @@ config:
     requireEmailVerification: "false"
   public:
     bootstrapAdminEmails: "admin@acme.com"
+secret:
+  values:
+    initialAdminBootstrapCode: "REPLACE_BOOTSTRAP_CODE"
 ```
 
-Open `https://openwork.example.com` and sign up with the owner email. OpenWork
-creates the singleton organization and makes that user the owner. Later users
-join the same organization. If `ownerEmails` is blank, the first user to reach
-the deployment can claim ownership, which is not recommended for production.
+For releases that include initial-administrator bootstrap, inject the
+release-documented one-time setup secret through the Kubernetes Secret referenced
+by `secret.existingSecret`. Do not store the code in the values file or a
+ConfigMap. Then open `https://openwork.example.com/setup`, enter the configured
+owner email and one-time operator code, and create the first account. OpenWork
+creates the singleton organization, grants owner and configured platform-admin
+access, and signs the administrator in. Public signup remains disabled. After
+the first user exists, the setup code cannot bootstrap another account.
+
+`ownerEmails` and `bootstrapAdminEmails` authorize roles; neither setting creates
+an account or password. There is no default administrator password. Chart
+versions without `/setup` do not support private initial-administrator bootstrap
+and must be upgraded before following this step.
 
 ## 10. Configure SSO with a test IdP
 
@@ -517,6 +541,7 @@ single organization. Password sign-in for that organization is rejected.
 |---|---|---|
 | Ingress does not reconcile | HTTP load balancing add-on is disabled or Ingress annotation is wrong | Keep HTTP load balancing enabled and use `kubernetes.io/ingress.class: gce` |
 | Backends are unhealthy | GKE load balancer health checks do not match OpenWork readiness endpoints | Apply the `BackendConfig` resources and keep the service annotations from the starter values |
+| Ingress events report `TimeoutSec should be less than checkIntervalSec` | The backend health-check timeout is greater than or equal to its effective interval | Set `checkIntervalSec: 15` and `timeoutSec: 5` on both `BackendConfig` resources |
 | Managed certificate is not `Active` | DNS does not point at the load balancer or provisioning is still running | Point both hosts at the reserved global IP and wait; check `kubectl describe managedcertificate` |
 | Migration Job fails to connect to MySQL | Private services access, VPC, credentials, IP, or TLS mode are wrong | Test from `mysql-client`, confirm the private IP, and confirm GKE and Cloud SQL share VPC reachability |
 | Migration Job logs show `self-signed certificate in certificate chain` | Strict certificate verification is being used without the cloud MySQL CA bundle | Use `?sslaccept=accept` for the smoke path or mount/configure the CA bundle before strict verification |

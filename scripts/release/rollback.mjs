@@ -221,16 +221,15 @@ function printGuidance(badTag, targetTag) {
   const nextVersion = nextPatch(badTag);
 
   heading("Next steps — reissue from last-good code (not automated)");
-  log("Updaters never downgrade. Reissue the last-good code at a version higher than the bad release:");
+  log("Updaters never downgrade. Reissue the last-good code at a version higher than the bad release.");
+  log("Versions live in tags only — tag the last-good commit with the higher version (no commits needed):");
   console.log("");
-  console.log(`    git worktree add <tmp> ${targetTag}`);
-  console.log("    cd <tmp>");
-  console.log(`    pnpm release:prepare   # bump to v${nextVersion} or higher`);
-  console.log("    pnpm release:ship");
+  console.log(`    git tag v${nextVersion} ${targetTag}   # or any version higher than ${badTag}`);
+  console.log(`    git push origin v${nextVersion}        # admins only; triggers Release App`);
   console.log("");
   log(`After npm publish: npm deprecate openwork-server@${badVersion} "rolled back — use ${nextVersion}"`);
-  log("The org install door pin (ee/apps/den-api generated PUBLISHED_DESKTOP_VERSIONS) moves only with the reissue.");
-  log("Review and merge the release backfill PR to dev per the normal policy.");
+  log("The org install door follows published GitHub releases at runtime: demoting the bad release to");
+  log("prerelease removes it from den-api's published list; the reissue becomes latest once published.");
 }
 
 export function runRollback(args, dependencies = {}) {

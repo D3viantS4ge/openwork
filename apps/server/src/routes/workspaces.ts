@@ -26,7 +26,11 @@ interface RegisterWorkspaceRoutesOptions {
   ensureWritable: (config: ServerConfig) => void;
   resolveWorkspace: (config: ServerConfig, id: string) => Promise<WorkspaceInfo>;
   serializeWorkspace: (workspace: ServerConfig["workspaces"][number]) => unknown;
-  reloadOpencodeEngine: (config: ServerConfig, workspace: WorkspaceInfo) => Promise<void>;
+  reloadOpencodeEngine: (
+    config: ServerConfig,
+    workspace: WorkspaceInfo,
+    options?: { awaitPostRefreshSync?: boolean },
+  ) => Promise<void>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -475,7 +479,7 @@ export function registerWorkspaceRoutes(options: RegisterWorkspaceRoutesOptions)
     });
     // Re-activating the already-active workspace must not dispose its engine instance; switch reloads stay (#870).
     if (!wasActive && workspace.workspaceType === "local" && resolveWorkspaceOpencodeConnection(config, workspace).baseUrl?.trim()) {
-      await reloadOpencodeEngine(config, workspace);
+      await reloadOpencodeEngine(config, workspace, { awaitPostRefreshSync: false });
     }
     return jsonResponse({ activeId: workspace.id, workspace: serializeWorkspace(workspace), persisted });
   });

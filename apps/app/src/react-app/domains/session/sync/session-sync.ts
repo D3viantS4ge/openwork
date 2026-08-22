@@ -1034,7 +1034,17 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
     }
     useSessionActivityStore.getState().setRunStatus(workspaceId, props.sessionID, idleStatus);
     const tracked = isTrackedSession(entry, props.sessionID);
-    if (tracked) queryClient.setQueryData(statusKey(workspaceId, props.sessionID), idleStatus);
+    if (tracked) {
+      queryClient.setQueryData(statusKey(workspaceId, props.sessionID), idleStatus);
+      // A fast tool can complete and persist before its final part.updated SSE
+      // reaches the renderer. Reconcile successful turns from the durable
+      // snapshot just as failed turns do, so standard MCP App results mount
+      // without requiring an artificial provider delay or a page reload.
+      void queryClient.invalidateQueries({
+        queryKey: snapshotKey(workspaceId, props.sessionID),
+        exact: true,
+      });
+    }
     for (const listener of entry.sessionStatusListeners) listener({ sessionId: props.sessionID, status: idleStatus });
     if (input && tracked) releaseRetainedSessionSoon(input, entry, props.sessionID);
   }

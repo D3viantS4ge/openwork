@@ -89,8 +89,8 @@ describe("normalizeRows", () => {
 })
 
 describe("buildAdminMcpVersionInfo", () => {
-  test("reports toolset and den-api versions for deploy verification", () => {
-    const info = adminTools.buildAdminMcpVersionInfo()
+  test("reports toolset and den-api versions for deploy verification", async () => {
+    const info = await adminTools.buildAdminMcpVersionInfo()
     expect(info.name).toBe("den-admin")
     expect(info.transport).toBe("streamable-http")
     expect(info.toolsetVersion).toBe(adminTools.DEN_ADMIN_MCP_VERSION)

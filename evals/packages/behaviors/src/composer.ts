@@ -78,7 +78,11 @@ async function waitForComposerReady(app: Surface, timeoutMs: number): Promise<Co
     try {
       lastState = await readComposerState(app);
       lastError = null;
-      if (lastState.composerEditable && lastState.runTaskVisible) return lastState;
+      if (lastState.composerEditable && (lastState.runTaskVisible
+        || await evalIn(app, `Boolean(window.__openworkControl?.listActions?.()
+          .find((entry) => entry.id === "composer.set_text" && entry.disabled === false))`).catch(() => false))) {
+        return lastState;
+      }
     } catch (error) {
       lastError = error;
     }
@@ -167,20 +171,25 @@ export async function writeComposerText(
 }
 
 export async function sendComposerMessage(app: Surface, text: string): Promise<ComposerState> {
-  const before = await readComposerState(app);
+  const before = await waitForComposerReady(app, 60_000);
   await writeComposerText(app, text);
   await waitFor(app, `Boolean([...document.querySelectorAll("button")]
-    .find((button) => (button.textContent ?? "").trim() === "Run task" && !button.disabled))`, {
+    .find((button) => (button.textContent ?? "").trim() === "Run task" && !button.disabled))
+    || Boolean(window.__openworkControl?.listActions?.()
+      .find((entry) => entry.id === "composer.send" && entry.disabled === false))`, {
     timeoutMs: 30_000,
-    label: "enabled Run task button",
+    label: "enabled composer send control",
   });
   const clicked = await evalIn(app, `(() => {
     const button = [...document.querySelectorAll("button")]
       .find((entry) => (entry.textContent ?? "").trim() === "Run task" && !entry.disabled);
-    button?.click();
-    return Boolean(button);
+    if (button) {
+      button.click();
+      return true;
+    }
+    return false;
   })()`);
-  if (clicked !== true) throw new Error("Could not click the enabled Run task button.");
+  if (clicked !== true) await control(app, "composer.send", undefined, { timeoutMs: 120_000 });
   await waitFor(app, `document.querySelectorAll('[data-message-role="user"]').length > ${before.userMessageCount}`, {
     timeoutMs: 60_000,
     label: "sent user message",

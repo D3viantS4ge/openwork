@@ -14,12 +14,6 @@ importers:
       '@openwork/cdp':
         specifier: workspace:*
         version: link:packages/cdp
-      '@openwork/evidence':
-        specifier: workspace:*
-        version: link:packages/evidence
-      '@openwork/fraimz':
-        specifier: workspace:*
-        version: link:packages/fraimz
       '@openwork/hosts':
         specifier: workspace:*
         version: link:packages/hosts
@@ -29,6 +23,12 @@ importers:
       '@openwork/matchers':
         specifier: workspace:*
         version: link:packages/matchers
+      '@openwork/test-artifacts':
+        specifier: workspace:*
+        version: link:packages/test-artifacts
+      '@openwork/test-evidence':
+        specifier: workspace:*
+        version: link:packages/test-evidence
       '@openwork/testkit':
         specifier: workspace:*
         version: link:packages/testkit
@@ -54,17 +54,6 @@ importers:
 
   packages/cdp: {}
 
-  packages/evidence: {}
-
-  packages/fraimz:
-    dependencies:
-      '@openwork/cdp':
-        specifier: workspace:*
-        version: link:../cdp
-      '@openwork/timeline':
-        specifier: workspace:*
-        version: link:../timeline
-
   packages/hosts:
     dependencies:
       '@openwork/cdp':
@@ -78,6 +67,17 @@ importers:
 
   packages/matchers: {}
 
+  packages/test-artifacts: {}
+
+  packages/test-evidence:
+    dependencies:
+      '@openwork/cdp':
+        specifier: workspace:*
+        version: link:../cdp
+      '@openwork/timeline':
+        specifier: workspace:*
+        version: link:../timeline
+
   packages/testkit:
     dependencies:
       '@openwork/behaviors':
@@ -86,15 +86,15 @@ importers:
       '@openwork/cdp':
         specifier: workspace:*
         version: link:../cdp
-      '@openwork/fraimz':
-        specifier: workspace:*
-        version: link:../fraimz
       '@openwork/hosts':
         specifier: workspace:*
         version: link:../hosts
       '@openwork/labs':
         specifier: workspace:*
         version: link:../labs
+      '@openwork/test-evidence':
+        specifier: workspace:*
+        version: link:../test-evidence
       mysql2:
         specifier: ^3.11.3
         version: 3.23.2(@types/node@26.1.2)
@@ -549,8 +549,8 @@ packages:
     resolution: {integrity: sha512-Tz09sEL2EEuv5fFowm419c1+a/jSMiBjI9gHxVLrVdbUkkNUUfjsVYs9pVZu5oCon/kmRh9TfLEObFtkVxmY0w==}
     engines: {node: '>=8.0.0'}
 
-  nanoid@3.3.16:
-    resolution: {integrity: sha512-bzlKTyNJ7+LdGIIwy8ijFpIqEQIvafahV7eYykJ8Cvh42EdJeODoJ6gUJXpQJvej1BddH8OqTXZNE/KfbWAu8Q==}
+  nanoid@3.3.18:
+    resolution: {integrity: sha512-DTg4MJbGMWkfi6VZFdNt2/caMbQy4Ou+Op/hJQvGEWcnVfoA1QA+xzRKAzw9jD6+GVOOeYr/mIcuDSdug6F6+w==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
 
@@ -1023,7 +1023,7 @@ snapshots:
     dependencies:
       lru.min: 1.1.4
 
-  nanoid@3.3.16: {}
+  nanoid@3.3.18: {}
 
   pathe@2.0.3: {}
 
@@ -1035,7 +1035,7 @@ snapshots:
 
   postcss@8.5.23:
     dependencies:
-      nanoid: 3.3.16
+      nanoid: 3.3.18
       picocolors: 1.1.1
       source-map-js: 1.2.1
 

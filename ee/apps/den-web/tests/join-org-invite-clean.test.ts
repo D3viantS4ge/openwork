@@ -27,6 +27,10 @@ const installScreenPath = fileURLToPath(
 const brandIdentityPath = fileURLToPath(
   new URL("../app/(den)/_components/organization-brand-identity.tsx", import.meta.url),
 );
+const globalsPath = fileURLToPath(new URL("../app/globals.css", import.meta.url));
+const denFlowProviderPath = fileURLToPath(
+  new URL("../app/(den)/_providers/den-flow-provider.tsx", import.meta.url),
+);
 
 function readJoinOrgScreenSource() {
   return readFileSync(joinOrgScreenPath, "utf8");
@@ -41,32 +45,34 @@ function readOnboardingShellSource() {
 }
 
 describe("join organization invite clean layout contract", () => {
-  test("uses one light Dithering layer and no mesh gradient", () => {
-    const source = readOnboardingShellSource();
+  test("uses the organization picker Dithering layer", () => {
+    const source = readFileSync(onboardingShellPath, "utf8");
     const ditheringImports = source.match(/import \{ Dithering \} from "@paper-design\/shaders-react"/g) ?? [];
     const ditheringUses = source.match(/<Dithering\b/g) ?? [];
 
     expect(ditheringImports).toHaveLength(1);
     expect(ditheringUses).toHaveLength(1);
     expect(source).not.toContain("PaperMeshGradient");
-    expect(source).toContain("colorBack=\"#F8FBFF\"");
-    expect(source).toContain("colorFront=\"#8FB7E8\"");
-    expect(source).toContain('style={{ backgroundColor: "#F8FBFF", width: "100%", height: "100%" }}');
+    expect(source).toContain('type="2x2"');
+    expect(source).toContain("size={20.3}");
+    expect(source).toContain("scale={1.19}");
+    expect(source).toContain("colorBack=\"#00000000\"");
+    expect(source).toContain("colorFront=\"#000000\"");
   });
 
   test("keeps the decorative background separate, restrained, and reduced-motion aware", () => {
-    const source = readOnboardingShellSource();
+    const source = readFileSync(onboardingShellPath, "utf8");
 
-    expect(source).toContain("min-h-dvh overflow-y-auto bg-[#f8fbff]");
-    expect(source).toContain("pointer-events-none fixed inset-0 z-0 overflow-hidden bg-[#f8fbff] opacity-[0.09]");
+    expect(source).toContain("min-h-dvh overflow-y-auto bg-[var(--dls-surface)]");
+    expect(source).toContain("pointer-events-none fixed inset-0 z-0 overflow-hidden opacity-[0.1]");
     expect(source).toContain('aria-hidden="true"');
-    expect(source).toContain('backgroundTestId = "join-org-background"');
-    expect(source).toContain('foregroundTestId = "join-org-foreground"');
+    expect(source).toContain('data-testid="join-org-background"');
+    expect(source).toContain('data-testid="join-org-foreground"');
     expect(source).toContain("relative z-10");
     expect(source).toContain("useSyncExternalStore");
     expect(source).toContain('const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";');
     expect(source).toContain("() => true");
-    expect(source).toContain("const shaderSpeed = reducedMotion ? 0 : 0.012;");
+    expect(source).toContain("const shaderSpeed = reducedMotion ? 0 : 0.01;");
     expect(source).toContain("speed={shaderSpeed}");
     expect(source).toContain('data-shader-speed={shaderSpeed}');
   });
@@ -86,12 +92,14 @@ describe("join organization invite clean layout contract", () => {
     expect(denShellSource).toContain("<DitheredOnboardingShell");
     expect(cardUsages.length).toBeGreaterThanOrEqual(8);
     expect(wideShellUsages.length).toBeGreaterThanOrEqual(8);
+    expect(source.match(/background="surface"/g)?.length).toBe(wideShellUsages.length);
     expect(cardSource).toContain("rounded-[1.75rem] border border-slate-200/80 bg-white p-6 sm:p-8 md:p-10");
     expect(cardSource).toContain("/openwork-mark.svg");
     expect(cardSource).toContain("OpenWork Cloud");
     expect(cardSource).toContain("OrganizationBrandIdentity");
     expect(source).toContain("text-[30px] font-semibold leading-[38px] tracking-[-0.03em]");
     expect(source).toContain('data-testid="join-org-invitation-details"');
+    expect(source).toContain('data-testid="join-org-invitation-summary"');
     expect(source).toContain('data-testid="join-org-actions"');
     expect(source).toContain('data-testid="join-org-auth"');
     expect(source).toContain("Organization");
@@ -99,6 +107,14 @@ describe("join organization invite clean layout contract", () => {
     expect(source).toContain("Role");
     expect(source).toContain("Account");
     expect(source).not.toMatch(/\binviter\b/i);
+  });
+
+  test("uses the shared moderate-radius Den button primitive", () => {
+    const source = readFileSync(globalsPath, "utf8");
+    const buttonRule = source.match(/\.den-button-primary,[\s\S]*?\n}/)?.[0] ?? "";
+
+    expect(buttonRule).toContain("border-radius: 0.75rem;");
+    expect(buttonRule).not.toContain("border-radius: 9999px;");
   });
 
   test("uses bare invite auth and a non-destructive Not now dismissal", () => {
@@ -110,8 +126,10 @@ describe("join organization invite clean layout contract", () => {
     expect(source).toMatch(/<AuthPanel[\s\S]*?\bhideLockedEmailSummary\b/);
     expect(source).toMatch(/<AuthPanel[\s\S]*?\bemailFirstFlow\b/);
     expect(source).toMatch(/<AuthPanel[\s\S]*?\bresolveEmailFirstOnPrefill\b/);
-    expect(source).toContain('title: "Create your account."');
-    expect(source).toContain("Choose a name and a password. Your email stays locked to");
+    expect(source).toMatch(/<AuthPanel[\s\S]*?\bhideIntro\b/);
+    expect(source).toContain('submitLabel: "Create account"');
+    expect(source).toContain("You&apos;ve been invited as");
+    expect(source).not.toContain("Your invitation is ready.");
     expect(source).toContain('title: "Sign in to continue."');
     expect(source).not.toContain("title: `Join ${preview.organization.name}.`");
     expect(source).toContain("Not now");
@@ -120,6 +138,17 @@ describe("join organization invite clean layout contract", () => {
     expect(source).toContain('router.replace("/");');
     expect(source).not.toContain("Decline invitation");
     expect(source).not.toContain("Cancel invitation");
+  });
+
+  test("keeps invitation signup enabled in private single-org deployments", () => {
+    const providerSource = readFileSync(denFlowProviderPath, "utf8");
+    const authPanelSource = readAuthPanelSource();
+
+    expect(providerSource).toMatch(/const pendingInvitationId = getPendingOrgInvitationId\(\);[\s\S]*?authMode === "sign-up"[\s\S]*?&& !pendingInvitationId[\s\S]*?\? "sign-in"[\s\S]*?: authMode;/);
+    expect(providerSource).toContain('submitMode === "sign-up" && pendingInvitationId');
+    expect(providerSource).toContain("invite: pendingInvitationId ?? undefined");
+    expect(authPanelSource).toContain('isSingleOrgPrivateSignup && !emailFirstInvite && authMode === "sign-up"');
+    expect(authPanelSource).toMatch(/loginOptionError \?[\s\S]*?: authError \?[\s\S]*?: \([\s\S]*?<p>\{authInfo\}<\/p>/);
   });
 
   test("resolves the invited email auth method before showing invite credentials", () => {
@@ -161,7 +190,8 @@ describe("join organization invite clean layout contract", () => {
     expect(source).toContain('getStringProperty(payload, "error") === "membership_removed"');
     expect(source).toContain("Your access was removed.");
     expect(source).toContain("Ask a workspace admin for a new invite.");
-    expect(source).toContain("router.replace(getOrgDashboardRoute(nextJoinedOrg.slug));");
+    expect(source).toContain("if (desktopAuthRequested)");
+    expect(source).toContain('router.replace("/install");');
     expect(source).toContain("Opening your workspace.");
     expect(source).toContain("You've already joined ${preview.organization.name}.");
     expect(source).toContain("This invite was already accepted. Sign in as ${preview.invitation.email} to open your workspace.");
@@ -252,20 +282,21 @@ describe("join organization invite clean layout contract", () => {
     expect(successSource).not.toContain("capabilities");
     expect(successSource).not.toContain("Open OpenWork");
     expect(successSource).toContain("<OnboardingCard organization={{ name: organizationName, brand }}>");
+    expect(successSource).toContain('background="surface"');
     expect(successSource).toContain("text-[30px] font-semibold leading-[38px] tracking-[-0.03em]");
     expect(successSource).toContain("den-button-primary min-h-12 w-full");
     expect(successSource).toContain("<span>You&apos;re in, welcome to</span>");
     expect(successSource).toContain('className="whitespace-nowrap">&apos;s {brand.appName}</span>');
     expect(installSource).toContain("DownloadPlatformGrid");
-    expect(installSource).toContain("<span>Download OpenWork Enterprise</span>");
+    expect(installSource).toContain("Set up OpenWork Enterprise");
     expect(installSource).toContain("Download OpenWork");
     expect(installSource).not.toContain('data-testid="install-cloud-download-primary"');
     expect(installSource).not.toContain("Other platforms");
     expect(installSource).toContain('config.distribution === "cloud"');
     expect(installSource).not.toContain("never asks for an enterprise activation code");
-    expect(installSource).toContain("<span>for</span>");
+    expect(installSource).toContain("In the app, enter your workspace address:");
     expect(installSource).toContain("AppImage (ARM64)");
-    expect(installSource).toContain('desktopScheme: "openwork"');
+    expect(installSource).toContain('data-testid="install-workspace-address"');
     expect(identitySource).toContain("failedLogoUrl");
     expect(identitySource).toContain("failedIconUrl");
   });

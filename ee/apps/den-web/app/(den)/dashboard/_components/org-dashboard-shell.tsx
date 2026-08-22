@@ -54,7 +54,7 @@ import {
   getPluginsRoute,
   getSsoRoute,
   getScimRoute,
-  getScriptRunsRoute,
+  getWorkflowRunsRoute,
   getWebRoute,
 } from "../../_lib/den-org";
 import { useOrgListWindow } from "../../_lib/use-org-list-window";
@@ -291,7 +291,7 @@ function getDashboardPageTitle(pathname: string, orgSlug: string | null) {
     return "Plugin Directory";
   }
   if (pathname.startsWith(getMarketplacesRoute(orgSlug))) {
-    return "Marketplace";
+    return "Collections";
   }
   if (pathname.startsWith(getIntegrationsRoute(orgSlug))) {
     return "Sources";
@@ -302,7 +302,7 @@ function getDashboardPageTitle(pathname: string, orgSlug: string | null) {
   if (pathname.startsWith(getYourConnectionsRoute(orgSlug))) {
     return "Your Connections";
   }
-  if (pathname.startsWith(getScriptRunsRoute(orgSlug))) {
+  if (pathname.startsWith(getWorkflowRunsRoute(orgSlug))) {
     return "Workflow Runs";
   }
   if (pathname.startsWith(getToolTesterRoute(orgSlug))) {
@@ -406,7 +406,7 @@ export function OrgDashboardShell({ children }: { children: React.ReactNode }) {
     orgSlug: activeOrg?.slug,
   });
   const mcpConnectionsEnabled = orgContext?.capabilities.mcpConnections === true;
-  const codemodeScriptsEnabled = orgContext?.capabilities.codemodeScripts === true;
+  const workflowsEnabled = orgContext?.capabilities.workflows === true;
   // Web access is backed by the existing hosted cloud capability. The org
   // payload only reports `cloud` after the server rollout helper has verified
   // the multi-org deployment gate, so the sidebar stays hidden by default until
@@ -427,7 +427,7 @@ export function OrgDashboardShell({ children }: { children: React.ReactNode }) {
       label: "My Library",
       icon: LibraryBig,
     },
-    ...(codemodeScriptsEnabled && activeOrg
+    ...(workflowsEnabled && activeOrg
       ? [{
           href: getAutomationsRoute(activeOrg.slug),
           label: "My Automations",
@@ -467,7 +467,7 @@ export function OrgDashboardShell({ children }: { children: React.ReactNode }) {
     ? [
         {
           href: getMarketplacesRoute(activeOrg.slug),
-          label: "Marketplace",
+          label: "Collections",
           icon: Puzzle,
         },
         {
@@ -492,12 +492,12 @@ export function OrgDashboardShell({ children }: { children: React.ReactNode }) {
     : [];
   const observabilityItems: DashboardNavItem[] = access.isAdmin && activeOrg
     ? [
-        ...(codemodeScriptsEnabled
+        ...(workflowsEnabled
           ? [{
-              href: getScriptRunsRoute(activeOrg.slug),
+              href: getWorkflowRunsRoute(activeOrg.slug),
               label: "Workflow Runs",
               icon: ScrollText,
-              testId: "nav-script-runs",
+              testId: "nav-workflow-runs",
             }]
           : []),
         { href: getAnalyticsRoute(activeOrg.slug), label: "Analytics", icon: BarChart3 },
@@ -704,8 +704,8 @@ export function OrgDashboardShell({ children }: { children: React.ReactNode }) {
   );
 
   const sidebarContent = (
-    <div className="flex flex-1 flex-col">
-      <div className="border-b border-gray-100 px-4 pb-4 pt-5">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="shrink-0 border-b border-gray-100 px-4 pb-4 pt-5">
         <div className="flex items-center justify-between gap-3">
           <SidebarBrandMark
             metadata={orgContext?.organization.metadata}
@@ -722,7 +722,7 @@ export function OrgDashboardShell({ children }: { children: React.ReactNode }) {
         </div>
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-3 py-5" data-testid="den-org-sidebar">
+      <nav className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-5" data-testid="den-org-sidebar">
         <div className="space-y-5">
           {navSections.map((section) => (
             <div key={section.label} data-sidebar-section={section.label.toLowerCase()}>
@@ -759,17 +759,17 @@ export function OrgDashboardShell({ children }: { children: React.ReactNode }) {
                         href={item.href}
                         data-testid={item.testId}
                         onClick={() => setSidebarOpen(false)}
-                        className={`flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-[13px] tracking-[-0.1px] transition-colors ${
+                        className={`flex min-w-0 items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-[13px] tracking-[-0.1px] transition-colors ${
                           selected
                             ? "bg-gray-100 text-gray-900"
                             : "text-gray-500 hover:bg-gray-50 hover:text-gray-700"
                         }`}
                       >
-                        <span className="flex items-center gap-3">
-                          <item.icon className="h-4 w-4" strokeWidth={1.8} />
-                          {item.label}
+                        <span className="flex min-w-0 items-center gap-3">
+                          <item.icon className="h-4 w-4 shrink-0" strokeWidth={1.8} />
+                          <span className="min-w-0 truncate">{item.label}</span>
                         </span>
-                        <span className="flex items-center gap-1.5">
+                        <span className="flex shrink-0 items-center gap-1.5">
                           {item.badge ? (
                             <span className="rounded-full bg-white px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-gray-500">
                               {item.badge}
@@ -783,21 +783,21 @@ export function OrgDashboardShell({ children }: { children: React.ReactNode }) {
                         </span>
                       </Link>
                       {item.children && groupActive ? (
-                        <div className="ml-[22px] mt-1 space-y-0.5 border-l border-gray-100 pl-3">
+                        <div className="ml-[22px] mt-1 min-w-0 space-y-0.5 border-l border-gray-100 pl-3">
                           {item.children.map((child) => (
                             <Link
                               key={child.label}
                               href={child.href}
                               onClick={() => setSidebarOpen(false)}
-                              className={`flex items-center justify-between gap-3 rounded-lg px-2.5 py-1.5 text-[13px] tracking-[-0.1px] transition-colors ${
+                              className={`flex min-w-0 items-center justify-between gap-3 rounded-lg px-2.5 py-1.5 text-[13px] tracking-[-0.1px] transition-colors ${
                                 childActive(child)
                                   ? "font-medium text-gray-900"
                                   : "text-gray-500 hover:text-gray-700"
                               }`}
                             >
-                              {child.label}
+                              <span className="min-w-0 truncate">{child.label}</span>
                               {child.badge ? (
-                                <span className="rounded-full bg-white px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-gray-500">
+                                <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-gray-500">
                                   {child.badge}
                                 </span>
                               ) : null}
@@ -814,7 +814,7 @@ export function OrgDashboardShell({ children }: { children: React.ReactNode }) {
         </div>
       </nav>
 
-      <div className="mt-auto p-3">
+      <div className="mt-auto shrink-0 p-3" data-testid="den-org-sidebar-footer">
         {orgSwitcher}
 
         {orgBusy ? (
@@ -831,7 +831,7 @@ export function OrgDashboardShell({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-screen flex-col bg-[#fafafa] md:h-screen md:flex-row">
       <WorkspaceFavicon metadata={orgContext?.organization.metadata} />
       {/* Desktop sidebar — always visible at md+ */}
-      <aside className="hidden shrink-0 border-r border-gray-100 bg-white md:flex md:min-h-screen md:w-[260px] md:flex-col">
+      <aside className="hidden min-h-0 shrink-0 overflow-hidden border-r border-gray-100 bg-white md:flex md:h-screen md:w-[260px] md:flex-col">
         {sidebarContent}
       </aside>
 
@@ -839,7 +839,7 @@ export function OrgDashboardShell({ children }: { children: React.ReactNode }) {
       {sidebarOpen ? (
         <div className="fixed inset-0 z-50 md:hidden">
           <div className="absolute inset-0 bg-black/30" onClick={() => setSidebarOpen(false)} aria-hidden />
-          <aside className="relative z-10 flex h-full w-[280px] max-w-[85vw] flex-col overflow-y-auto bg-white shadow-xl">
+          <aside className="relative z-10 flex h-full min-h-0 w-[280px] max-w-[85vw] flex-col overflow-hidden bg-white shadow-xl">
             {sidebarContent}
           </aside>
         </div>

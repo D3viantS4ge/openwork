@@ -60,6 +60,25 @@ describe("publicRequestUrl forwarded host policy", () => {
     }).origin).toBe("https://connect.example.com")
   })
 
+  test("honors a forwarded host covered by a trusted wildcard origin", () => {
+    const preview = new Request("http://den-api.internal:8790/v1/example", {
+      headers: {
+        "x-forwarded-host": "3005-rotated.daytonaproxy01.net",
+        "x-forwarded-proto": "https",
+      },
+    })
+
+    expect(publicRequestUrl(preview, {
+      trustedOrigins: ["https://*.daytonaproxy01.net"],
+    }).origin).toBe("https://3005-rotated.daytonaproxy01.net")
+    expect(publicRequestUrl(preview, {
+      trustedOrigins: ["http://*.daytonaproxy01.net"],
+    }).origin).toBe("https://den-api.internal:8790")
+    expect(publicRequestUrl(preview, {
+      trustedOrigins: ["https://*.proxy01.net"],
+    }).origin).toBe("https://den-api.internal:8790")
+  })
+
   test("ignores an untrusted or malformed forwarded host", () => {
     expect(publicRequestUrl(request, {
       trustedOrigins: ["https://app.example.com"],

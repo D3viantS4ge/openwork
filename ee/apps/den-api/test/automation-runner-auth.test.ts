@@ -64,6 +64,20 @@ describe("Automation runner credentials", () => {
     })).toBe("https://app.openworklabs.com/api/den")
   })
 
+  test("binds a rotated preview hostname covered by a trusted wildcard", () => {
+    const request = new Request("http://127.0.0.1:8788/v1/automation-runners/token", {
+      headers: {
+        "x-forwarded-host": "3005-rotated.daytonaproxy01.net",
+        "x-forwarded-proto": "https",
+        "x-forwarded-prefix": "/api/den",
+      },
+    })
+
+    expect(automationRunnerAudienceFromRequest(request, {
+      trustedOrigins: ["https://*.daytonaproxy01.net"],
+    })).toBe("https://3005-rotated.daytonaproxy01.net/api/den")
+  })
+
   test("trusts the Den Web proxy origin this API is actually served from", async () => {
     const { env } = await import("../src/env.js")
     const denWeb = new URL(env.betterAuthUrl)

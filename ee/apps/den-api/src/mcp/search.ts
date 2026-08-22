@@ -17,6 +17,7 @@ import { getJsonRequestBodySchema, getParameters, hasJsonRequestBody, pathParame
  */
 
 export const SEARCH_CAPABILITIES_TOOL_NAME = "search_capabilities"
+export const EXECUTE_CAPABILITY_TOOL_NAME = "execute_capability"
 export type SearchCapabilityType = "all" | "api" | "admin" | "mcp" | "marketplace" | "skills"
 
 export type CapabilityMatch = {
@@ -41,6 +42,8 @@ export type CapabilityMatch = {
   scriptPath?: string
   /** Callable capability or a source-specific advisory/content kind. */
   kind?: string
+  /** Standard MCP App binding advertised by the matched provider tool. */
+  mcpApp?: { resourceUri: string }
 }
 
 export function compareCapabilityMatches(a: CapabilityMatch, b: CapabilityMatch): number {

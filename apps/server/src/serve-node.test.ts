@@ -1,10 +1,67 @@
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
+import { connect } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { serve, writeWebResponse } from "./serve-node.js";
 
 describe("serve", () => {
+  test("handles a malformed raw Node TRACE request without an unhandled rejection", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (error: unknown) => {
+      unhandled.push(error);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+    let fetchCalls = 0;
+    const server = await serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => {
+        fetchCalls += 1;
+        return Response.json({ ok: true });
+      },
+    });
+
+    try {
+      const response = await new Promise<string>((resolve, reject) => {
+        let received = "";
+        const socket = connect({ host: "127.0.0.1", port: server.port }, () => {
+          socket.write([
+            "TRACE http://example.com/ HTTP/1.1",
+            `Host: 127.0.0.1:${server.port}`,
+            "Connection: close",
+            "",
+            "",
+          ].join("\r\n"));
+        });
+        const timeout = setTimeout(() => {
+          socket.destroy(new Error("Timed out waiting for the TRACE response"));
+        }, 1_000);
+        socket.setEncoding("utf8");
+        socket.on("data", (chunk) => {
+          received += chunk;
+        });
+        socket.once("end", () => {
+          clearTimeout(timeout);
+          resolve(received);
+        });
+        socket.once("error", (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        });
+      });
+
+      await delay(25);
+      expect(response).toContain("HTTP/1.1 500 Internal Server Error");
+      expect(response).toEndWith(JSON.stringify({ error: "internal_error" }));
+      expect(fetchCalls).toBe(0);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+      await server.stop();
+    }
+  });
+
   test("cancels a streaming response body when the client disconnects", async () => {
     let cancelled = false;
     const events = new EventEmitter();
@@ -151,6 +208,43 @@ describe("serve", () => {
       expect(await health.json()).toEqual({ ok: true });
     } finally {
       console.error = originalError;
+      await server.stop();
+    }
+  });
+
+  test("aborts the Web request signal when the client cancels", async () => {
+    let markStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let observedAbort: unknown;
+    const server = await serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: (request) => new Promise<Response>((_resolve, reject) => {
+        markStarted();
+        const onAbort = () => {
+          observedAbort = request.signal.reason;
+          reject(request.signal.reason);
+        };
+        if (request.signal.aborted) onAbort();
+        else request.signal.addEventListener("abort", onAbort, { once: true });
+      }),
+    });
+    const controller = new AbortController();
+    const pending = fetch(`http://127.0.0.1:${server.port}/cancel`, { signal: controller.signal });
+
+    try {
+      await started;
+      controller.abort();
+      await pending.catch(() => undefined);
+      for (let attempt = 0; attempt < 20 && observedAbort === undefined; attempt += 1) {
+        await delay(10);
+      }
+
+      expect(observedAbort).toBeInstanceOf(DOMException);
+      expect(observedAbort).toMatchObject({ name: "AbortError" });
+    } finally {
       await server.stop();
     }
   });

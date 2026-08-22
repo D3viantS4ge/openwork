@@ -158,7 +158,7 @@ export type WorkerListItem = {
   createdAt: string | null;
 };
 
-export type CodemodeRun = {
+export type WorkflowRun = {
   id: string;
   source: string;
   status: "succeeded" | "failed";
@@ -799,7 +799,7 @@ export function getWorkersList(payload: unknown): WorkerListItem[] {
   return rows;
 }
 
-function parseCodemodeRun(value: unknown): CodemodeRun | null {
+function parseWorkflowRun(value: unknown): WorkflowRun | null {
   if (
     !isRecord(value)
     || typeof value.id !== "string"
@@ -836,12 +836,12 @@ function parseCodemodeRun(value: unknown): CodemodeRun | null {
   };
 }
 
-export function getCodemodeRuns(payload: unknown): CodemodeRun[] {
+export function getWorkflowRuns(payload: unknown): WorkflowRun[] {
   if (!isRecord(payload) || !Array.isArray(payload.runs)) {
     return [];
   }
   return payload.runs.flatMap((run) => {
-    const parsed = parseCodemodeRun(run);
+    const parsed = parseWorkflowRun(run);
     return parsed ? [parsed] : [];
   });
 }

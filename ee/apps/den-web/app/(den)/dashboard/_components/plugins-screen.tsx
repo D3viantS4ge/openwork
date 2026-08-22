@@ -158,7 +158,6 @@ export function PluginsScreen() {
   return (
     <DashboardPageTemplate
       icon={Puzzle}
-      badgeLabel="Preview"
       title="Plugin Directory"
       description="Discover and manage plugins — bundles of skills, hooks, MCP servers, agents, and commands that extend your workers."
       colors={["#EDE9FE", "#4C1D95", "#7C3AED", "#C4B5FD"]}
@@ -309,7 +308,7 @@ function describePluginScope(plugins: DenPlugin[]): string {
   ).size;
   const pluginLabel = `${plugins.length} plugin${plugins.length === 1 ? "" : "s"}`;
   if (marketplaceCount === 0) return pluginLabel;
-  return `${pluginLabel} across ${marketplaceCount} marketplace${marketplaceCount === 1 ? "" : "s"}`;
+  return `${pluginLabel} across ${marketplaceCount} collection${marketplaceCount === 1 ? "" : "s"}`;
 }
 
 function EmptyState({ title, description }: { title: string; description: string }) {

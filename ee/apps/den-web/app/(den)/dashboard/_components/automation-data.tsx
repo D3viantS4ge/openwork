@@ -8,7 +8,7 @@ import {
   automationRunSchema,
 } from "@openwork/types/automations";
 import type { CreateCloudAutomation, UpdateAutomation } from "@openwork/types/automations";
-import { savedScriptArtifactSnapshotSchema } from "@openwork/types/dynamic-artifacts";
+import { workflowArtifactSnapshotSchema } from "@openwork/types/workflows";
 import { getErrorMessage, requestJson } from "../../_lib/den-flow";
 
 async function payload(path: string, init: RequestInit = { method: "GET" }) {
@@ -56,8 +56,8 @@ export function useAutomationRun(runId: string | null) {
 
 export function useAutomationArtifactSnapshot(configObjectId: string | null, receiptId: string | null) {
   return useQuery({
-    queryKey: ["saved-script", configObjectId, "snapshot", receiptId],
-    queryFn: async () => savedScriptArtifactSnapshotSchema.parse(await payload(`/v1/codemode-scripts/${encodeURIComponent(configObjectId ?? "")}/snapshots/${encodeURIComponent(receiptId ?? "")}`)),
+    queryKey: ["workflow", configObjectId, "snapshot", receiptId],
+    queryFn: async () => workflowArtifactSnapshotSchema.parse(await payload(`/v1/workflows/${encodeURIComponent(configObjectId ?? "")}/snapshots/${encodeURIComponent(receiptId ?? "")}`)),
     enabled: Boolean(configObjectId && receiptId),
   });
 }

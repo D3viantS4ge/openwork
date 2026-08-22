@@ -47,6 +47,7 @@ describe("Den plugin skill CRUD UI contract", () => {
     expect(data).toContain('sourceMode: "cloud"');
     expect(data).toContain("/versions`");
     expect(data).toContain("/delete`");
+    expect(data).toContain('runReauthableAction("delete-skill"');
     expect(data).toContain("organizationId");
     expect(data).toContain("pluginQueryKeys.detail(pluginId)");
   });

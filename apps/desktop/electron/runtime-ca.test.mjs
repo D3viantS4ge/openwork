@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { X509Certificate } from "node:crypto";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { mergeSystemCaChildEnv, resolveSystemCaEnv } from "./runtime.mjs";
+import { createSystemCaCertificateVerifyProc, mergeSystemCaChildEnv, resolveSystemCaEnv } from "./runtime.mjs";
 import {
   dedupeCertificates,
   parseDarwinSecurityCertificates,
@@ -28,6 +30,117 @@ function pemForBase64(base64) {
   }
   return `-----BEGIN CERTIFICATE-----\n${lines.join("\n")}\n-----END CERTIFICATE-----`;
 }
+
+let certificateFixturePromise;
+
+async function certificateFixture() {
+  certificateFixturePromise ??= (async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openwork-runtime-cert-chain-"));
+    const run = (...args) => execFileSync("openssl", args, { cwd: directory, stdio: "ignore" });
+    run("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "root.key", "-out", "root.pem", "-subj", "/CN=OpenWork Test Root", "-days", "2", "-sha256");
+    await writeFile(path.join(directory, "server.ext"), "extendedKeyUsage = serverAuth\nsubjectAltName = DNS:enterprise.test\n");
+    run("req", "-newkey", "rsa:2048", "-nodes", "-keyout", "leaf.key", "-out", "leaf.csr", "-subj", "/CN=enterprise.test", "-sha256");
+    run("x509", "-req", "-in", "leaf.csr", "-CA", "root.pem", "-CAkey", "root.key", "-set_serial", "2", "-out", "leaf.pem", "-days", "1", "-sha256", "-extfile", "server.ext");
+    await writeFile(path.join(directory, "client.ext"), "extendedKeyUsage = clientAuth\nsubjectAltName = DNS:enterprise.test\n");
+    run("req", "-newkey", "rsa:2048", "-nodes", "-keyout", "client.key", "-out", "client.csr", "-subj", "/CN=enterprise.test", "-sha256");
+    run("x509", "-req", "-in", "client.csr", "-CA", "root.pem", "-CAkey", "root.key", "-set_serial", "3", "-out", "client.pem", "-days", "1", "-sha256", "-extfile", "client.ext");
+    run("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "other.key", "-out", "other.pem", "-subj", "/CN=Unrelated Test Root", "-days", "2", "-sha256");
+    return {
+      clientLeaf: await readFile(path.join(directory, "client.pem"), "utf8"),
+      leaf: await readFile(path.join(directory, "leaf.pem"), "utf8"),
+      root: await readFile(path.join(directory, "root.pem"), "utf8"),
+      otherRoot: await readFile(path.join(directory, "other.pem"), "utf8"),
+    };
+  })();
+  return certificateFixturePromise;
+}
+
+function verifyCertificate(proc, request) {
+  return new Promise((resolve) => proc(request, resolve));
+}
+
+test("Chromium certificate verification success delegates", async () => {
+  const proc = createSystemCaCertificateVerifyProc([]);
+  assert.equal(await verifyCertificate(proc, { verificationResult: "net::OK", errorCode: 0 }), -3);
+});
+
+test("authority-invalid chain anchored by configured CA is accepted", async () => {
+  const fixture = await certificateFixture();
+  const keyUsage = new X509Certificate(fixture.leaf).keyUsage;
+  assert.ok(keyUsage?.some((usage) => usage === "1.3.6.1.5.5.7.3.1" || /server ?auth/i.test(usage)));
+  const proc = createSystemCaCertificateVerifyProc([fixture.root]);
+  assert.equal(await verifyCertificate(proc, {
+    verificationResult: "net::ERR_CERT_AUTHORITY_INVALID",
+    errorCode: -202,
+    hostname: "enterprise.test",
+    certificate: { data: fixture.leaf },
+  }), 0);
+});
+
+test("authority-invalid chain with clientAuth-only leaf delegates", async () => {
+  const fixture = await certificateFixture();
+  const keyUsage = new X509Certificate(fixture.clientLeaf).keyUsage;
+  assert.ok(keyUsage?.some((usage) => usage === "1.3.6.1.5.5.7.3.2" || /client ?auth/i.test(usage)));
+  assert.ok(!keyUsage.some((usage) => usage === "1.3.6.1.5.5.7.3.1" || /server ?auth/i.test(usage)));
+  const proc = createSystemCaCertificateVerifyProc([fixture.root]);
+  assert.equal(await verifyCertificate(proc, {
+    verificationResult: "net::ERR_CERT_AUTHORITY_INVALID",
+    errorCode: -202,
+    hostname: "enterprise.test",
+    certificate: { data: fixture.clientLeaf },
+  }), -3);
+});
+
+test("authority-invalid chain with an unrelated root delegates", async () => {
+  const fixture = await certificateFixture();
+  const proc = createSystemCaCertificateVerifyProc([fixture.otherRoot]);
+  assert.equal(await verifyCertificate(proc, {
+    verificationResult: "net::ERR_CERT_AUTHORITY_INVALID",
+    errorCode: -202,
+    hostname: "enterprise.test",
+    certificate: { data: fixture.leaf },
+  }), -3);
+});
+
+test("trusted authority-invalid chain with mismatched or missing hostname delegates", async () => {
+  const fixture = await certificateFixture();
+  const proc = createSystemCaCertificateVerifyProc([fixture.root]);
+  const authorityError = { verificationResult: "net::ERR_CERT_AUTHORITY_INVALID", errorCode: -202 };
+  assert.equal(await verifyCertificate(proc, {
+    ...authorityError,
+    hostname: "different.test",
+    certificate: { data: fixture.leaf },
+  }), -3);
+  assert.equal(await verifyCertificate(proc, {
+    ...authorityError,
+    certificate: { data: fixture.leaf },
+  }), -3);
+});
+
+test("non-authority certificate errors delegate to Chromium", async () => {
+  const fixture = await certificateFixture();
+  const proc = createSystemCaCertificateVerifyProc([fixture.root]);
+  assert.equal(await verifyCertificate(proc, {
+    verificationResult: "net::ERR_CERT_DATE_INVALID",
+    errorCode: -201,
+    certificate: { data: fixture.leaf },
+  }), -3);
+  assert.equal(await verifyCertificate(proc, {
+    verificationResult: "net::ERR_CERT_AUTHORITY_INVALID",
+    errorCode: -201,
+    certificate: { data: fixture.leaf },
+  }), -3);
+});
+
+test("malformed and cyclic certificate chains never accept", async () => {
+  const fixture = await certificateFixture();
+  const proc = createSystemCaCertificateVerifyProc([fixture.root]);
+  const cyclic = { data: fixture.leaf };
+  cyclic.issuerCert = cyclic;
+  const authorityError = { verificationResult: "net::ERR_CERT_AUTHORITY_INVALID", errorCode: -202, hostname: "enterprise.test" };
+  assert.equal(await verifyCertificate(proc, { ...authorityError, certificate: { data: "not a certificate" } }), -3);
+  assert.equal(await verifyCertificate(proc, { ...authorityError, certificate: cyclic }), -3);
+});
 
 test("writes system CA bundle when certificates are available", async () => {
   const userDataDir = await mkdtemp(path.join(tmpdir(), "openwork-runtime-ca-"));

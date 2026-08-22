@@ -64,29 +64,29 @@ Use this table to pick scopes by capability:
 | Read user profiles and email | `users:read`, `users:read.email` |
 | List channel members | `channels:read`, `groups:read`, `mpim:read` |
 
-## Open Extensions
+## Open the Library
 
-In OpenWork, open your workspace and go to `Settings` > `Extensions`. Click `Add Custom App`.
+In OpenWork, open your workspace and go to `Settings` > `Library`, expand `Advanced settings`, and click `Add workspace MCP`.
 
 <Frame>
-  ![OpenWork Extensions page with Add Custom App button](/images/slack-mcp-extensions-page.png)
+  ![OpenWork Library page listing skills, apps, and connections](/images/library-slack-connection.png)
 </Frame>
 
 ## Add the Slack MCP server
 
-In the Add Custom App dialog:
+In the `Add workspace MCP` dialog:
 
 1. Set `App name` to `slack`.
-2. Keep `Type` set to `Remote (URL)`.
+2. Keep `Type` set to `Remote server (URL)`.
 3. Set `Server URL` to `https://mcp.slack.com/mcp`.
-4. Open `Advanced OAuth`.
+4. Open `OAuth on this device`.
 5. Paste the Slack OAuth client ID.
 6. Paste the Slack OAuth client secret.
 7. Paste the same user token scopes you added in Slack, separated by spaces.
 8. Click `Add App`.
 
 <Frame>
-  ![Add Custom App dialog with Advanced OAuth fields for Slack MCP](/images/slack-mcp-advanced-oauth.png)
+  ![Add workspace MCP dialog filled in for Slack with OAuth on this device expanded](/images/slack-mcp-advanced-oauth.png)
 </Frame>
 
 OpenWork writes the MCP entry with the OAuth client credentials, similar to this:

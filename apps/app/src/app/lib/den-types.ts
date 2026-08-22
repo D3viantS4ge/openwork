@@ -31,7 +31,7 @@ export type DenPluginConfigObjectType =
   | "hook"
   | "context"
   | "custom"
-  | "script";
+  | "workflow";
 
 export type DenPluginConfigObjectVersion = {
   id: string;
@@ -121,6 +121,12 @@ export type DenAssignedMarketplaceCapability = {
   marketplaceId: string | null;
   objectType: DenPluginConfigObjectType;
   pluginId: string;
+};
+
+export type DenMeLibraryPlugin = {
+  id: string;
+  name: string;
+  description: string | null;
 };
 
 export type DenResourceSnapshotConfigItem = {

@@ -176,6 +176,82 @@ afterEach(async () => {
 });
 
 describe("cloud provider sync gateway", () => {
+  test("joins concurrent runs, keeps identical sessions inert, and runs one latest-session trailing pass", async () => {
+    const root = await createRoot();
+    let markFirstListReached: () => void = () => undefined;
+    const firstListReached = new Promise<void>((resolve) => {
+      markFirstListReached = resolve;
+    });
+    let releaseFirstList: () => void = () => undefined;
+    const firstListReleased = new Promise<void>((resolve) => {
+      releaseFirstList = resolve;
+    });
+    const listOrgIds: string[] = [];
+    let listRequestsInFlight = 0;
+    let maxListRequestsInFlight = 0;
+    const den = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname !== "/v1/llm-providers") {
+          return Response.json({ error: "not_found" }, { status: 404 });
+        }
+        listOrgIds.push(request.headers.get("x-openwork-legacy-org-id") ?? "");
+        listRequestsInFlight += 1;
+        maxListRequestsInFlight = Math.max(maxListRequestsInFlight, listRequestsInFlight);
+        try {
+          if (listOrgIds.length === 1) {
+            markFirstListReached();
+            await firstListReleased;
+          }
+          return Response.json({ llmProviders: [] });
+        } finally {
+          listRequestsInFlight -= 1;
+        }
+      },
+    });
+    stops.push(() => den.stop(true));
+    const config = serverConfig(root, "https://engine.example.test");
+    config.workspaces = [];
+    const server = await startServer(config);
+    stops.push(() => server.stop());
+    const base = `http://127.0.0.1:${server.port}`;
+    const putSession = (orgId: string) => fetch(`${base}/den-session`, {
+      method: "PUT",
+      headers: hostHeaders(),
+      body: JSON.stringify({
+        baseUrl: `http://127.0.0.1:${den.port}`,
+        token: "den-token",
+        orgId,
+      }),
+    });
+
+    try {
+      expect((await putSession("org_first")).status).toBe(204);
+      await firstListReached;
+      expect((await putSession("org_first")).status).toBe(204);
+      const sameContextRuns = [runSync(base, "app_launch"), runSync(base, "app_resume")];
+
+      expect((await putSession("org_changed")).status).toBe(204);
+      const changedContextRuns = [runSync(base, "sign_in"), runSync(base, "focus")];
+      await Bun.sleep(25);
+      expect(listOrgIds).toEqual(["org_first"]);
+      expect(maxListRequestsInFlight).toBe(1);
+
+      releaseFirstList();
+      const results = await Promise.all([...sameContextRuns, ...changedContextRuns]);
+      expect(results.map((result) => result.status)).toEqual(["applied", "applied", "noop", "noop"]);
+      expect(listOrgIds).toEqual(["org_first", "org_changed"]);
+      expect(maxListRequestsInFlight).toBe(1);
+
+      expect((await putSession("org_changed")).status).toBe(204);
+      await Bun.sleep(25);
+      expect(listOrgIds).toEqual(["org_first", "org_changed"]);
+    } finally {
+      releaseFirstList();
+    }
+  });
+
   test("materializes providers before the first workspace exists and finishes setup later", async () => {
     const root = await createRoot();
     const config = serverConfig(root, "https://engine.example.test");
@@ -221,8 +297,8 @@ describe("cloud provider sync gateway", () => {
       token: "den-token",
       orgId: "org_test",
     });
-    expect((await sync.run("before-workspace")).status).toBe("noop");
-    expect(sync.status().lastRun?.status).toBe("noop");
+    expect((await sync.run("before-workspace")).status).toBe("applied");
+    expect(sync.status().lastRun?.status).toBe("applied");
     expect(runtimeProviderMap(await readGlobalRuntimeOpencodeConfig(config)).lpr_test).toBeDefined();
     expect(reloads).toBe(0);
     expect(engineRequests).toEqual([]);

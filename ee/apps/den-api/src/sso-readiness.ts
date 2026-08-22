@@ -1,6 +1,6 @@
 export function isOrganizationSsoReady(input: {
   connection: { status: string } | null
-  providerExists: boolean
+  provider: { domainVerified: boolean } | null
 }) {
-  return input.connection?.status === "enabled" && input.providerExists
+  return input.connection?.status === "enabled" && input.provider?.domainVerified === true
 }

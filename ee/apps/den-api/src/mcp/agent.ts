@@ -8,29 +8,37 @@ import { openworkCloudMcpConnectionActionSchema } from "@openwork/types/den/mcp-
 import type { Hono } from "hono"
 import type { RequestIdVariables } from "hono/request-id"
 import { z } from "zod"
-import { codemodeScriptsEnabled } from "../capability-sources/codemode-rollout.js"
+import { workflowsEnabled } from "../capability-sources/workflow-rollout.js"
+import { remoteMcpAppsEnabled } from "../capability-sources/remote-mcp-apps-rollout.js"
 import { publicRoute, tokenRoute } from "../middleware/index.js"
 import { db } from "../db.js"
 import { getMcpResourceContext, verifyMcpRequest } from "./auth.js"
+import { DEN_MCP_APP_HOST_SCOPE, DEN_MCP_WRITE_SCOPE } from "./scopes.js"
 import { getCatalog, protectedResourceMetadata } from "./index.js"
 import { preflightMcpJsonRpcRequest } from "./json-rpc-preflight.js"
-import { SEARCH_CAPABILITIES_TOOL_NAME, type CapabilityMatch } from "./search.js"
-import { resolveMcpMemberIdentity } from "./external-capabilities.js"
+import { appLogger } from "../observability/logger.js"
+import { normalizeMcpProtocolVersionHeader } from "./protocol-version.js"
+import {
+  compareCapabilityMatches,
+  EXECUTE_CAPABILITY_TOOL_NAME,
+  SEARCH_CAPABILITIES_TOOL_NAME,
+  type CapabilityMatch,
+} from "./search.js"
+import { probeExternalConnectionStatus, resolveMcpMemberIdentity } from "./external-capabilities.js"
 import { executeMarketplaceCapability, listAccessibleMarketplaceSkillDescriptors, parseMarketplaceCapabilityName, type RemoteSkillDescriptor } from "./marketplace-capabilities.js"
 import { resolvePublicOrigin } from "../capability-sources/generic-oauth.js"
 import { automationService } from "../automations/service.js"
 import { AGENT_AUTOMATION_INDEX_LIMIT, registerAgentAutomationResources } from "./automation-index.js"
 import { env } from "../env.js"
 import { getOrganizationContextForUser, listTeamsForMember } from "../orgs.js"
-import { getCodemodeScriptDetail, getCodemodeScriptSnapshot } from "../codemode-scripts.js"
-import { artifactFreshness } from "../saved-script-artifacts.js"
-import { PluginArchAuthorizationError } from "../routes/org/plugin-system/access.js"
+import { getWorkflowDetail, getWorkflowSnapshot } from "../workflows.js"
+import { artifactFreshness } from "../workflow-artifacts.js"
+import { PluginArchAuthorizationError, requirePluginArchCapability } from "../routes/org/plugin-system/access.js"
 import {
-  DYNAMIC_ARTIFACT_APP_SCHEMA_VERSION,
-  dynamicArtifactAppServerCapabilities,
-  registerAgentDynamicArtifactApp,
-  registerSelectedDynamicArtifactApp,
-} from "./dynamic-artifact-app.js"
+  WORKFLOW_ARTIFACT_APP_SCHEMA_VERSION,
+  workflowArtifactAppServerCapabilities,
+  registerAgentWorkflowArtifactApp,
+} from "./workflow-artifact-app.js"
 import {
   executeBuiltinSkillCapability,
   listBuiltinSkillDescriptors,
@@ -45,7 +53,7 @@ import {
   type ExecuteCapabilityToolResult,
 } from "./capability-registry.js"
 import { runCodemodeScript } from "./codemode-run.js"
-import { recordCodemodeScriptResult } from "../codemode-runs.js"
+import { recordWorkflowResult } from "../workflow-runs.js"
 import {
   activateArtifactViewRevision,
   getGeneratedArtifactViewRevision,
@@ -57,25 +65,48 @@ import {
 import {
   registerAgentGeneratedArtifactViews,
   registerGeneratedArtifactResource,
-  registerSelectedGeneratedArtifactRenderTool,
 } from "./generated-artifact-views.js"
-import { requirePluginArchResourceRole, type PluginArchActorContext } from "../routes/org/plugin-system/access.js"
-import { clearProgramAgentSelection, getProgramAgentSelection, selectProgramForAgent } from "../program-agent-selection.js"
-import { getProgramDetail, listProgramLibraryItems } from "../program-library.js"
+import type { PluginArchActorContext } from "../routes/org/plugin-system/access.js"
 import { parseArtifactViewResourceUri } from "../artifact-view-resource.js"
-import { listActiveRemoteMcpApps, loadRemoteMcpAppRevision } from "../remote-mcp-apps.js"
-import { registerAgentRemoteMcpApps } from "./remote-mcp-apps.js"
-import { listUsableExternalMcpConnections } from "../capability-sources/external-mcp-connections.js"
-import { registerConnectMcpServerIndex } from "./connect-mcp-server-index.js"
+import { listReadyExternalMcpConnections } from "../capability-sources/external-mcp-connections.js"
+import {
+  CONNECT_MCP_APP_HOST_CAPABILITY_HEADER,
+  registerConnectMcpServerIndex,
+  supportsConnectMcpAppHost,
+} from "./connect-mcp-server-index.js"
+import { registerAgentSkillCreatedApp } from "./skill-created-app.js"
+import {
+  connectedConnectionActionPayload,
+  connectionActionPayloadFromStatus,
+  registerAgentConnectionActionApp,
+} from "./connection-action-app.js"
+import { registerAgentPluginFlowApp } from "./plugin-flow-app.js"
+import {
+  createConfigObjectVersion,
+  createPluginBundle,
+  getConfigObjectDetail,
+  listConfigObjectPlugins,
+  listPluginMemberships,
+  PluginArchRouteFailure,
+} from "../routes/org/plugin-system/store.js"
+
+const protocolVersionLogger = appLogger.child({ component: "mcp_protocol_version" })
 
 export { externalToolContent } from "./tool-content.js"
 export { externalCapabilityErrorToolResult, externalCapabilitySuccessToolResult }
 export type { ExecuteCapabilityToolResult }
 
-export const EXECUTE_CAPABILITY_TOOL_NAME = "execute_capability"
+export { EXECUTE_CAPABILITY_TOOL_NAME }
 export const EXECUTE_CAPABILITY_SCRIPT_TOOL_NAME = "execute_capability_script"
 const searchCapabilityTypeSchema = z.enum(["all", "api", "admin", "mcp", "marketplace", "skills"])
 export const EXECUTE_CAPABILITY_TIMEOUT_MS = 180_000
+function closeStandaloneSseResponse() {
+  // Some published OpenCode clients treat 405 as a connection failure even
+  // though standalone SSE is optional. 204 closes the unused listener without
+  // turning the probe into a protocol error.
+  return new Response(null, { status: 204 })
+}
+
 export const SEARCH_CAPABILITIES_ANNOTATIONS: ToolAnnotations = {
   readOnlyHint: true,
   destructiveHint: false,
@@ -116,6 +147,7 @@ const capabilityMatchOutputSchema = z.object({
   schemaDigest: z.string().optional(),
   invocation: z.object({ argumentsField: z.literal("body") }).optional(),
   kind: z.string().optional(),
+  mcpApp: z.object({ resourceUri: z.string() }).optional(),
   status: z.string().optional(),
   hint: z.string().optional(),
   connectionStatus: connectionStatusOutputSchema.optional(),
@@ -127,54 +159,14 @@ export const SEARCH_CAPABILITIES_OUTPUT_SCHEMA = z.object({
   hint: z.string().optional(),
 })
 
-const programSearchItemOutputSchema = z.object({
-  id: z.string(),
-  plugin: z.object({ id: z.string(), name: z.string() }).nullable(),
-  name: z.string(),
-  description: z.string().nullable(),
-  role: z.enum(["viewer", "editor", "manager"]),
-  state: z.enum(["ready", "needs_signin", "needs_admin_setup"]),
-  resultState: z.enum(["never_run", "fresh", "stale", "needs_attention"]),
-  latestSuccessfulAt: z.string().nullable(),
-  viewState: z.enum(["default", "custom_active", "build_failed", "retired"]),
-  activeViewTitle: z.string().nullable(),
-  automationCount: z.number().int().nonnegative(),
-  source: z.object({
-    kind: z.enum(["created", "installed_template"]),
-    templateName: z.string().optional(),
-    templateVersion: z.string().optional(),
-  }),
-})
-
-const programSearchOutputSchema = z.object({
-  items: z.array(programSearchItemOutputSchema),
-  nextCursor: z.string().nullable(),
-})
-
-const programSelectionOutputSchema = z.object({
-  selection: z.object({
-    programId: z.string(),
-    selectedAt: z.string(),
-  }),
-})
-
-const programSelectionClearedOutputSchema = z.object({
-  selection: z.null(),
-})
-
-const programRunOutputSchema = z.object({
-  status: z.literal("succeeded"),
-  value: z.unknown(),
-  receiptId: z.string().nullable(),
-  resultDigest: z.string().nullable(),
-})
-
 export const AGENT_MCP_INSTRUCTIONS = [
-  "This OpenWork Cloud MCP server uses standard MCP tools, resources, structured results, and list-changed notifications. OpenWork Programs and Remote MCP Apps add only durable identity, Plugin containment, access, retained resources and results, selection, and lifecycle around those MCP primitives.",
-  "When Remote MCP App delivery is enabled, active apps in the member's Library appear as individually named launch tools backed by immutable ui:// resources.",
-  "A Program is an immutable-versioned Code Mode Script config object inside an OpenWork Connect Plugin. Organizations with Code Mode scripts enabled receive execute_capability_script, the backwards-compatible render_dynamic_artifact MCP App tool, and a constant-size Program catalog: search_programs, select_program, and clear_program_selection.",
-  "To use a Program, search by Library metadata, select one exact accessible Program, then refresh the tool catalog. The selected context exposes run_selected_program and render_selected_program; rendering returns an Artifact as fallback text plus retained data in structuredContent and binds the exact immutable MCP App resource URI in the tool definition.",
-  "When a member asks to keep a successful Code Mode result, save it as a Program inside the existing OpenWork Connect Plugin they name by passing that pluginId to the Code Mode save operation. Omit pluginId only for a private Program in the member's My Programs Plugin. A Program inherits discovery and sharing from its Plugin and any Marketplace containing that Plugin; do not create a separate Program package or marketplace entry.",
+  "This OpenWork Cloud MCP server uses standard MCP tools, resources, structured results, and list-changed notifications.",
+  "Use create_skill to create one private Cloud skill in a new Plugin, and update_skill to publish a new immutable version of an existing skill. Both return a standard skill-created MCP App result plus a text fallback; do not route these flows through execute_capability, postPlugins, or postConfigObjectsVersions.",
+  "Standard MCP Apps supplied by connected MCP servers are discovered through search_capabilities. A match with kind mcp_app must be executed through execute_capability like any other exact match; compatible OpenWork hosts preserve the current _meta.ui.resourceUri and render it without a generated direct-tool name.",
+  "Standalone URL-imported Apps are deferred future work and are not part of this release. Do not offer, search for, import, or launch them.",
+  "Skills teach how to perform work. Workflows are saved procedures discovered through search_capabilities and run through execute_capability using the exact capability name returned by search.",
+  "Author an ad hoc procedure with execute_capability_script. Workflow runs produce artifacts rendered by render_workflow_artifact, and Automations trigger Workflows.",
+  "When a member asks to keep a successful Code Mode result, save it as a Workflow inside the existing OpenWork Connect Plugin they name by passing that pluginId to the Workflow save operation. Omit pluginId only for a private Workflow in the member's My Workflows Plugin. A Workflow inherits discovery and sharing from its Plugin and any Marketplace containing that Plugin; do not create a separate Workflow package or marketplace entry.",
   "Capabilities include native Google Workspace operations (Gmail read/search, Calendar list/create, Drive search/read, and Gmail draft creation) executed with the signed-in member's organization credentials, plus any MCP connections the organization has added.",
   "Allowlisted platform admins can also discover namespaced OpenWork Admin capabilities through this same connection; other members cannot discover or execute them.",
   "Always call search_capabilities first with 2-4 keyword variants before concluding something is unavailable. Use execute_capability only with exact names returned by search_capabilities.",
@@ -185,10 +177,12 @@ export const AGENT_MCP_INSTRUCTIONS = [
   "Do not invent OAuth-client, credential, or local-extension setup. Organization connections are managed in the OpenWork Cloud dashboard / Settings > Connect. When a returned connection or marketplace readiness state requires administrator setup or member sign-in, relay that exact action.",
   "A successful search_capabilities call proves this OpenWork Cloud MCP connection is authorized. Never tell the user to reconnect OpenWork Cloud because a downstream connector failed.",
   "External MCP matches include the provider-advertised argumentsSchema, schemaDigest, and invocation.argumentsField. Put an object matching argumentsSchema in execute_capability.body and copy schemaDigest into execute_capability.schemaDigest.",
+  "Do not import, convert, or browse for a standalone HTML URL when a connected capability already appears with kind mcp_app. Execute that exact match and let the host resolve its originating ui:// resource.",
   "OpenWork always attempts the downstream provider call when local schema checks find a mismatch. schemaGuidance is advisory and appears alongside the provider result: if the provider succeeded, accept that result and do not retry solely because of the warning; if it failed, use the warning to correct the arguments or search again.",
   "If the provider returns invalid_capability_arguments, correct the listed issues and retry once with changed arguments; never retry the same arguments unchanged. If it returns unknown_capability, call search_capabilities again before retrying.",
-  "When save_artifact_view is advertised, create or update the saved Script with an explicit JSON Schema outputSchema matching its returned data before calling it. React is injected into view source, so use React APIs without imports and render only the supplied data prop. A failed view build includes diagnostics: change the source once and retry with the returned artifactViewId; do not search for a different Artifact tool or call render_dynamic_artifact. After a successful save, call the exact render_artifact_* or preview_artifact_* tool named in its result.",
-  "When a match has kind connection_status, name connectionStatus.connectionName and relay connectionStatus.action exactly. Distinguish the member's Your Connections page, the organization Connections dashboard, and the provider's own admin console.",
+  "When a match has kind connection_status, execute that exact match once: it returns the live status and renders an actionable connection card for the member in compatible hosts. Also name connectionStatus.connectionName and relay connectionStatus.action exactly in text. Distinguish the member's Your Connections page, the organization Connections dashboard, and the provider's own admin console.",
+  "When execute_capability fails with needs_connection or connection_not_connected, execute that connection's status capability (mcp:<connectionId>:*) once so the member gets the same actionable connection card, then relay the action in text.",
+  "Successful postMarketplacesPlugins, postPluginsAccess, and postMarketplacesAccess calls through execute_capability render a confirmation card automatically in compatible hosts; report the outcome in text as well.",
   "Connection probes are live. After the requested human fixes that connector, search again in the same task; otherwise do not retry unchanged or improvise workarounds through other tools.",
 ].join("\n")
 
@@ -299,7 +293,11 @@ export function createAgentMcpServer(): McpServer {
     name: "openwork-den-api-agent",
     version: "1.0.0",
   }, {
-    capabilities: dynamicArtifactAppServerCapabilities,
+    capabilities: {
+      ...workflowArtifactAppServerCapabilities,
+      tools: { listChanged: true },
+      resources: { listChanged: true },
+    },
     instructions: AGENT_MCP_INSTRUCTIONS,
   })
 }
@@ -354,8 +352,9 @@ export function registerAgentSkillResources(input: {
 }
 
 /**
- * The minimal, harness-facing MCP surface: two core tools plus gated Code Mode
- * execution and standards-based Artifact presentation.
+ * The minimal, harness-facing MCP surface: two capability-routing tools, one
+ * first-party skill creation App, plus gated Code Mode execution and
+ * standards-based Artifact presentation.
  *
  * `/mcp` (index.ts) stays exactly as it is — every catalog operation
  * individually registered, ~129 tools today. That's unchanged and still
@@ -365,12 +364,11 @@ export function registerAgentSkillResources(input: {
  * `/mcp/agent` is a *different* endpoint for a *different* consumer: the
  * desktop app's "OpenWork Cloud Control" connection, which is what an
  * OpenCode/Claude Code/Codex-style harness actually sees. It always registers
- * `search_capabilities` and `execute_capability`, and conditionally registers
- * Code Mode plus a constant-size Program search/selection catalog.
- * One selected Program contributes exact run/render tools; its renderer is a
- * read-only MCP App over the same authorized saved-Script snapshots and does
- * not create a second execution or scheduling path. The other ~127 operations
- * are not individually callable on this endpoint.
+ * `search_capabilities`, `execute_capability`, and `create_skill`, and
+ * conditionally registers Code Mode and Artifact presentation tools. Workflows
+ * remain discoverable and executable through the same capability-routing
+ * tools instead of contributing separate contextual tools. The other ~127
+ * operations are not individually callable on this endpoint.
  */
 export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables & Record<string, unknown> }>(app: Hono<T>) {
   app.get("/.well-known/oauth-protected-resource/mcp/agent", publicRoute, (c) =>
@@ -389,10 +387,18 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
       return principal
     }
 
+    if (c.req.method === "GET") {
+      return closeStandaloneSseResponse()
+    }
+
     const preflightResponse = await preflightMcpJsonRpcRequest(c.req.raw, requestId)
     if (preflightResponse) {
       return preflightResponse
     }
+
+    normalizeMcpProtocolVersionHeader(c.req.raw.headers, "agent", requestId, (message, fields) => {
+      protocolVersionLogger.warn(message, fields)
+    })
 
     const catalog = await getCatalog(app as unknown as Hono, c.env)
     // External MCP connections are scoped to the calling MEMBER (grants +
@@ -408,7 +414,14 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
       .from(OrganizationTable)
       .where(eq(OrganizationTable.id, organizationId))
       .limit(1)
-    const codemodeEnabled = codemodeScriptsEnabled(organizationRows[0]?.metadata)
+    const organizationMetadata = organizationRows[0]?.metadata
+    const codemodeEnabled = workflowsEnabled(organizationMetadata)
+    const remoteAppsEnabled = remoteMcpAppsEnabled(organizationMetadata, {
+      deploymentEnabled: env.remoteMcpAppsEnabled,
+    })
+    const connectMcpAppHostSupported = supportsConnectMcpAppHost(
+      c.req.header(CONNECT_MCP_APP_HOST_CAPABILITY_HEADER),
+    ) && principal.scopes.has(DEN_MCP_APP_HOST_SCOPE)
     const requestInfo = await mcpRequestInfo(c.req.raw)
     const method = requestInfo.method
     const redirectUriBase = resolvePublicOrigin(c.req.raw, env.apiPublicUrl)
@@ -421,8 +434,13 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
       member: memberIdentity,
       redirectUriBase,
       codemodeEnabled,
-      organizationMetadata: organizationRows[0]?.metadata,
+      generatedArtifactViewsEnabled: env.generatedArtifactViewsEnabled,
+      organizationMetadata,
       mcpConnectionsGatingEnabled: env.mcpConnectionsGatingEnabled,
+      // This metadata is an opaque binding on an already authorized bounded
+      // search/execute result. Resolving the provider tool or resource still
+      // requires the separately scoped App-host credential below.
+      mcpAppsEnabled: remoteAppsEnabled,
     })
     const { externalMcpConnectionsEnabled } = capabilityContext
     let remoteSkills: RemoteSkillDescriptor[] = []
@@ -461,29 +479,18 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
         .sort((a, b) => a.name.localeCompare(b.name) || a.capability.localeCompare(b.capability))
     }
     const server = createAgentMcpServer()
-    if (env.remoteMcpAppsEnabled && libraryContext && memberIdentity && appCatalogMethod) {
-      registerAgentRemoteMcpApps({
-        server,
-        apps: await listActiveRemoteMcpApps({ context: libraryContext }),
-        loadResource: async ({ configObjectId, versionId }) => {
-          const loaded = await loadRemoteMcpAppRevision({
-            context: libraryContext,
-            configObjectId,
-            versionId,
-          })
-          return { html: loaded.html, payload: loaded.payload }
-        },
-      })
-    }
     if (method === "initialize" || method === "resources/list" || method === "resources/read") {
       if (memberIdentity) {
         registerConnectMcpServerIndex({
           server,
-          connections: await listUsableExternalMcpConnections({
-            organizationId,
-            orgMembershipId: memberIdentity.orgMembershipId,
-            teamIds: memberIdentity.teamIds,
-          }),
+          enabled: remoteAppsEnabled && connectMcpAppHostSupported,
+          connections: remoteAppsEnabled && connectMcpAppHostSupported
+            ? await listReadyExternalMcpConnections({
+                organizationId,
+                orgMembershipId: memberIdentity.orgMembershipId,
+                teamIds: memberIdentity.teamIds,
+              })
+            : [],
           publicOrigin: redirectUriBase,
         })
       }
@@ -516,15 +523,17 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
         title: "Search capabilities",
         description: [
           codemodeEnabled
-            ? "Search for a capability by keyword. This connection also exposes execute_capability, execute_capability_script, and Program search/selection tools —"
-            : "Search for a capability by keyword. This connection only exposes this tool and execute_capability —",
+            ? "Search for a capability by keyword. This connection also exposes execute_capability, create_skill, update_skill, and execute_capability_script —"
+            : "Search for a capability by keyword. This connection also exposes execute_capability, create_skill, and update_skill —",
           "there is no list of individually-named tools to browse. Always search first.",
           "Search covers native Google Workspace capabilities (Gmail, Calendar, Drive, Gmail drafts), org-connected external MCPs, and namespaced OpenWork Admin tools for allowlisted platform admins.",
+          "When Workflows are enabled, accessible Workflows appear as marketplace matches with kind workflow and execute through execute_capability like every other exact search result.",
           "Try 2-4 keyword variants before deciding a capability is unavailable.",
-          "Native API matches include a connector-namespaced name, pathParams, queryParams, hasBody, and bodySchema. External MCP matches include argumentsSchema, schemaDigest, and invocation.argumentsField.",
+          "Native API matches include a connector-namespaced name, pathParams, queryParams, hasBody, and bodySchema. External MCP matches include argumentsSchema, schemaDigest, and invocation.argumentsField. A match with kind mcp_app is a standard MCP App launch capability from a connected MCP server; execute it normally and the OpenWork host will render its advertised ui:// resource.",
           "Built-in and marketplace skill matches return SKILL.md content when executed.",
         ].join(" "),
         annotations: SEARCH_CAPABILITIES_ANNOTATIONS,
+        _meta: { ui: { visibility: ["model", "app"] } },
         inputSchema: z.object({
           query: z.string().min(1).describe("Keywords describing the capability you need, e.g. \"create organization\" or \"list workers\"."),
           limit: z.number().int().min(1).max(20).optional().describe("Max number of matches to return. Defaults to 5."),
@@ -535,7 +544,8 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
       async ({ query, limit, type }) => {
         const boundedLimit = limit ?? 5
         const result = await searchCapabilityRegistry(capabilityContext, { query, limit: boundedLimit, type })
-        return capabilitySearchToolResult(result.matches, result.externalCoverageHint)
+        const matches = result.matches.sort(compareCapabilityMatches).slice(0, boundedLimit)
+        return capabilitySearchToolResult(matches, result.externalCoverageHint)
       },
     )
 
@@ -547,10 +557,12 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
           "Call a capability found via search_capabilities, by its exact name.",
           "Pass path/query/body only as described by that match's pathParams/queryParams/hasBody.",
           "For external MCP capabilities, provider-advertised schema mismatches are returned as advisory schemaGuidance alongside the provider result; they do not block the downstream call.",
+          "When the exact capability is a standard MCP App launch tool, this call preserves its originating tool and ui:// binding so compatible OpenWork hosts render it without requiring a generated direct-tool name.",
           "For skill capabilities listed in the remote skill catalog, this returns their authorized SKILL.md content.",
           "Returns unknown_capability if name doesn't match a current capability — call search_capabilities again.",
         ].join(" "),
         annotations: EXECUTE_CAPABILITY_ANNOTATIONS,
+        _meta: { ui: { visibility: ["model", "app"] } },
         inputSchema: z.object({
           name: z.string().min(1).describe("The exact tool name returned by search_capabilities."),
           schemaDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/).optional().describe("For an external MCP match, copy the exact schemaDigest returned by search_capabilities so schema drift can be reported as advisory guidance without blocking the provider call."),
@@ -560,15 +572,174 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
         }),
       },
       async ({ name, schemaDigest, path, query, body }) => {
-        return executeCapabilityWithBudget({
+        const result = await executeCapabilityWithBudget({
           capability: name,
-          invoke: () => executeCapability(capabilityContext, { name, schemaDigest, path, query, body }),
+          invoke: async (): Promise<ExecuteCapabilityToolResult> => (
+            executeCapability(capabilityContext, { name, schemaDigest, path, query, body })
+          ),
         })
+        return result
       },
     )
 
+    registerAgentSkillCreatedApp({
+      server,
+      create: async ({ pluginName, skillMarkdown }) => {
+        if (!principal.scopes.has(DEN_MCP_WRITE_SCOPE)) {
+          return {
+            ok: false,
+            error: "insufficient_mcp_scope",
+            message: `Creating a skill requires the ${DEN_MCP_WRITE_SCOPE} scope.`,
+          }
+        }
+        if (!libraryContext) {
+          return {
+            ok: false,
+            error: "mcp_membership_revoked",
+            message: "The OpenWork Cloud membership for this connection is unavailable.",
+          }
+        }
+        try {
+          await requirePluginArchCapability(libraryContext, "plugin.create", false)
+          await requirePluginArchCapability(libraryContext, "config_object.create", false)
+          const plugin = await createPluginBundle({
+            context: libraryContext,
+            name: pluginName,
+            components: [{ type: "skill", value: { rawSourceText: skillMarkdown } }],
+          })
+          const memberships = await listPluginMemberships({
+            context: libraryContext,
+            pluginId: plugin.id,
+            includeConfigObjects: true,
+            onlyActive: true,
+          })
+          const skill = memberships.items
+            .map((membership) => membership.configObject)
+            .find((configObject) => configObject?.objectType === "skill")
+          if (!skill || !skill.description) {
+            return {
+              ok: false,
+              error: "skill_creation_incomplete",
+              message: "The Plugin was created, but its skill could not be resolved.",
+            }
+          }
+          return {
+            ok: true,
+            payload: {
+              schemaVersion: "1",
+              name: skill.title,
+              pluginId: plugin.id,
+              skillId: skill.id,
+              description: skill.description,
+              libraryUrl: new URL(
+                `/dashboard/library/plugins/${encodeURIComponent(plugin.id)}`,
+                env.betterAuthUrl,
+              ).toString(),
+            },
+          }
+        } catch (error) {
+          if (error instanceof PluginArchRouteFailure || error instanceof PluginArchAuthorizationError) {
+            return { ok: false, error: error.error, message: error.message }
+          }
+          throw error
+        }
+      },
+      update: async ({ skillId, skillMarkdown, reason }) => {
+        if (!principal.scopes.has(DEN_MCP_WRITE_SCOPE)) {
+          return {
+            ok: false,
+            error: "insufficient_mcp_scope",
+            message: `Updating a skill requires the ${DEN_MCP_WRITE_SCOPE} scope.`,
+          }
+        }
+        if (!libraryContext) {
+          return {
+            ok: false,
+            error: "mcp_membership_revoked",
+            message: "The OpenWork Cloud membership for this connection is unavailable.",
+          }
+        }
+        try {
+          const configObjectId = normalizeDenTypeId("configObject", skillId)
+          const existing = await getConfigObjectDetail(libraryContext, configObjectId)
+          if (existing.objectType !== "skill") {
+            return {
+              ok: false,
+              error: "not_a_skill",
+              message: `Config object "${skillId}" is a ${existing.objectType}, not a skill.`,
+            }
+          }
+          const detail = await createConfigObjectVersion({
+            context: libraryContext,
+            configObjectId,
+            reason,
+            value: { rawSourceText: skillMarkdown },
+          })
+          const memberships = await listConfigObjectPlugins({ context: libraryContext, configObjectId })
+          const pluginId = memberships.items.find((membership) => membership.removedAt === null)?.pluginId
+            ?? memberships.items[0]?.pluginId
+          if (!pluginId) {
+            return {
+              ok: false,
+              error: "skill_plugin_missing",
+              message: "The skill was updated, but no owning Plugin is visible to you.",
+            }
+          }
+          if (!detail.description) {
+            return {
+              ok: false,
+              error: "skill_update_incomplete",
+              message: "The skill was updated, but its description could not be resolved.",
+            }
+          }
+          return {
+            ok: true,
+            payload: {
+              schemaVersion: "1",
+              mode: "updated",
+              name: detail.title,
+              pluginId,
+              skillId: detail.id,
+              description: detail.description,
+              libraryUrl: new URL(
+                `/dashboard/library/plugins/${encodeURIComponent(pluginId)}`,
+                env.betterAuthUrl,
+              ).toString(),
+            },
+          }
+        } catch (error) {
+          if (error instanceof PluginArchRouteFailure || error instanceof PluginArchAuthorizationError) {
+            return { ok: false, error: error.error, message: error.message }
+          }
+          throw error
+        }
+      },
+    })
+
+    registerAgentConnectionActionApp({
+      server,
+      probe: async ({ connectionId }) => {
+        const probe = await probeExternalConnectionStatus({
+          organizationId: principal.organizationId,
+          member: memberIdentity,
+          connectionId,
+        })
+        if (!probe.ok) {
+          return { ok: false, error: probe.error, message: probe.message }
+        }
+        return {
+          ok: true,
+          payload: probe.connected
+            ? connectedConnectionActionPayload({ connectionId: probe.connection.id, connectionName: probe.connection.name })
+            : connectionActionPayloadFromStatus(probe.status),
+        }
+      },
+    })
+
+    registerAgentPluginFlowApp(server)
+
     if (codemodeEnabled) {
-      const loadDynamicArtifact = async ({
+      const loadWorkflowArtifact = async ({
         configObjectId,
         receiptId,
         maxAgeMs,
@@ -582,26 +753,26 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
         if (!artifactContext) {
           return {
             ok: false as const,
-            error: "saved_script_not_found",
-            message: "The saved Script is unavailable to this member.",
+            error: "workflow_not_found",
+            message: "The Workflow is unavailable to this member.",
           }
         }
         try {
-          const detail = await getCodemodeScriptDetail({
+          const detail = await getWorkflowDetail({
             context: artifactContext,
             configObjectId,
             maxAgeMs,
           })
           const snapshot = receiptId
-            ? await getCodemodeScriptSnapshot({ context: artifactContext, configObjectId, receiptId })
+            ? await getWorkflowSnapshot({ context: artifactContext, configObjectId, receiptId })
             : detail.latestSuccessfulSnapshot
           if (!snapshot) {
             return {
               ok: false as const,
-              error: "saved_script_snapshot_not_found",
+              error: "workflow_snapshot_not_found",
               message: receiptId
                 ? "That immutable artifact snapshot was not found."
-                : "This saved Script does not have a successful artifact snapshot yet. Run it explicitly or through its Automation first.",
+                : "This Workflow does not have a successful artifact snapshot yet. Run it explicitly or through its Automation first.",
             }
           }
           if (snapshot.status !== "succeeded" || snapshot.contentDeletedAt !== null
@@ -609,7 +780,7 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
             || snapshot.resultDigest === null || snapshot.rendererVersion !== "codemode-markdown-v1") {
             return {
               ok: false as const,
-              error: "saved_script_snapshot_unavailable",
+              error: "workflow_snapshot_unavailable",
               message: "This artifact snapshot has no readable successful content.",
             }
           }
@@ -633,7 +804,7 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
             ok: true as const,
             markdown: snapshot.markdown,
             payload: {
-              schemaVersion: DYNAMIC_ARTIFACT_APP_SCHEMA_VERSION,
+              schemaVersion: WORKFLOW_ARTIFACT_APP_SCHEMA_VERSION,
               artifact: {
                 title: detail.title,
                 description: detail.description,
@@ -655,129 +826,21 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
           if (error instanceof PluginArchAuthorizationError) {
             return {
               ok: false as const,
-              error: "saved_script_not_found",
-              message: "The saved Script is unavailable to this member.",
+              error: "workflow_not_found",
+              message: "The Workflow is unavailable to this member.",
             }
           }
-          const message = error instanceof Error ? error.message : "saved_script_not_found"
+          const message = error instanceof Error ? error.message : "workflow_not_found"
           return {
             ok: false as const,
-            error: message.includes("not_found") ? "saved_script_not_found" : "saved_script_unavailable",
-            message: "The Program's retained Artifact could not be loaded.",
+            error: message.includes("not_found") ? "workflow_not_found" : "workflow_unavailable",
+            message: "The Workflow's retained Artifact could not be loaded.",
           }
         }
       }
 
-      // Keep the existing generic MCP App tool as the interoperable baseline.
-      // OpenWork's persisted selection only adds a smaller contextual catalog;
-      // it does not replace the standard tool/resource/result contract.
-      registerAgentDynamicArtifactApp({ server, load: loadDynamicArtifact })
-
-      const notifyProgramCatalogChanged = async (extra: {
-        sendNotification: (notification: { method: "notifications/tools/list_changed" | "notifications/resources/list_changed" }) => Promise<void>
-      }) => {
-        await extra.sendNotification({ method: "notifications/tools/list_changed" })
-        if (env.generatedArtifactViewsEnabled) {
-          await extra.sendNotification({ method: "notifications/resources/list_changed" })
-        }
-      }
-
-      server.registerTool(
-        "search_programs",
-        {
-          title: "Search Programs",
-          description: "Search accessible Programs by Library metadata and parent OpenWork Connect Plugin. Results never include retained artifact data, Script source, generated source, compiled HTML, diagnostics, or credentials.",
-          annotations: SEARCH_CAPABILITIES_ANNOTATIONS,
-          inputSchema: z.object({
-            query: z.string().trim().max(255).optional(),
-            readiness: z.enum(["ready", "needs_signin", "needs_admin_setup"]).optional(),
-            source: z.enum(["created", "installed_template"]).optional(),
-            cursor: z.string().trim().min(1).max(160).optional(),
-            limit: z.number().int().min(1).max(50).optional(),
-          }),
-          outputSchema: programSearchOutputSchema,
-        },
-        async ({ query, readiness, source, cursor, limit }) => {
-          const items = artifactContext ? await listProgramLibraryItems({ context: artifactContext }) : []
-          const normalizedQuery = query?.toLocaleLowerCase() ?? ""
-          const filtered = items.filter((item) =>
-            (!normalizedQuery || `${item.name} ${item.description ?? ""}`.toLocaleLowerCase().includes(normalizedQuery))
-            && (!readiness || item.state === readiness)
-            && (!source || item.source.kind === source))
-          const start = cursor ? Math.max(0, filtered.findIndex((item) => item.id === cursor) + 1) : 0
-          const bounded = limit ?? 10
-          const page = filtered.slice(start, start + bounded).map((item) => ({
-            id: item.id,
-            plugin: item.plugin,
-            name: item.name,
-            description: item.description,
-            role: item.role,
-            state: item.state,
-            resultState: item.resultState,
-            latestSuccessfulAt: item.latestSuccessfulAt,
-            viewState: item.viewState,
-            activeViewTitle: item.activeViewTitle,
-            automationCount: item.automationCount,
-            source: item.source,
-          }))
-          const result = {
-            items: page,
-            nextCursor: start + bounded < filtered.length ? page.at(-1)?.id ?? null : null,
-          }
-          return { content: textContent(JSON.stringify(result, null, 2)), structuredContent: result }
-        },
-      )
-
-      server.registerTool(
-        "select_program",
-        {
-          title: "Select Program",
-          description: "Select one accessible Program as this member's current organization-scoped MCP context. Selection persists across chats and devices; it does not install or grant access.",
-          annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-          inputSchema: z.object({ programId: z.string().trim().min(1).max(160) }),
-          outputSchema: programSelectionOutputSchema,
-        },
-        async ({ programId }, extra) => {
-          if (!artifactContext) {
-            return { isError: true, content: textContent(JSON.stringify({ error: "program_not_found" })) }
-          }
-          const selection = await selectProgramForAgent({ context: artifactContext, programId })
-          await notifyProgramCatalogChanged(extra)
-          const result = {
-            selection: {
-              programId: selection.programId,
-              selectedAt: selection.selectedAt,
-            },
-          }
-          return {
-            content: textContent(JSON.stringify(result, null, 2)),
-            structuredContent: result,
-          }
-        },
-      )
-
-      server.registerTool(
-        "clear_program_selection",
-        {
-          title: "Clear Program selection",
-          description: "Clear this member's current organization-scoped Program selection.",
-          annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
-          inputSchema: z.object({}),
-          outputSchema: programSelectionClearedOutputSchema,
-        },
-        async (_request, extra) => {
-          if (artifactContext) await clearProgramAgentSelection(artifactContext)
-          await notifyProgramCatalogChanged(extra)
-          const result = { selection: null }
-          return { content: textContent(JSON.stringify(result)), structuredContent: result }
-        },
-      )
-
-      const selection = artifactContext ? await getProgramAgentSelection(artifactContext) : null
-      const selectedDetail = artifactContext && selection
-        ? await getProgramDetail({ context: artifactContext, configObjectId: selection.programId })
-        : null
-      let registeredSelectedCustomView = false
+      // Keep the generic MCP App tool as the interoperable baseline.
+      registerAgentWorkflowArtifactApp({ server, load: loadWorkflowArtifact })
 
       // This server deploys independently from Desktop. Do not advertise or
       // serve bridge-dependent generated views until the compatible Desktop
@@ -795,11 +858,10 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
           server,
           views: generatedViews,
           loadResource: loadGeneratedResource,
-          loadData: loadDynamicArtifact,
+          loadData: loadWorkflowArtifact,
           save: (request) => saveArtifactViewRevision({ context: artifactContext, ...request }),
           activate: (request) => activateArtifactViewRevision({ context: artifactContext, ...request }),
           retire: (request) => retireArtifactView({ context: artifactContext, ...request }),
-          exposePerViewRenderTools: false,
         })
 
         const exactResource = requestInfo.resourceUri ? parseArtifactViewResourceUri(requestInfo.resourceUri) : null
@@ -812,90 +874,6 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
             loadResource: loadGeneratedResource,
           })
         }
-
-        if (selection && selectedDetail) {
-          const activeView = selectedDetail.views.find((view) => view.status === "active" && view.activeRevisionId !== null)
-          const active = activeView?.activeRevisionId
-            ? await getGeneratedArtifactViewRevision({
-                context: artifactContext,
-                artifactViewId: activeView.id,
-                revisionId: activeView.activeRevisionId,
-              }).catch(() => null)
-            : null
-          const compatibleRevision = active?.revision.buildStatus === "ready"
-            && active.revision.retiredAt === null
-            && active.revision.outputSchemaDigest === selectedDetail.script.currentVersion.outputSchemaDigest
-            ? active.revision
-            : null
-          if (active && compatibleRevision) {
-            if (!generatedViews.some((view) => view.revisions.some((revision) => revision.resourceUri === compatibleRevision.resourceUri))) {
-              registerGeneratedArtifactResource({
-                server,
-                view: active.view,
-                revision: compatibleRevision,
-                loadResource: loadGeneratedResource,
-              })
-            }
-            registerSelectedGeneratedArtifactRenderTool({
-              server,
-              view: active.view,
-              revision: compatibleRevision,
-              loadData: loadDynamicArtifact,
-            })
-            registeredSelectedCustomView = true
-          }
-        }
-      }
-
-      if (artifactContext && selection && selectedDetail) {
-        if (!registeredSelectedCustomView) {
-          registerSelectedDynamicArtifactApp({ server, configObjectId: selection.programId, load: loadDynamicArtifact })
-        }
-
-        server.registerTool(
-          "run_selected_program",
-          {
-            title: `Run selected Program: ${selectedDetail.program.name}`,
-            description: "Execute the selected Program's current immutable Script version after validating access, input schema, and capability readiness.",
-            annotations: EXECUTE_CAPABILITY_ANNOTATIONS,
-            inputSchema: z.object({ input: z.unknown().optional() }),
-            outputSchema: programRunOutputSchema,
-          },
-          async ({ input }) => {
-            await requirePluginArchResourceRole({
-              context: artifactContext,
-              requireFreshSession: false,
-              resourceId: normalizeDenTypeId("configObject", selection.programId),
-              resourceKind: "config_object",
-              role: "editor",
-            })
-            const execution = await executeMarketplaceCapability({
-              organizationId: principal.organizationId,
-              member: memberIdentity,
-              pluginId: selectedDetail.script.pluginId,
-              configObjectId: selectedDetail.script.configObjectId,
-              configObjectVersionId: selectedDetail.script.currentVersion.id,
-              body: input,
-              codemodeEnabled: true,
-              validateScriptOutput: true,
-              buildTools: () => buildCapabilityToolTree(capabilityContext),
-            })
-            if (!execution.ok || execution.result.status !== "executed") {
-              const message = execution.ok ? execution.result.hint ?? "The selected Program could not run." : execution.message
-              return { isError: true, content: textContent(JSON.stringify({ error: "program_run_failed", message })) }
-            }
-            const result = {
-              status: "succeeded" as const,
-              value: execution.result.value,
-              receiptId: execution.result.receiptId ?? null,
-              resultDigest: execution.result.resultDigest ?? null,
-            }
-            return {
-              content: textContent(JSON.stringify(result, null, 2)),
-              structuredContent: result,
-            }
-          },
-        )
       }
 
       server.registerTool(
@@ -929,7 +907,7 @@ export function registerAgentMcpRoutes<T extends { Variables: RequestIdVariables
               timeoutMs: 170_000,
             })
             const finishedAt = new Date()
-            await recordCodemodeScriptResult(db, {
+            await recordWorkflowResult(db, {
               organizationId,
               orgMembershipId: memberIdentity?.orgMembershipId,
               source: "adhoc",

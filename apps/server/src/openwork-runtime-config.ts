@@ -34,6 +34,7 @@ import {
   runtimePluginList,
   type RuntimeOpencodeConfig,
 } from "./runtime-opencode-config-store.js";
+import { CONNECT_MCP_SERVER_NAME_PREFIX } from "./connect-mcp-server-catalog.js";
 
 const OPENWORK_AGENT_PROMPT = `You are OpenWork.
 
@@ -131,7 +132,8 @@ export function buildOpenworkRuntimeConfigObjectFromSnapshot(
       ...runtimePluginList(runtimeConfig),
     ],
     ...(disabledProviders.length ? { disabled_providers: disabledProviders } : {}),
-    mcp: runtimeMcpMap(runtimeConfig),
+    mcp: Object.fromEntries(Object.entries(runtimeMcpMap(runtimeConfig))
+      .filter(([name]) => !name.startsWith(CONNECT_MCP_SERVER_NAME_PREFIX))),
     ...(Object.keys(provider).length ? { provider } : {}),
   };
 }

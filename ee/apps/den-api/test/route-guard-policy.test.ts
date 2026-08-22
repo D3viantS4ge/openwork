@@ -77,7 +77,6 @@ const routeGuardExceptions = new Map<string, string>([
   ["ALL /v1/orgs/:orgId/*", "legacy proxy forwards to guarded /v1 routes"],
   ["POST /v1/webhooks/connectors/github", "GitHub webhook signature is validated in-handler"],
   ["POST /v1/webhooks/stripe", "Stripe webhook signature is validated in-handler"],
-  ["POST /v1/webhooks/telegram/:connectionId", "Telegram webhook secret is validated in-handler"],
   ["POST /v1/workers/:id/activity-heartbeat", "worker heartbeat token is validated in-handler"],
   ["GET /.well-known/oauth-protected-resource", "public OAuth protected-resource metadata"],
   ["GET /.well-known/oauth-protected-resource/mcp", "public OAuth protected-resource metadata"],

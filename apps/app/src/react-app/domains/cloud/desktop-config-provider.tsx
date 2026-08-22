@@ -70,6 +70,7 @@ const DESKTOP_CONFIG_ITEMS = [
   "brandLogoUrl",
   "brandIconUrl",
   "brandAccentColor",
+  "automationsEnabled",
   "connectEnabled",
   "onboardingPrompts",
   "onboardingPromptDescriptions",

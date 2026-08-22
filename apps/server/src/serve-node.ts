@@ -79,10 +79,25 @@ async function waitForDrainOrClose(nodeRes: ServerResponse): Promise<void> {
 /**
  * Convert a Node.js IncomingMessage into a Web API Request.
  */
-function toWebRequest(nodeReq: IncomingMessage, hostname: string, port: number): Request {
+function toWebRequest(
+  nodeReq: IncomingMessage,
+  hostname: string,
+  port: number,
+): { request: Request; detachCancellation: () => void } {
   const url = `http://${hostname}:${port}${nodeReq.url ?? "/"}`;
   const method = nodeReq.method ?? "GET";
   const headers = new Headers();
+  const controller = new AbortController();
+  const abort = () => {
+    if (!controller.signal.aborted) {
+      controller.abort(new DOMException("The operation was aborted", "AbortError"));
+    }
+  };
+  if (nodeReq.aborted) abort();
+  else {
+    nodeReq.once("aborted", abort);
+    nodeReq.socket.once("close", abort);
+  }
 
   // Node headers can be string | string[] | undefined
   for (const [key, value] of Object.entries(nodeReq.headers)) {
@@ -102,13 +117,21 @@ function toWebRequest(nodeReq: IncomingMessage, hostname: string, port: number):
     ? (Readable.toWeb(nodeReq) as unknown as ReadableStream<Uint8Array>)
     : null;
 
-  return new Request(url, {
+  const request = new Request(url, {
     method,
     headers,
     body,
+    signal: controller.signal,
     // @ts-expect-error duplex is required for streaming request bodies in Node
     duplex: hasBody ? "half" : undefined,
   });
+  return {
+    request,
+    detachCancellation: () => {
+      nodeReq.off("aborted", abort);
+      nodeReq.socket.off("close", abort);
+    },
+  };
 }
 
 /**
@@ -178,9 +201,11 @@ export function serve(options: ServeOptions): Promise<ServeResult> {
       console.error("[serve-node] Response stream error:", error);
     });
 
+    let detachCancellation: (() => void) | undefined;
     try {
-      const webReq = toWebRequest(nodeReq, hostname, boundPort);
-      const webRes = await fetchHandler(webReq);
+      const webRequest = toWebRequest(nodeReq, hostname, boundPort);
+      detachCancellation = webRequest.detachCancellation;
+      const webRes = await fetchHandler(webRequest.request);
       await writeWebResponse(webRes, nodeRes);
     } catch (error) {
       if (isExpectedConnectionAbort(error)) {
@@ -195,6 +220,8 @@ export function serve(options: ServeOptions): Promise<ServeResult> {
         nodeRes.writeHead(500, { "Content-Type": "application/json" });
       }
       endResponse(nodeRes, JSON.stringify({ error: "internal_error" }));
+    } finally {
+      detachCancellation?.();
     }
   });
 

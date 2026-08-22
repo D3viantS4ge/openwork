@@ -15,7 +15,7 @@ import { denTypeIdColumn, encryptedColumn, encryptedMediumTextColumn } from "../
 import { MemberTable, OrganizationTable } from "../org"
 import { TeamTable } from "../teams"
 
-export const configObjectTypeValues = ["skill", "agent", "command", "tool", "mcp", "hook", "context", "custom", "script", "app"] as const
+export const configObjectTypeValues = ["skill", "agent", "command", "tool", "mcp", "hook", "context", "custom", "script", "workflow", "app"] as const
 export const configObjectSourceModeValues = ["cloud", "import", "connector"] as const
 export const configObjectStatusValues = ["active", "inactive", "deleted", "archived", "ingestion_error"] as const
 export const configObjectCreatedViaValues = ["cloud", "import", "connector", "system"] as const
@@ -343,6 +343,7 @@ export const ConnectorTargetTable = mysqlTable(
   (table) => [
     index("connector_target_organization_id").on(table.organizationId),
     index("connector_target_connector_type").on(table.connectorType),
+    index("connector_target_type_created_id").on(table.connectorType, table.createdAt, table.id),
     index("connector_target_target_kind").on(table.targetKind),
     uniqueIndex("connector_target_instance_remote_id").on(table.connectorInstanceId, table.remoteId),
   ],

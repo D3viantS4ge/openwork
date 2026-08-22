@@ -4,6 +4,8 @@ import {
   AUTOMATION_MAXIMUM_ATTEMPTS,
   automationOccurrenceIdentity,
   automationRevisionDigest,
+  desktopClaimDeadline,
+  missedDesktopRunMessage,
   nextAutomationOccurrence,
 } from "@openwork/automations"
 import type {
@@ -32,6 +34,7 @@ import {
 } from "@openwork-ee/den-db/schema"
 import { createDenTypeId, normalizeDenTypeId } from "@openwork-ee/utils/typeid"
 import { db } from "../db.js"
+import { appLogger } from "../observability/logger.js"
 import { automationUpdateChangedRows } from "./update-result.js"
 import { cloudArtifactStateUpdate } from "./cloud-artifact-state.js"
 
@@ -41,6 +44,7 @@ type RunRow = typeof AutomationRunTable.$inferSelect
 type EventRow = typeof AutomationRunEventTable.$inferSelect
 type DesktopClaim = { automation: Automation; revision: AutomationRevision; run: AutomationRun }
 
+const logger = appLogger.child({ component: "automation_repository" })
 const emptyUsage: AutomationUsage = { inputTokens: null, outputTokens: null, costMicros: null }
 
 const normalizeAutomationId = (value: string) => normalizeDenTypeId("automation", value)
@@ -51,6 +55,7 @@ const normalizeMemberId = (value: string) => normalizeDenTypeId("member", value)
 
 const ms = (value: Date | null): number | null => value?.getTime() ?? null
 const date = (value: number | null): Date | null => value === null ? null : new Date(value)
+const idPrefix = (value: string) => value.slice(0, 8)
 
 function mapAutomation(row: AutomationRow): Automation {
   return {
@@ -93,7 +98,7 @@ function mapRevision(row: RevisionRow): AutomationRevision {
 }
 
 function mapRun(row: RunRow): AutomationRun {
-  const receipt = row.execution_target === "cloud" && typeof row.engine_receipt === "object" && row.engine_receipt !== null
+  const receipt = typeof row.engine_receipt === "object" && row.engine_receipt !== null
     ? row.engine_receipt as Record<string, unknown>
     : null
   const nativeThreadId = typeof receipt?.nativeThreadId === "string" ? receipt.nativeThreadId : null
@@ -146,7 +151,7 @@ function normalizedDefinition(definition: Parameters<AutomationRepository["creat
       schedule: definition.schedule,
       action: definition.action,
       executionTarget: definition.executionTarget,
-      instructions: definition.action.kind === "agent" ? definition.action.instructions : "Execute the pinned saved Code Mode script.",
+      instructions: definition.action.kind === "agent" ? definition.action.instructions : "Execute the pinned Workflow.",
       model,
     }
   }
@@ -273,7 +278,7 @@ export class DenAutomationRepository implements AutomationRepository {
           }
         : currentAction)
       const executionTarget = current.execution_target
-      const instructions = action.kind === "agent" ? action.instructions : "Execute the pinned saved Code Mode script."
+      const instructions = action.kind === "agent" ? action.instructions : "Execute the pinned Workflow."
       const schedule = input.changes.schedule ?? current.schedule_config
       const model = action.kind === "agent"
         ? action.model
@@ -414,6 +419,11 @@ export class DenAutomationRepository implements AutomationRepository {
       const nextDueAt = input.trigger === "manual"
         ? input.automation.nextDueAt
         : nextAutomationOccurrence(input.revision.schedule, input.scheduledFor ?? input.now)
+      const claimDeadlineAt = desktopClaimDeadline({
+        now: input.now,
+        windowMs: input.claimDeadlineMs ?? input.leaseMs,
+        nextDueAt,
+      })
       await tx.insert(AutomationRunTable).values({
         id: newRunId,
         automation_id: normalizeAutomationId(input.automation.id),
@@ -423,7 +433,7 @@ export class DenAutomationRepository implements AutomationRepository {
         idempotency_key: identity.idempotencyKey,
         status: overlap ? "skipped" : "queued",
         execution_target: input.revision.executionTarget ?? "desktop",
-        claim_deadline_at: overlap ? null : new Date(input.now + (input.claimDeadlineMs ?? input.leaseMs)),
+        claim_deadline_at: overlap ? null : new Date(claimDeadlineAt),
         lease_owner: null,
         lease_expires_at: null,
         heartbeat_at: null,
@@ -649,7 +659,7 @@ export class DenAutomationRepository implements AutomationRepository {
       now: input.now,
     })
     await db.update(AutomationRunTable).set({
-      codemode_receipt_id: input.codemodeReceiptId ? normalizeDenTypeId("codemodeRun", input.codemodeReceiptId) : null,
+      codemode_receipt_id: input.codemodeReceiptId ? normalizeDenTypeId("workflowRun", input.codemodeReceiptId) : null,
       validated_result: input.validatedResult,
       updated_at: new Date(input.now),
     }).where(eq(AutomationRunTable.id, normalizeRunId(input.runId)))
@@ -752,6 +762,7 @@ export class DenAutomationRepository implements AutomationRepository {
         result_summary: input.resultSummary,
         usage: input.usage,
         error: input.error,
+        ...(input.engineReceipt === undefined ? {} : { engine_receipt: input.engineReceipt }),
         finished_at: new Date(input.now),
         lease_expires_at: null,
         heartbeat_at: new Date(input.now),
@@ -847,27 +858,45 @@ export class DenAutomationRepository implements AutomationRepository {
       existing[0].organizationId !== normalizeOrganizationId(input.organizationId)
       || existing[0].ownerMemberId !== normalizeMemberId(input.ownerMemberId)
     )) throw new Error("automation_runner_identity_conflict")
-    await db.insert(AutomationRunnerTable).values({
-      id: input.runnerId,
-      organization_id: normalizeOrganizationId(input.organizationId),
-      owner_member_id: normalizeMemberId(input.ownerMemberId),
-      protocol_version: input.protocolVersion,
-      supported_execution_targets: input.supportedExecutionTargets,
-      app_version: input.appVersion,
-      platform: input.platform,
-      concurrency: input.concurrency,
-      last_seen_at: now,
-      created_at: now,
-      updated_at: now,
-    }).onDuplicateKeyUpdate({ set: {
-      protocol_version: input.protocolVersion,
-      supported_execution_targets: input.supportedExecutionTargets,
-      app_version: input.appVersion,
-      platform: input.platform,
-      concurrency: input.concurrency,
-      last_seen_at: now,
-      updated_at: now,
-    } })
+    try {
+      await db.insert(AutomationRunnerTable).values({
+        id: input.runnerId,
+        organization_id: normalizeOrganizationId(input.organizationId),
+        owner_member_id: normalizeMemberId(input.ownerMemberId),
+        protocol_version: input.protocolVersion,
+        supported_execution_targets: input.supportedExecutionTargets,
+        app_version: input.appVersion,
+        platform: input.platform,
+        concurrency: input.concurrency,
+        last_seen_at: now,
+        created_at: now,
+        updated_at: now,
+      }).onDuplicateKeyUpdate({ set: {
+        protocol_version: input.protocolVersion,
+        supported_execution_targets: input.supportedExecutionTargets,
+        app_version: input.appVersion,
+        platform: input.platform,
+        concurrency: input.concurrency,
+        last_seen_at: now,
+        updated_at: now,
+      } })
+    } catch (error) {
+      logger.error("automation runner registration upsert failed", {
+        error,
+        runner_id_prefix: idPrefix(input.runnerId),
+        runner_id_length: input.runnerId.length,
+        organization_id: normalizeOrganizationId(input.organizationId),
+        owner_member_id: normalizeMemberId(input.ownerMemberId),
+        existing_runner: existing[0] ? "same_owner" : "none",
+        protocol_version: input.protocolVersion,
+        supported_execution_targets: input.supportedExecutionTargets.join(","),
+        supported_execution_target_count: input.supportedExecutionTargets.length,
+        app_version_length: input.appVersion.length,
+        platform: input.platform,
+        concurrency: input.concurrency,
+      })
+      throw error
+    }
   }
 
   async touchDesktopRunner(input: { organizationId: string; ownerMemberId: string; runnerId: string; now: number }) {
@@ -1087,22 +1116,64 @@ export class DenAutomationRepository implements AutomationRepository {
     ))
   }
 
+  /** Latest moment any of this owner's desktop runners registered or asked for work. */
+  async desktopRunnerLastSeenAt(input: { organizationId: string; ownerMemberId: string }): Promise<number | null> {
+    const rows = await db.select({ lastSeenAt: AutomationRunnerTable.last_seen_at })
+      .from(AutomationRunnerTable)
+      .where(and(
+        eq(AutomationRunnerTable.organization_id, normalizeOrganizationId(input.organizationId)),
+        eq(AutomationRunnerTable.owner_member_id, normalizeMemberId(input.ownerMemberId)),
+      )).orderBy(desc(AutomationRunnerTable.last_seen_at)).limit(1)
+    return rows[0]?.lastSeenAt?.getTime() ?? null
+  }
+
+  private async missedDesktopReason(input: {
+    organizationId: string
+    ownerMemberId: string
+    now: number
+  }): Promise<string> {
+    // The run being expired is still queued, so a running row is always a
+    // different occupied occurrence.
+    const busy = await db.select({ id: AutomationRunTable.id })
+      .from(AutomationRunTable)
+      .innerJoin(AutomationTable, eq(AutomationTable.id, AutomationRunTable.automation_id))
+      .where(and(
+        eq(AutomationTable.organization_id, normalizeOrganizationId(input.organizationId)),
+        eq(AutomationTable.owner_member_id, normalizeMemberId(input.ownerMemberId)),
+        eq(AutomationRunTable.execution_target, "desktop"),
+        eq(AutomationRunTable.status, "running"),
+      )).limit(1)
+    return missedDesktopRunMessage({
+      busy: Boolean(busy[0]),
+      lastSeenAt: await this.desktopRunnerLastSeenAt(input),
+      now: input.now,
+    })
+  }
+
   async expireUnclaimedDesktop(input: { now: number; limit: number }): Promise<string[]> {
-    const rows = await db.select().from(AutomationRunTable).where(and(
-      eq(AutomationRunTable.status, "queued"),
-      eq(AutomationRunTable.execution_target, "desktop"),
-      lte(AutomationRunTable.claim_deadline_at, new Date(input.now)),
-    )).orderBy(asc(AutomationRunTable.claim_deadline_at)).limit(input.limit)
+    const rows = await db.select({ run: AutomationRunTable, automation: AutomationTable })
+      .from(AutomationRunTable)
+      .innerJoin(AutomationTable, eq(AutomationTable.id, AutomationRunTable.automation_id))
+      .where(and(
+        eq(AutomationRunTable.status, "queued"),
+        eq(AutomationRunTable.execution_target, "desktop"),
+        lte(AutomationRunTable.claim_deadline_at, new Date(input.now)),
+      )).orderBy(asc(AutomationRunTable.claim_deadline_at)).limit(input.limit)
     const expired: string[] = []
-    for (const run of rows) {
+    for (const { run, automation } of rows) {
+      const message = await this.missedDesktopReason({
+        organizationId: automation.organization_id,
+        ownerMemberId: automation.owner_member_id,
+        now: input.now,
+      })
       await db.update(AutomationRunTable).set({
         status: "skipped",
         error: {
           code: "runner_unavailable",
-          message: "Missed — desktop runner unavailable.",
+          message,
           retryable: false,
         },
-        result_summary: "Missed — desktop runner unavailable.",
+        result_summary: message,
         finished_at: new Date(input.now),
         updated_at: new Date(input.now),
       }).where(and(eq(AutomationRunTable.id, run.id), eq(AutomationRunTable.status, "queued")))

@@ -41,11 +41,6 @@
       "development": "./src/schema/teams.ts",
       "default": "./dist/schema/teams.js"
     },
-    "./schema/telegram": {
-      "types": "./src/schema/telegram.ts",
-      "development": "./src/schema/telegram.ts",
-      "default": "./dist/schema/telegram.js"
-    },
     "./schema/subscriptions": {
       "types": "./src/schema/subscriptions.ts",
       "development": "./src/schema/subscriptions.ts",

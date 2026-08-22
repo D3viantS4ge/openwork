@@ -1,123 +1,22 @@
 "use client";
 
-import { detectPlatform, type DetectedPlatform } from "@openwork/ui/react";
-import { useEffect, useState } from "react";
 import { Download } from "lucide-react";
-import { requestJson } from "../../_lib/den-flow";
-import { getInstallConfigErrorMessage } from "../../_lib/install-errors";
-import {
-  buildInstallDownloadHref,
-  detectedInstallPlatform,
-  downloadCtaLabel,
-  installerApiUrlFromConfig,
-  installTokenFromPageUrl,
-} from "../../_lib/install-download";
+import { useRouter } from "next/navigation";
 import { DenButton } from "../../_components/ui/button";
-import { createOrganizationInstallLink } from "../../_lib/install-link-data";
 import { useOrgDashboard } from "../_providers/org-dashboard-provider";
 
 const OPEN_APP_URL = "openwork://open";
 
 /**
  * Members have exactly one job on the dashboard: install the app. The
- * install link is minted by the workspace's own den (cloud or self-hosted),
- * so the download is preconfigured to connect to the right server — models,
- * marketplaces, and plugins all sync inside the app after sign-in.
+ * authenticated install guide resolves the active workspace directly, so no
+ * bearer token needs to appear in the page URL or browser history.
  */
 export function MemberDashboardScreen() {
-  const { activeOrg, orgId } = useOrgDashboard();
-  const [busyAction, setBusyAction] = useState<"download" | "copy" | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [detected, setDetected] = useState<DetectedPlatform | null>(null);
-  const [downloadHref, setDownloadHref] = useState<string | null>(null);
+  const router = useRouter();
+  const { activeOrg } = useOrgDashboard();
 
   const orgName = activeOrg?.name ?? "Your workspace";
-
-  useEffect(() => {
-    let cancelled = false;
-    void detectPlatform()
-      .then((platform) => {
-        if (!cancelled) {
-          setDetected(platform ?? { os: "macos", arch: "arm64", osVersion: null, source: "ua" });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setDetected({ os: "macos", arch: "arm64", osVersion: null, source: "ua" });
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  async function mintInstallLink() {
-    if (!orgId) {
-      throw new Error("No active workspace. Reload and try again.");
-    }
-    return createOrganizationInstallLink(orgId, false);
-  }
-
-  function startInstallerDownload(href: string) {
-    const link = document.createElement("a");
-    link.href = href;
-    link.rel = "noopener noreferrer";
-    link.target = "_blank";
-    link.setAttribute("data-testid", "member-download-link");
-    document.body.append(link);
-    link.click();
-    link.remove();
-  }
-
-  async function handleDownload() {
-    setBusyAction("download");
-    setError(null);
-    try {
-      const token = installTokenFromPageUrl(await mintInstallLink());
-      if (!token) {
-        throw new Error("The install link response was incomplete.");
-      }
-
-      const { response, payload } = await requestJson(
-        `/v1/install-config?token=${encodeURIComponent(token)}`,
-        { method: "GET" },
-        12000,
-      );
-      if (!response.ok) {
-        throw new Error(getInstallConfigErrorMessage(payload, response.status));
-      }
-
-      const apiUrl = installerApiUrlFromConfig(payload);
-      if (!apiUrl) {
-        throw new Error("This install link returned incomplete setup details.");
-      }
-
-      const platform = detectedInstallPlatform(detected) ?? "mac-arm64";
-      const href = buildInstallDownloadHref(apiUrl, platform, token);
-      setDownloadHref(href);
-      startInstallerDownload(href);
-    } catch (downloadError) {
-      setError(downloadError instanceof Error ? downloadError.message : "Could not prepare your download.");
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function handleCopyInstallLink() {
-    setBusyAction("copy");
-    setError(null);
-    setCopied(false);
-    try {
-      await navigator.clipboard.writeText(await mintInstallLink());
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1800);
-    } catch (copyError) {
-      setError(copyError instanceof Error ? copyError.message : "Could not copy the install link.");
-    } finally {
-      setBusyAction(null);
-    }
-  }
 
   return (
     <div className="flex min-h-[72vh] items-center justify-center px-4" data-testid="member-dashboard">
@@ -133,36 +32,13 @@ export function MemberDashboardScreen() {
         <DenButton
           className="mt-8"
           data-testid="member-download-app"
-          data-download-href={downloadHref ?? undefined}
           icon={Download}
-          loading={busyAction === "download"}
-          disabled={busyAction !== null}
-          onClick={() => void handleDownload()}
+          onClick={() => router.push("/install")}
         >
-          {busyAction === "download" ? "Preparing your download..." : downloadCtaLabel(detected?.os ?? null)}
+          Get OpenWork
         </DenButton>
 
-        <div className="mt-3 flex items-center gap-1.5 text-[12px] text-gray-400">
-          <span>macOS · Windows · Linux</span>
-          <span aria-hidden className="text-gray-300">
-            ·
-          </span>
-          <button
-            type="button"
-            data-testid="member-copy-install-link"
-            onClick={() => void handleCopyInstallLink()}
-            disabled={busyAction !== null}
-            className="font-medium text-gray-600 transition hover:text-gray-950"
-          >
-            {copied ? "Copied" : "Copy install link instead"}
-          </button>
-        </div>
-
-        {error ? (
-          <p role="alert" className="mt-4 text-[13px] text-red-600">
-            {error}
-          </p>
-        ) : null}
+        <p className="mt-3 text-[12px] text-gray-400">macOS · Windows · Linux</p>
 
         <p className="mt-10 w-full border-t border-gray-100 pt-5 text-[13px] text-gray-500">
           Already installed?{" "}

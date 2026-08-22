@@ -29,7 +29,7 @@ import {
 import { createDenTypeId, normalizeDenTypeId } from "@openwork-ee/utils/typeid"
 import { hasSkillFrontmatterName, parseSkillMarkdown } from "@openwork-ee/utils"
 import type { PluginArchActorContext, PluginArchResourceKind, PluginArchRole } from "./access.js"
-import { isPluginArchOrgAdmin, PluginArchAuthorizationError, requirePluginArchResourceRole, resolvePluginArchGrantRole, resolvePluginArchResourceRole } from "./access.js"
+import { isPluginArchOrgAdmin, PluginArchAuthorizationError, pluginArchResourceHasExpandedAudience, requirePluginArchResourceRole, resolvePluginArchGrantRole, resolvePluginArchResourceRole } from "./access.js"
 import { clampCodePoints, clampUtf8Bytes, PROJECTION_TEXT_MAX_BYTES, PROJECTION_TITLE_MAX_CHARS } from "./projection-text.js"
 import {
   buildGithubAppInstallUrl,
@@ -70,7 +70,7 @@ import { db } from "../../../db.js"
 import { env } from "../../../env.js"
 import { appLogger } from "../../../observability/logger.js"
 import { roleIncludesOwner } from "../../../orgs.js"
-import { redactSavedScriptNormalizedPayloadAuthoringDetails } from "../../../saved-script-projections.js"
+import { redactWorkflowNormalizedPayloadAuthoringDetails } from "../../../workflow-projections.js"
 import { memberFacingMcpConnectionsEnabled } from "../../../capability-sources/external-mcp-rollout.js"
 import { comparablePluginMcpRequirementUrl, marketplaceMcpServerEntries, resolveMarketplacePluginCloudReadiness } from "../../../mcp/marketplace-capabilities.js"
 import { assertPublicUrl } from "../../../capability-sources/url-guard.js"
@@ -703,9 +703,9 @@ async function getLatestVersions(configObjectIds: ConfigObjectId[]) {
 }
 
 function serializeVersion(row: ConfigObjectVersionRow) {
-  // Program authoring data belongs to the role-aware Program management API.
+  // Workflow authoring data belongs to the role-aware Workflow management API.
   // Generic config-object reads must not bypass that boundary for viewers.
-  const isCodemodeProgramVersion = row.schemaVersion === "codemode-script-v1"
+  const isCodemodeWorkflowVersion = row.schemaVersion === "codemode-script-v1"
   return {
     configObjectId: row.configObjectId,
     connectorSyncEventId: row.connectorSyncEventId,
@@ -714,10 +714,10 @@ function serializeVersion(row: ConfigObjectVersionRow) {
     createdVia: row.createdVia,
     id: row.id,
     isDeletedVersion: row.isDeletedVersion,
-    normalizedPayloadJson: isCodemodeProgramVersion
-      ? redactSavedScriptNormalizedPayloadAuthoringDetails(row.normalizedPayloadJson)
+    normalizedPayloadJson: isCodemodeWorkflowVersion
+      ? redactWorkflowNormalizedPayloadAuthoringDetails(row.normalizedPayloadJson)
       : row.normalizedPayloadJson,
-    rawSourceText: isCodemodeProgramVersion ? null : row.rawSourceText,
+    rawSourceText: isCodemodeWorkflowVersion ? null : row.rawSourceText,
     schemaVersion: row.schemaVersion,
     sourceRevisionRef: row.sourceRevisionRef,
   }
@@ -1259,12 +1259,22 @@ async function ensureVisibleConfigObject(context: PluginArchActorContext, config
   return row
 }
 
-async function ensureEditablePlugin(context: PluginArchActorContext, pluginId: PluginId) {
+async function ensureEditablePlugin(
+  context: PluginArchActorContext,
+  pluginId: PluginId,
+  requireFreshSession?: boolean,
+) {
   const row = await getPluginRow(context.organizationContext.organization.id, pluginId)
   if (!row) {
     throw new PluginArchRouteFailure(404, "plugin_not_found", "Plugin not found.")
   }
-  await requirePluginArchResourceRole({ context, resourceId: row.id, resourceKind: "plugin", role: "editor" })
+  await requirePluginArchResourceRole({
+    context,
+    requireFreshSession,
+    resourceId: row.id,
+    resourceKind: "plugin",
+    role: "editor",
+  })
   return row
 }
 
@@ -1607,6 +1617,7 @@ export async function createConfigObject(input: {
   context: PluginArchActorContext
   objectType: ConfigObjectRow["objectType"]
   pluginIds?: PluginId[]
+  requireFreshSession?: boolean
   sourceMode: ConfigObjectRow["sourceMode"]
   value: ConfigObjectInput
 }) {
@@ -1614,8 +1625,11 @@ export async function createConfigObject(input: {
     throw new PluginArchRouteFailure(400, "invalid_request", "Connector-managed config objects must be created through connector sync.")
   }
 
+  const targetExposure = await Promise.all((input.pluginIds ?? []).map((pluginId) =>
+    pluginArchResourceHasExpandedAudience({ context: input.context, resourceId: pluginId, resourceKind: "plugin" })))
+  const requireFreshSession = input.requireFreshSession ?? targetExposure.some(Boolean)
   for (const pluginId of input.pluginIds ?? []) {
-    await ensureEditablePlugin(input.context, pluginId)
+    await ensureEditablePlugin(input.context, pluginId, requireFreshSession)
   }
 
   const now = new Date()
@@ -1746,7 +1760,8 @@ export async function createConfigObjectVersion(input: { context: PluginArchActo
   if (!row) {
     throw new PluginArchRouteFailure(404, "config_object_not_found", "Config object not found.")
   }
-  await requirePluginArchResourceRole({ context: input.context, resourceId: row.id, resourceKind: "config_object", role: "editor" })
+  const requireFreshSession = await pluginArchResourceHasExpandedAudience({ context: input.context, resourceId: row.id, resourceKind: "config_object" })
+  await requirePluginArchResourceRole({ context: input.context, requireFreshSession, resourceId: row.id, resourceKind: "config_object", role: "editor" })
 
   const now = new Date()
   const projection = deriveProjection({ objectType: row.objectType, value: input.value })
@@ -1786,7 +1801,8 @@ export async function setConfigObjectLifecycle(input: { context: PluginArchActor
   if (!row) {
     throw new PluginArchRouteFailure(404, "config_object_not_found", "Config object not found.")
   }
-  await requirePluginArchResourceRole({ context: input.context, resourceId: row.id, resourceKind: "config_object", role: "manager" })
+  const requireFreshSession = await pluginArchResourceHasExpandedAudience({ context: input.context, resourceId: row.id, resourceKind: "config_object" })
+  await requirePluginArchResourceRole({ context: input.context, requireFreshSession, resourceId: row.id, resourceKind: "config_object", role: "manager" })
   const now = new Date()
   const patch = input.action === "archive"
     ? { deletedAt: null, status: "archived" as const, updatedAt: now }
@@ -1824,9 +1840,9 @@ export async function listConfigObjectPlugins(input: { context: PluginArchActorC
 
 export async function attachConfigObjectToPlugin(input: { context: PluginArchActorContext; configObjectId: ConfigObjectId; membershipSource?: PluginMembershipRow["membershipSource"]; pluginId: PluginId }) {
   const configObject = await ensureVisibleConfigObject(input.context, input.configObjectId)
-  if (configObject.objectType === "script") {
-    // Adding a Program to a Plugin can expand its audience through Plugin and
-    // Marketplace grants, so only a Program manager may make that sharing
+  if (configObject.objectType === "workflow" || configObject.objectType === "script") {
+    // Adding a Workflow to a Plugin can expand its audience through Plugin and
+    // Marketplace grants, so only a Workflow manager may make that sharing
     // decision. Other config-object membership behavior stays compatible.
     await requirePluginArchResourceRole({
       context: input.context,
@@ -1867,7 +1883,7 @@ export async function attachConfigObjectToPlugin(input: { context: PluginArchAct
 
 export async function removeConfigObjectFromPlugin(input: { context: PluginArchActorContext; configObjectId: ConfigObjectId; pluginId: PluginId }) {
   const configObject = await ensureVisibleConfigObject(input.context, input.configObjectId)
-  if (configObject.objectType === "script") {
+  if (configObject.objectType === "workflow" || configObject.objectType === "script") {
     await requirePluginArchResourceRole({
       context: input.context,
       resourceId: configObject.id,
@@ -2372,22 +2388,7 @@ export async function listMeEffectivePluginAccess(input: { context: PluginArchAc
 
 export async function listMeLibraryPluginItems(input: { context: PluginArchActorContext }) {
   const result = await listMeEffectivePluginAccessWithComponentKinds(input)
-  const remoteApps = result.items.length === 0
-    ? []
-    : await db.select({
-      activeVersionId: RemoteMcpAppTable.activeVersionId,
-      configObjectId: RemoteMcpAppTable.configObjectId,
-      pluginId: RemoteMcpAppTable.pluginId,
-      sourceUrl: RemoteMcpAppTable.sourceUrl,
-      status: RemoteMcpAppTable.status,
-    }).from(RemoteMcpAppTable).where(and(
-      eq(RemoteMcpAppTable.organizationId, input.context.organizationContext.organization.id),
-      inArray(RemoteMcpAppTable.pluginId, result.items.map((item) => item.plugin.id)),
-    ))
-  const remoteAppsByPluginId = new Map(remoteApps.map((app) => [app.pluginId, app]))
-  return result.items.flatMap((item) => {
-    const remoteApp = remoteAppsByPluginId.get(item.plugin.id)
-    const pluginItem = {
+  return result.items.map((item) => ({
       type: "plugin" as const,
       id: item.plugin.id,
       name: item.plugin.name,
@@ -2397,23 +2398,7 @@ export async function listMeLibraryPluginItems(input: { context: PluginArchActor
       sourceRepositoryUrl: item.plugin.sourceRepositoryUrl,
       edges: item.edges,
       role: item.role,
-    }
-    return remoteApp
-      ? [pluginItem, {
-        type: "app" as const,
-        id: remoteApp.configObjectId,
-        pluginId: item.plugin.id,
-        name: item.plugin.name,
-        description: item.plugin.description,
-        sourceUrl: remoteApp.sourceUrl,
-        status: remoteApp.status,
-        activeVersionId: remoteApp.activeVersionId,
-        state: "ready" as const,
-        edges: item.edges,
-        role: item.role,
-      }]
-      : [pluginItem]
-  })
+  }))
 }
 
 function memberConnectionState(connection: MemberUsableConnectionFacts) {
@@ -2691,6 +2676,7 @@ export async function createPluginBundle(input: {
       context: input.context,
       objectType: component.type,
       pluginIds: [plugin.id],
+      requireFreshSession: false,
       sourceMode: "cloud",
       value: component.value,
     })
@@ -2721,7 +2707,8 @@ export async function createPluginBundle(input: {
 }
 
 export async function updatePlugin(input: { context: PluginArchActorContext; description?: string | null; name?: string; pluginId: PluginId }) {
-  const row = await ensureEditablePlugin(input.context, input.pluginId)
+  const requireFreshSession = await pluginArchResourceHasExpandedAudience({ context: input.context, resourceId: input.pluginId, resourceKind: "plugin" })
+  const row = await ensureEditablePlugin(input.context, input.pluginId, requireFreshSession)
   const updatedAt = new Date()
   await db.update(PluginTable).set({
     description: input.description === undefined ? row.description : normalizeOptionalString(input.description ?? undefined),
@@ -2733,7 +2720,8 @@ export async function updatePlugin(input: { context: PluginArchActorContext; des
 
 export async function setPluginLifecycle(input: { action: "archive" | "restore"; context: PluginArchActorContext; pluginId: PluginId }) {
   const row = await ensureVisiblePlugin(input.context, input.pluginId)
-  await requirePluginArchResourceRole({ context: input.context, resourceId: row.id, resourceKind: "plugin", role: "manager" })
+  const requireFreshSession = await pluginArchResourceHasExpandedAudience({ context: input.context, resourceId: row.id, resourceKind: "plugin" })
+  await requirePluginArchResourceRole({ context: input.context, requireFreshSession, resourceId: row.id, resourceKind: "plugin", role: "manager" })
   const updatedAt = new Date()
   await db.update(PluginTable).set({
     deletedAt: input.action === "archive" ? row.deletedAt : null,
@@ -2748,7 +2736,7 @@ export async function setPluginLifecycle(input: { action: "archive" | "restore";
   return getPluginDetail(input.context, row.id)
 }
 
-export async function listPluginMemberships(input: { context: PluginArchActorContext; pluginId: PluginId; includeConfigObjects?: boolean; onlyActive?: boolean }) {
+export async function listPluginMemberships(input: { context: PluginArchActorContext; pluginId: PluginId; includeConfigObjects?: boolean; legacyWorkflowObjectType?: boolean; onlyActive?: boolean }) {
   await ensureVisiblePlugin(input.context, input.pluginId)
   const memberships = await db
     .select()
@@ -2769,7 +2757,12 @@ export async function listPluginMemberships(input: { context: PluginArchActorCon
     ? memberships.filter((membership) => resolvedConfigObjectIds.has(membership.configObjectId))
     : memberships
   const latestVersions = await getLatestVersions(resolvedConfigObjects.map((row) => row.id))
-  const byId = new Map<string, ReturnType<typeof serializeConfigObject>>(resolvedConfigObjects.map((row) => [row.id, serializeConfigObject(row, latestVersions.get(row.id) ?? null)]))
+  const byId = new Map<string, ReturnType<typeof serializeConfigObject>>(resolvedConfigObjects.map((row) => {
+    const serialized = serializeConfigObject(row, latestVersions.get(row.id) ?? null)
+    return [row.id, input.legacyWorkflowObjectType && serialized.objectType === "workflow"
+      ? { ...serialized, objectType: "script" }
+      : serialized]
+  }))
   return { items: resolvedMemberships.map((membership) => serializeMembership(membership, byId.get(membership.configObjectId))), nextCursor: null }
 }
 

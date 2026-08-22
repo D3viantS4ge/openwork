@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 3978);
 const issuer = process.env.ISSUER || `http://${host}:${port}`;
+const extraToolCount = Number(process.env.MOCK_EXTRA_TOOL_COUNT || 0);
 const autoApprove = process.env.AUTO_APPROVE !== "0";
 const disableDcr = process.env.DISABLE_DCR === "1";
 const strictOAuth = process.argv.includes("--strict") || process.env.STRICT_OAUTH === "1";
@@ -31,6 +32,14 @@ const errorToolMode = (process.env.MOCK_ERROR_TOOL_MODE || "result").trim();
 const errorToolConnectUrl = (process.env.MOCK_ERROR_TOOL_CONNECT_URL || "https://connect.example.test/salesforce/start").trim();
 const errorToolProvider = (process.env.MOCK_ERROR_TOOL_PROVIDER || "salesforce").trim();
 const allowUnauthenticatedMcp = process.env.MOCK_ALLOW_UNAUTHENTICATED_MCP === "1";
+const syntheticTools = Array.from({ length: extraToolCount }, (_, index) => {
+  const i = index + 1;
+  return {
+    name: `mock_tool_${i}`,
+    description: `Synthetic scale tool ${i} for capability search volume testing; keyword kw${i}.`,
+    inputSchema: { type: "object", properties: {} },
+  };
+});
 
 const clients = new Map();
 const codes = new Map();
@@ -472,6 +481,7 @@ function mcpResult(message) {
               required: ["items"],
             },
           },
+          ...syntheticTools,
           ...(extraToolName ? [{
             name: extraToolName,
             title: extraToolTitle || extraToolName,
@@ -500,6 +510,16 @@ function mcpResult(message) {
             {
               type: "text",
               text: `Received ${Array.isArray(items) ? items.length : 0} items.`,
+            },
+          ],
+        };
+      }
+      if (syntheticTools.some((tool) => tool.name === message.params?.name)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${message.params.name} ok`,
             },
           ],
         };
@@ -568,7 +588,13 @@ function mcpResponse(message) {
   return { jsonrpc: "2.0", id: message.id, result: mcpResult(message) };
 }
 
-async function handleMcp(req, res) {
+async function handleMcp(req, res, entry) {
+  const body = await readJson(req).catch(() => ({}));
+  const messages = Array.isArray(body) ? body : [body];
+  entry.rpcMethods = messages
+    .filter((message) => message && typeof message === "object" && typeof message.method === "string")
+    .map((message) => message.method);
+
   const authorized = isAuthorized(req);
   if (!authorized) {
     json(res, 401, { error: "missing_mcp_token" }, {
@@ -582,29 +608,21 @@ async function handleMcp(req, res) {
     return;
   }
 
-  const body = await readJson(req).catch(() => ({}));
-  const messages = Array.isArray(body) ? body : [body];
-  const entry = requests[requests.length - 1];
-  if (entry) {
-    entry.authorized = authorized;
-    entry.rpcMethods = messages
-      .filter((message) => message && typeof message === "object" && typeof message.method === "string")
-      .map((message) => message.method);
-    entry.toolNames = messages
-      .filter((message) => message && typeof message === "object" && message.method === "tools/call" && typeof message.params?.name === "string")
-      .map((message) => message.params.name);
-    // Arguments + a token fingerprint make the connector the AUTHORITY on who
-    // called it: a spec can prove two members each invoked a tool with their own
-    // credential, without trusting the app's own UI state.
-    entry.tokenId = tokenFingerprint(req);
-    entry.toolCalls = messages
-      .filter((message) => message && typeof message === "object" && message.method === "tools/call" && typeof message.params?.name === "string")
-      .map((message) => ({
-        name: message.params.name,
-        args: message.params.arguments ?? message.params.args ?? {},
-        tokenId: entry.tokenId,
-      }));
-  }
+  entry.authorized = authorized;
+  entry.toolNames = messages
+    .filter((message) => message && typeof message === "object" && message.method === "tools/call" && typeof message.params?.name === "string")
+    .map((message) => message.params.name);
+  // Arguments + a token fingerprint make the connector the AUTHORITY on who
+  // called it: a spec can prove two members each invoked a tool with their own
+  // credential, without trusting the app's own UI state.
+  entry.tokenId = tokenFingerprint(req);
+  entry.toolCalls = messages
+    .filter((message) => message && typeof message === "object" && message.method === "tools/call" && typeof message.params?.name === "string")
+    .map((message) => ({
+      name: message.params.name,
+      args: message.params.arguments ?? message.params.args ?? {},
+      tokenId: entry.tokenId,
+    }));
   const responses = messages.flatMap((message) => {
     if (!message || typeof message !== "object" || message.id === undefined) return [];
     return [mcpResponse(message)];
@@ -699,7 +717,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/mcp") {
-      await handleMcp(req, res);
+      await handleMcp(req, res, entry);
       return;
     }
 

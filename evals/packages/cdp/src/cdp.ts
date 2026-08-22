@@ -17,6 +17,7 @@ export interface CdpClient {
   targetId?: string | null;
   webSocketDebuggerUrl?: string;
   send(method: string, params?: Record<string, unknown>, options?: CdpSendOptions): Promise<unknown>;
+  abort?(reason?: Error): void;
   close(): void;
 }
 
@@ -164,6 +165,7 @@ export function connect(
     const pending = new Map<number, PendingCallbacks>();
     let opened = false;
     let settled = false;
+    let closed = false;
 
     const connectTimer = setTimeout(() => {
       if (opened) return;
@@ -184,6 +186,15 @@ export function connect(
       pending.clear();
     };
 
+    const closeSocket = () => {
+      closed = true;
+      try {
+        socket.close();
+      } catch {
+        // Socket may already be in a closing state.
+      }
+    };
+
     socket.addEventListener("open", () => {
       if (settled) return;
       opened = true;
@@ -191,8 +202,16 @@ export function connect(
       resolve({
         targetId: new URL(webSocketDebuggerUrl).pathname.split("/").pop() ?? null,
         webSocketDebuggerUrl,
-        close: () => socket.close(),
+        abort: (reason?: Error) => {
+          const detail = reason ? `: ${reason.message}` : ".";
+          rejectPending(new Error(`CDP transport stalled${detail}`, { cause: reason }));
+          closeSocket();
+        },
+        close: closeSocket,
         send(method: string, params: Record<string, unknown> = {}, { timeoutMs = sendTimeoutMs }: CdpSendOptions = {}) {
+          if (closed || socket.readyState !== WebSocket.OPEN) {
+            return Promise.reject(new Error("CDP socket is not open."));
+          }
           const id = nextId;
           nextId += 1;
           return new Promise((innerResolve, innerReject) => {
@@ -234,6 +253,7 @@ export function connect(
     });
     socket.addEventListener("error", () => {
       const error = new Error("CDP websocket failed.");
+      closed = true;
       rejectPending(error);
       if (!opened && !settled) {
         settled = true;
@@ -243,6 +263,7 @@ export function connect(
     });
     socket.addEventListener("close", () => {
       const error = new Error("CDP websocket closed.");
+      closed = true;
       rejectPending(error);
       if (!opened && !settled) {
         settled = true;

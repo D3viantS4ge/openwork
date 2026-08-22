@@ -276,6 +276,61 @@ describe("cloud lifecycle idle stop", () => {
 })
 
 describe("cloud lifecycle wake", () => {
+  test("marks the worker failed when wake exceeds the provisioning deadline", async () => {
+    const worker = makeWorker({ status: "stopped" })
+    const { store, updates } = makeStore({
+      workers: [worker],
+      tokens: [
+        makeToken(worker.id, "host"),
+        makeToken(worker.id, "client"),
+        makeToken(worker.id, "activity"),
+      ],
+    })
+
+    await lifecycle.wakeCloudWorker(worker.id, {
+      store,
+      wakeWorker: () => new Promise<never>(() => {}),
+      deadlineMs: 20,
+    })
+
+    expect(updates).toContainEqual({
+      workerId: worker.id,
+      status: "failed",
+      onlyWhenStatus: "provisioning",
+    })
+  })
+
+  test("records a fast successful wake without a failed write", async () => {
+    const worker = makeWorker({ status: "stopped" })
+    const { store, updates } = makeStore({
+      workers: [worker],
+      tokens: [
+        makeToken(worker.id, "host"),
+        makeToken(worker.id, "client"),
+        makeToken(worker.id, "activity"),
+      ],
+    })
+
+    await lifecycle.wakeCloudWorker(worker.id, {
+      store,
+      wakeWorker: async () => ({
+        provider: "daytona",
+        url: "https://cloud.example",
+        status: "healthy",
+        imageVersion: "openwork-0.18.8",
+      }),
+      deadlineMs: 5000,
+    })
+
+    expect(updates).toContainEqual({
+      workerId: worker.id,
+      status: "healthy",
+      imageVersion: "openwork-0.18.8",
+      onlyWhenStatus: "provisioning",
+    })
+    expect(updates.some((update) => update.status === "failed")).toBe(false)
+  })
+
   test("marks the worker failed when a wake token is missing", async () => {
     const worker = makeWorker({ status: "stopped" })
     const { store, updates } = makeStore({

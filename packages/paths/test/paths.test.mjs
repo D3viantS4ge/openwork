@@ -8,6 +8,7 @@ import {
   globalOpencodeConfigDir,
   legacyDesktopBootstrapPath,
   MAX_CONFIG_ROOT_LENGTH,
+  normalizeWorkspaceRootPath,
   openworkEnvStorePath,
   openworkServerConfigPath,
   resolveGlobalOpencodeConfigPath,
@@ -23,6 +24,61 @@ async function withTempDir(callback) {
     await rm(root, { recursive: true, force: true });
   }
 }
+
+describe("workspace root paths", () => {
+  test("normalizes valid Windows verbatim drive and UNC paths cross-platform", () => {
+    const opts = { platform: "win32" };
+    expect(normalizeWorkspaceRootPath("\\\\?\\C:\\Users\\Ada\\Workspace", opts))
+      .toBe("C:\\Users\\Ada\\Workspace");
+    expect(normalizeWorkspaceRootPath("\\\\?\\C:\\", opts)).toBe("C:\\");
+    expect(normalizeWorkspaceRootPath("//?/UNC/server/share/Workspace", opts))
+      .toBe("\\\\server\\share\\Workspace");
+    expect(normalizeWorkspaceRootPath("\\\\?\\UNC\\server\\share", opts))
+      .toBe("\\\\server\\share");
+  });
+
+  test("preserves valid normal drives and UNC shares without checking availability", () => {
+    const opts = { platform: "win32" };
+    expect(normalizeWorkspaceRootPath("Z:\\Disconnected\\Workspace", opts))
+      .toBe("Z:\\Disconnected\\Workspace");
+    expect(normalizeWorkspaceRootPath("\\\\offline-server\\share\\Workspace", opts))
+      .toBe("\\\\offline-server\\share\\Workspace");
+    expect(normalizeWorkspaceRootPath("\\\\offline-server\\pipe\\Workspace", opts))
+      .toBe("\\\\offline-server\\pipe\\Workspace");
+  });
+
+  test("rejects Win32 device namespace roots", () => {
+    const opts = { platform: "win32" };
+    for (const value of [
+      "\\\\.\\pipe\\openwork",
+      "//./PIPE/openwork",
+      "\\\\.\\PhysicalDrive0",
+      "\\\\?\\UNC\\.\\pipe\\openwork",
+      "\\\\?\\UNC\\?\\PhysicalDrive0",
+    ]) {
+      expect(() => normalizeWorkspaceRootPath(value, opts)).toThrow("Invalid Windows workspace root");
+    }
+  });
+
+  test("rejects incomplete Windows drive and UNC roots", () => {
+    const opts = { platform: "win32" };
+    for (const value of [
+      "C:",
+      "\\\\?\\",
+      "\\\\?\\C:",
+      "\\\\?\\C:Workspace",
+      "\\\\?\\UNC",
+      "\\\\?\\UNC\\server",
+      "\\\\server",
+    ]) {
+      expect(() => normalizeWorkspaceRootPath(value, opts)).toThrow("Invalid Windows workspace root");
+    }
+  });
+
+  test("applies Windows validation only when Windows is injected", () => {
+    expect(normalizeWorkspaceRootPath("\\\\?\\C:", { platform: "linux" })).toBe("\\\\?\\C:");
+  });
+});
 
 describe("openwork server config paths", () => {
   test("uses APPDATA on Windows", () => {

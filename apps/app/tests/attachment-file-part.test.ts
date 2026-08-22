@@ -296,6 +296,33 @@ describe("composer attachment file parts", () => {
     expect(workspaceInboxPath(inboxPath)).toBe(".opencode/openwork/inbox/chat-attachments/ses_123/nonce-abc-scan one 李.pdf");
   });
 
+  test("bounds long ASCII attachment names while preserving extension and unique id", () => {
+    const filename = `${"a".repeat(400)}.pdf`;
+    const first = buildChatAttachmentInboxPath({ sessionId: "ses_long", id: "nonce-a", filename });
+    const repeated = buildChatAttachmentInboxPath({ sessionId: "ses_long", id: "nonce-a", filename });
+    const second = buildChatAttachmentInboxPath({ sessionId: "ses_long", id: "nonce-b", filename });
+    const basename = first.split("/").pop();
+    if (!basename) throw new Error("Expected attachment basename");
+
+    expect(new TextEncoder().encode(basename).byteLength).toBe(255);
+    expect(basename.startsWith("nonce-a-")).toBe(true);
+    expect(basename.endsWith(".pdf")).toBe(true);
+    expect(first).toBe(repeated);
+    expect(first).not.toBe(second);
+  });
+
+  test("bounds long multibyte attachment names on UTF-8 character boundaries", () => {
+    const filename = `${"李".repeat(200)}.pdf`;
+    const path = buildChatAttachmentInboxPath({ sessionId: "ses_long", id: "nonce-a", filename });
+    const basename = path.split("/").pop();
+    if (!basename) throw new Error("Expected attachment basename");
+
+    expect(new TextEncoder().encode(basename).byteLength).toBe(255);
+    expect(basename.startsWith("nonce-a-")).toBe(true);
+    expect(basename.endsWith(".pdf")).toBe(true);
+    expect(basename).not.toContain("�");
+  });
+
   test("uploads exact bytes to the endpoint workspace id and exposes a worker file URL plus path note", async () => {
     const { endpoint, calls } = uploadRecorder("server-workspace-42");
     const file = new File([PDF_BYTES], "image-only scan.pdf", { type: "application/pdf" });

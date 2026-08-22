@@ -1,6 +1,7 @@
 import { execFile, spawnSync } from "node:child_process";
 import { randomUUID, X509Certificate } from "node:crypto";
-import { readFile, rm, writeFile, mkdtemp, mkdir } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, open, readFile, rm, writeFile, mkdtemp, mkdir } from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
@@ -8,7 +9,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import tls from "node:tls";
 import { fileURLToPath } from "node:url";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 
 export type EgressLabProfile =
   | "healthy"
@@ -70,6 +71,71 @@ export type EgressLabHandle = {
   intermediateDerPath?: string;
   aiaUrl?: string;
   deniedHosts: string[];
+  stop(): Promise<void>;
+  [Symbol.asyncDispose](): Promise<void>;
+};
+
+export type EnterpriseTlsRequestLog = {
+  endpoint: "trusted-candidate" | "negative";
+  method: string;
+  path: string;
+  body: string;
+};
+
+export type LinuxTrustCommand = {
+  file: string;
+  args: string[];
+  requiresRoot: true;
+};
+
+export type LinuxTrustStorePlan = {
+  certificatePath: string;
+  restartApplication: true;
+  prerequisiteFailures: {
+    root: "ENTERPRISE_TLS_LINUX_ROOT_REQUIRED";
+    updateCaCertificates: "ENTERPRISE_TLS_UPDATE_CA_CERTIFICATES_REQUIRED";
+  };
+  checkPrerequisites(): Promise<LinuxTrustPrerequisiteResult>;
+  install(updateCaCertificatesPath?: string): LinuxTrustCommand[];
+  remove(updateCaCertificatesPath?: string): LinuxTrustCommand[];
+};
+
+export type LinuxTrustPrerequisiteResult = {
+  ok: true;
+  updateCaCertificatesPath: string;
+} | {
+  ok: false;
+  failure: "ENTERPRISE_TLS_LINUX_ROOT_REQUIRED" | "ENTERPRISE_TLS_UPDATE_CA_CERTIFICATES_REQUIRED";
+};
+
+export type EnterpriseTlsEdgeManifest = {
+  pid: number;
+  candidateUrl: string;
+  negativeUrl: string;
+  adminUrl: string;
+  rootPemPath: string;
+};
+
+export type StagedEnterpriseTlsRoot = {
+  manifest: EnterpriseTlsEdgeManifest;
+  rootPem: Buffer;
+  stagedRootPemPath: string;
+  cleanup(): Promise<void>;
+};
+
+export type StartEnterpriseTlsReverseEdgeOptions = {
+  upstream: string;
+  candidatePort?: number;
+  negativePort?: number;
+};
+
+export type EnterpriseTlsReverseEdgeHandle = {
+  candidateUrl: string;
+  negativeUrl: string;
+  rootPem: string;
+  rootPemPath: string;
+  requests: EnterpriseTlsRequestLog[];
+  linuxTrust: LinuxTrustStorePlan;
   stop(): Promise<void>;
   [Symbol.asyncDispose](): Promise<void>;
 };
@@ -868,6 +934,278 @@ function createHttpsServer(profile: EgressLabProfile, material: CertificateMater
       upstream: null,
     }, { "x-openwork-egress-lab": profile });
   });
+}
+
+function reverseProxyPath(rawTarget: string | undefined): string | null {
+  const target = rawTarget ?? "/";
+  try {
+    const parsed = new URL(target, "http://reverse-edge.invalid");
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return null;
+  }
+}
+
+function createReverseEdgeServer(
+  endpoint: EnterpriseTlsRequestLog["endpoint"],
+  material: CertificateMaterial,
+  upstream: URL,
+  requests: EnterpriseTlsRequestLog[],
+): HttpsServer {
+  return https.createServer({ key: material.leafKeyPem, cert: material.fullChainPem }, async (request, response) => {
+    const forwardedPath = reverseProxyPath(request.url);
+    if (!forwardedPath) {
+      textResponse(response, 400, "Invalid request target.\n");
+      return;
+    }
+    const body = await requestBodyText(request);
+    requests.push({ endpoint, method: request.method ?? "GET", path: forwardedPath, body });
+    const headers: OutgoingHttpHeaders = { ...request.headers, host: upstream.host };
+    delete headers.connection;
+    delete headers["proxy-connection"];
+    delete headers["transfer-encoding"];
+    headers["content-length"] = String(Buffer.byteLength(body));
+    const transport = upstream.protocol === "https:" ? https : http;
+    const proxyRequest = transport.request({
+      protocol: upstream.protocol,
+      hostname: upstream.hostname,
+      port: upstream.port || undefined,
+      method: request.method,
+      path: forwardedPath,
+      headers,
+    }, (upstreamResponse) => {
+      response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+      upstreamResponse.pipe(response);
+    });
+    proxyRequest.on("error", (error) => {
+      if (!response.headersSent) textResponse(response, 502, `Pinned upstream failed: ${error.message}\n`);
+      else response.destroy(error);
+    });
+    proxyRequest.end(body);
+  });
+}
+
+const ENTERPRISE_TLS_FILE_SIZE_LIMIT = 64 * 1024;
+
+class EnterpriseTlsTrustError extends Error {
+  constructor(name: "ENTERPRISE_TLS_MANIFEST_UNTRUSTED" | "ENTERPRISE_TLS_ROOT_PEM_UNTRUSTED", reason: string) {
+    super(`${name}: ${reason}`);
+    this.name = name;
+  }
+}
+
+function enterpriseTlsTrustError(
+  name: "ENTERPRISE_TLS_MANIFEST_UNTRUSTED" | "ENTERPRISE_TLS_ROOT_PEM_UNTRUSTED",
+  reason: string,
+): EnterpriseTlsTrustError {
+  return new EnterpriseTlsTrustError(name, reason);
+}
+
+function isEnterpriseTlsEdgeManifest(value: unknown): value is EnterpriseTlsEdgeManifest {
+  if (!isRecord(value)) return false;
+  return typeof value.pid === "number"
+    && typeof value.candidateUrl === "string"
+    && typeof value.negativeUrl === "string"
+    && typeof value.adminUrl === "string"
+    && typeof value.rootPemPath === "string";
+}
+
+export function enterpriseTlsAllowedUids(env: NodeJS.ProcessEnv = process.env): number[] {
+  const sudoUidText = env.SUDO_UID;
+  if (sudoUidText !== undefined && sudoUidText.trim() !== "") {
+    const sudoUid = Number(sudoUidText);
+    if (Number.isSafeInteger(sudoUid) && sudoUid >= 0) return [0, sudoUid];
+  }
+  if (typeof process.getuid !== "function") {
+    throw enterpriseTlsTrustError("ENTERPRISE_TLS_MANIFEST_UNTRUSTED", "the current uid is unavailable");
+  }
+  return [0, process.getuid()];
+}
+
+async function readTrustedFile(
+  filePath: string,
+  allowedUids: readonly number[],
+  errorName: "ENTERPRISE_TLS_MANIFEST_UNTRUSTED" | "ENTERPRISE_TLS_ROOT_PEM_UNTRUSTED",
+): Promise<{ bytes: Buffer; ownerUid: number }> {
+  let handle;
+  try {
+    handle = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (error) {
+    throw enterpriseTlsTrustError(errorName, `cannot open ${filePath} without following symlinks: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw enterpriseTlsTrustError(errorName, `${filePath} is not a regular file`);
+    if ((stat.mode & 0o022) !== 0) throw enterpriseTlsTrustError(errorName, `${filePath} is group- or world-writable`);
+    if (!allowedUids.includes(stat.uid)) throw enterpriseTlsTrustError(errorName, `${filePath} owner uid ${stat.uid} is not allowed`);
+    if (stat.size > ENTERPRISE_TLS_FILE_SIZE_LIMIT) throw enterpriseTlsTrustError(errorName, `${filePath} exceeds ${ENTERPRISE_TLS_FILE_SIZE_LIMIT} bytes`);
+    return { bytes: await handle.readFile(), ownerUid: stat.uid };
+  } catch (error) {
+    if (error instanceof EnterpriseTlsTrustError) throw error;
+    throw enterpriseTlsTrustError(errorName, `cannot validate ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
+export async function readTrustedEnterpriseTlsManifest(
+  manifestPath: string,
+  allowedUids: readonly number[] = enterpriseTlsAllowedUids(),
+): Promise<{ manifest: EnterpriseTlsEdgeManifest; ownerUid: number }> {
+  const trusted = await readTrustedFile(manifestPath, allowedUids, "ENTERPRISE_TLS_MANIFEST_UNTRUSTED");
+  let value: unknown;
+  try {
+    value = JSON.parse(trusted.bytes.toString("utf8"));
+  } catch (error) {
+    throw enterpriseTlsTrustError("ENTERPRISE_TLS_MANIFEST_UNTRUSTED", `invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!isEnterpriseTlsEdgeManifest(value)) {
+    throw enterpriseTlsTrustError("ENTERPRISE_TLS_MANIFEST_UNTRUSTED", "manifest fields are invalid");
+  }
+  if (!path.isAbsolute(value.rootPemPath)) {
+    throw enterpriseTlsTrustError("ENTERPRISE_TLS_MANIFEST_UNTRUSTED", "rootPemPath must be absolute");
+  }
+  return { manifest: value, ownerUid: trusted.ownerUid };
+}
+
+export async function stageTrustedEnterpriseTlsRoot(
+  manifestPath: string,
+  allowedUids: readonly number[] = enterpriseTlsAllowedUids(),
+): Promise<StagedEnterpriseTlsRoot> {
+  const trustedManifest = await readTrustedEnterpriseTlsManifest(manifestPath, allowedUids);
+  const trustedRoot = await readTrustedFile(
+    trustedManifest.manifest.rootPemPath,
+    allowedUids,
+    "ENTERPRISE_TLS_ROOT_PEM_UNTRUSTED",
+  );
+  if (trustedRoot.ownerUid !== trustedManifest.ownerUid) {
+    throw enterpriseTlsTrustError("ENTERPRISE_TLS_ROOT_PEM_UNTRUSTED", "manifest and root PEM owners do not match");
+  }
+  const pemText = trustedRoot.bytes.toString("utf8");
+  const certificateBlocks = pemText.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/gu);
+  if (certificateBlocks?.length !== 1 || certificateBlocks[0]?.trim() !== pemText.trim()) {
+    throw enterpriseTlsTrustError("ENTERPRISE_TLS_ROOT_PEM_UNTRUSTED", "root PEM must contain exactly one certificate");
+  }
+  try {
+    const certificate = new X509Certificate(trustedRoot.bytes);
+    if (!certificate.ca) throw enterpriseTlsTrustError("ENTERPRISE_TLS_ROOT_PEM_UNTRUSTED", "certificate is not a CA");
+  } catch (error) {
+    if (error instanceof EnterpriseTlsTrustError) throw error;
+    throw enterpriseTlsTrustError("ENTERPRISE_TLS_ROOT_PEM_UNTRUSTED", `certificate is not parseable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  let stagingDir: string;
+  try {
+    stagingDir = await mkdtemp(path.join(tmpdir(), "openwork-enterprise-tls-trust-"));
+  } catch (error) {
+    throw enterpriseTlsTrustError("ENTERPRISE_TLS_ROOT_PEM_UNTRUSTED", `cannot create staging directory: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const stagedRootPemPath = path.join(stagingDir, "root.pem");
+  try {
+    await writeFile(stagedRootPemPath, trustedRoot.bytes, { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    await rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
+    throw enterpriseTlsTrustError("ENTERPRISE_TLS_ROOT_PEM_UNTRUSTED", `cannot stage root PEM: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return {
+    manifest: trustedManifest.manifest,
+    rootPem: trustedRoot.bytes,
+    stagedRootPemPath,
+    cleanup: () => rm(stagingDir, { recursive: true, force: true }),
+  };
+}
+
+export function linuxTrustStorePlan(rootPemPath: string): LinuxTrustStorePlan {
+  const certificatePath = "/usr/local/share/ca-certificates/openwork-enterprise-tls-edge.crt";
+  const update = (updateCaCertificatesPath = "/usr/sbin/update-ca-certificates"): LinuxTrustCommand => ({
+    file: updateCaCertificatesPath,
+    args: [],
+    requiresRoot: true,
+  });
+  return {
+    certificatePath,
+    restartApplication: true,
+    prerequisiteFailures: {
+      root: "ENTERPRISE_TLS_LINUX_ROOT_REQUIRED",
+      updateCaCertificates: "ENTERPRISE_TLS_UPDATE_CA_CERTIFICATES_REQUIRED",
+    },
+    async checkPrerequisites() {
+      if (process.platform !== "linux" || typeof process.getuid !== "function" || process.getuid() !== 0) {
+        return { ok: false, failure: "ENTERPRISE_TLS_LINUX_ROOT_REQUIRED" };
+      }
+      for (const candidate of ["/usr/sbin/update-ca-certificates", "/usr/bin/update-ca-certificates"]) {
+        try {
+          await access(candidate, constants.X_OK);
+          return { ok: true, updateCaCertificatesPath: candidate };
+        } catch {
+          // Check the next standard Linux location.
+        }
+      }
+      return { ok: false, failure: "ENTERPRISE_TLS_UPDATE_CA_CERTIFICATES_REQUIRED" };
+    },
+    install(updateCaCertificatesPath) {
+      return [
+        { file: "/usr/bin/install", args: ["-m", "0644", rootPemPath, certificatePath], requiresRoot: true },
+        update(updateCaCertificatesPath),
+      ];
+    },
+    remove(updateCaCertificatesPath) {
+      return [
+        { file: "/usr/bin/rm", args: ["-f", certificatePath], requiresRoot: true },
+        update(updateCaCertificatesPath),
+      ];
+    },
+  };
+}
+
+/**
+ * Starts two HTTPS reverse edges pinned to one Den origin. The candidate uses
+ * the existing corporate root/intermediate/leaf PKI; the negative edge uses a
+ * separate root so installing the candidate root cannot make all TLS trusted.
+ */
+export async function startEnterpriseTlsReverseEdge(
+  options: StartEnterpriseTlsReverseEdgeOptions,
+): Promise<EnterpriseTlsReverseEdgeHandle> {
+  const upstream = new URL(options.upstream);
+  if ((upstream.protocol !== "http:" && upstream.protocol !== "https:")
+    || upstream.username || upstream.password || upstream.pathname !== "/" || upstream.search || upstream.hash) {
+    throw new Error("Enterprise TLS reverse edge upstream must be an HTTP(S) origin without credentials, path, query, or fragment.");
+  }
+  const requests: EnterpriseTlsRequestLog[] = [];
+  const servers: HttpsServer[] = [];
+  let candidate: CertificateMaterial | null = null;
+  let negative: CertificateMaterial | null = null;
+  let stopped = false;
+  try {
+    candidate = await generateCertificateMaterial({ hostname: DEFAULT_HOSTNAME, aiaUrl: null, corporateIssuer: true });
+    negative = await generateCertificateMaterial({ hostname: DEFAULT_HOSTNAME, aiaUrl: null, corporateIssuer: false });
+    const candidateServer = createReverseEdgeServer("trusted-candidate", candidate, upstream, requests);
+    const negativeServer = createReverseEdgeServer("negative", negative, upstream, requests);
+    const candidatePort = await listen(candidateServer, validPort(options.candidatePort), DEFAULT_HOST);
+    servers.push(candidateServer);
+    const negativePort = await listen(negativeServer, validPort(options.negativePort), DEFAULT_HOST);
+    servers.push(negativeServer);
+    const stop = async () => {
+      if (stopped) return;
+      stopped = true;
+      await Promise.all(servers.map((server) => closeServer(server).catch(() => undefined)));
+      await Promise.all([candidate, negative].map((material) => material ? rm(material.dir, { recursive: true, force: true }) : Promise.resolve()));
+    };
+    return {
+      candidateUrl: `https://${DEFAULT_HOSTNAME}:${candidatePort}`,
+      negativeUrl: `https://${DEFAULT_HOSTNAME}:${negativePort}`,
+      rootPem: candidate.rootPem,
+      rootPemPath: candidate.rootPemPath,
+      requests,
+      linuxTrust: linuxTrustStorePlan(candidate.rootPemPath),
+      stop,
+      [Symbol.asyncDispose]: stop,
+    };
+  } catch (error) {
+    await Promise.all(servers.map((server) => closeServer(server).catch(() => undefined)));
+    await Promise.all([candidate, negative].map((material) => material ? rm(material.dir, { recursive: true, force: true }) : Promise.resolve()));
+    throw error;
+  }
 }
 
 function tlsHttpOk(socket: tls.TLSSocket, profile: EgressLabProfile): void {
