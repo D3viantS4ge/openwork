@@ -15,9 +15,13 @@
 // Unreleased commits are never ingested: no published release means the
 // script fails loudly instead of falling back to dev HEAD. If the rebase
 // fails, abort it and fall back to a merge. If both fail, abort everything
-// and leave the tree clean. On success run the full desktop build pipeline:
+// and leave the tree clean. On success run the full build pipeline:
 // pnpm install -> rebuild native modules for Electron -> package the
-// unpacked win-unpacked app.
+// unpacked desktop app -> rebuild the web renderer for the standalone
+// server. The desktop package step rebuilds apps/app/dist with
+// OPENWORK_ELECTRON_BUILD=1 (relative file:// asset paths), which breaks
+// the standalone server that serves that same dist; the final step restores
+// the web-flavored build.
 import { spawnSync } from "node:child_process";
 
 const REMOTE = "upstream";
@@ -26,6 +30,9 @@ const BUILD_STEPS = [
   ["pnpm", ["install"]],
   ["pnpm", ["--filter", "@openwork/desktop", "rebuild:electron-native"]],
   ["pnpm", ["--filter", "@openwork/desktop", "package:electron:dir"]],
+  // Restore the web-flavored renderer after the desktop package clobbered
+  // apps/app/dist with the Electron build (see the header comment).
+  ["pnpm", ["--filter", "@openwork/app", "build:web:local"]],
 ];
 
 function quoteToken(token) {
@@ -214,6 +221,7 @@ for (const [command, args] of BUILD_STEPS) {
 
 // 11. Report.
 const head = spawnSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8" }).stdout.trim();
+const artifactName = process.platform === "win32" ? "win-unpacked/OpenWork.exe" : `${process.platform}-unpacked/OpenWork`;
 console.log(
-  `[update-build] Done. HEAD=${head} artifact=apps/desktop/dist-electron/win-unpacked/OpenWork.exe`,
+  `[update-build] Done. HEAD=${head} artifact=apps/desktop/dist-electron/${artifactName}`,
 );
