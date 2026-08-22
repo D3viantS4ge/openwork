@@ -491,7 +491,7 @@ export default {
   "dashboard.workspace_path_explanation": "Enter the absolute folder path on the server where this workspace should live.",
   "dashboard.workspace_path_hint": "The folder is created on the server if it doesn't exist (like mkdir -p).",
   "dashboard.workspace_path_label": "Folder path on this server",
-  "dashboard.workspace_path_placeholder": "e.g. /home/user/code/project or C:\\Users\\you\\project",
+  "dashboard.workspace_path_placeholder": "remote path",
   "dashboard.edit_remote_workspace_confirm": "Save connection",
   "dashboard.edit_remote_workspace_subtitle": "Update the OpenWork server details for this workspace.",
   "dashboard.edit_remote_workspace_title": "Edit Remote Connection",
