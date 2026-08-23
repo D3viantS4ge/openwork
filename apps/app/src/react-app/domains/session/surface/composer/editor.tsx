@@ -25,6 +25,7 @@ import {
   KEY_ARROW_LEFT_COMMAND,
   KEY_ARROW_RIGHT_COMMAND,
   KEY_BACKSPACE_COMMAND,
+  KEY_DOWN_COMMAND,
   KEY_ENTER_COMMAND,
   PASTE_COMMAND,
   type SerializedTextNode,
@@ -1049,6 +1050,67 @@ function MentionChipNavigationPlugin() {
   const [editor] = useLexicalComposerContext();
 
   useEffect(() => {
+    // The plain End/Home keys are not Lexical commands (only Ctrl+ArrowRight
+    // maps to MOVE_TO_END), so the browser moves the caret to the end of the
+    // DOM line natively. When the caret sits inside a token chip (e.g. after
+    // clicking the paste pill, whose visible text differs from its hidden
+    // model text), the browser places it within the chip's span and Lexical
+    // maps it onto an offset inside the token's text content — then
+    // Shift+Enter splits that hidden text, leaking fragments like
+    // "· 196 lines]" onto the new line. Snap End/Home to the paragraph
+    // boundary past the tokens instead.
+    const unregisterEndHome = editor.registerCommand(
+      KEY_DOWN_COMMAND,
+      (event: KeyboardEvent) => {
+        if (event.key !== "End" && event.key !== "Home") return false;
+        // Ctrl/Cmd+Arrow variants are Lexical's MOVE_TO_END/MOVE_TO_START.
+        if (event.ctrlKey || event.metaKey) return false;
+        const selection = $getSelection();
+        if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
+        const anchorNode = selection.anchor.getNode();
+        // Only intercept when the caret is inside a token (or at an element
+        // offset that resolves into one). Ordinary text End/Home keep the
+        // native behavior.
+        const anchorIsToken = isComposerInlineTokenNode(anchorNode);
+        const anchorChildIsToken = $isElementNode(anchorNode)
+          ? isComposerInlineTokenNode(anchorNode.getChildAtIndex(selection.anchor.offset))
+          : false;
+        if (!anchorIsToken && !anchorChildIsToken) return false;
+
+        const paragraph = $isElementNode(anchorNode)
+          ? anchorNode
+          : anchorNode.getParent();
+        if (!paragraph || !$isElementNode(paragraph)) return false;
+
+        if (event.key === "End") {
+          paragraph.select(paragraph.getChildrenSize(), paragraph.getChildrenSize());
+        } else {
+          paragraph.select(0, 0);
+        }
+        event.preventDefault();
+        return true;
+      },
+      COMMAND_PRIORITY_HIGH,
+    );
+
+    // Clicking inside a token chip (paste pill text, mention label, etc.)
+    // must never place the caret inside the chip's DOM — Lexical maps that
+    // onto an offset within the token's hidden model text. Snap the caret to
+    // after the node instead. The Expand/remove buttons are excluded; their
+    // own plugins handle them.
+    const handleChipMouseDown = (event: MouseEvent) => {
+      if (!(event.target instanceof Element)) return;
+      if (event.target.closest("button")) return;
+      const targetNode = event.target;
+      event.preventDefault();
+      event.stopPropagation();
+      editor.update(() => {
+        const node = $getNearestNodeFromDOMNode(targetNode);
+        if (!isComposerInlineTokenNode(node)) return;
+        setSelectionAfterNode(node);
+      });
+    };
+
     const unregisterBackspace = editor.registerCommand(
       KEY_BACKSPACE_COMMAND,
       () => {
@@ -1152,10 +1214,17 @@ function MentionChipNavigationPlugin() {
       COMMAND_PRIORITY_HIGH,
     );
 
+    const unregisterRootListener = editor.registerRootListener((rootElement, previousRootElement) => {
+      previousRootElement?.removeEventListener("mousedown", handleChipMouseDown, true);
+      rootElement?.addEventListener("mousedown", handleChipMouseDown, true);
+    });
+
     return () => {
       unregisterBackspace();
       unregisterLeft();
       unregisterRight();
+      unregisterEndHome();
+      unregisterRootListener();
     };
   }, [editor]);
 
