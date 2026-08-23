@@ -47,7 +47,17 @@ import { decodeComposerMentionValue, encodeComposerMentionValue, type ComposerMe
 import { parseConnectSkillToken } from "./connect-skill-token";
 import { createPastedTextChip, shouldCollapsePastedText, splitPastedText } from "./pasted-text";
 import { insertPastedText } from "./pasted-text-insertion";
-import { adjacentTokenForSelection, setSelectionAfterNode, setSelectionBeforeNode } from "./token-navigation";
+import {
+  adjacentTokenForSelection,
+  nextParagraphStartsWithToken,
+  previousParagraphEndsWithToken,
+  setSelectionAfterNode,
+  setSelectionBeforeNode,
+  tokenAfterCaretInParagraph,
+  tokenAfterLineBreak,
+  tokenBeforeCaretInParagraph,
+  tokenBeforeLineBreak,
+} from "./token-navigation";
 
 type PastedTextToken = { id: string; label: string; lines: number; text: string };
 
@@ -1082,14 +1092,16 @@ function MentionChipNavigationPlugin() {
   const [editor] = useLexicalComposerContext();
 
   useEffect(() => {
-    // The caret must never sit strictly inside a token chip's hidden text.
-    // The visible pill label ("Pasted · 196 lines") and the token's model
-    // text ("[pasted text x · 196 lines]") differ in length, so native
-    // navigation (arrows, Home/End, Ctrl+arrows, clicks, paste) can leave
-    // the DOM caret inside the pill's span, which Lexical maps onto an
-    // offset within the hidden text — then Backspace/Delete do nothing and
-    // Enter splits it, leaking fragments like "· 196 lines]". Enforce the
-    // invariant on every selection change: snap to just after the token.
+    // The caret must never sit on a token chip's text node at all — neither
+    // strictly inside its hidden text (the pill shows "Pasted · 196 lines"
+    // but the model text is "[pasted text x · 196 lines]") nor at the
+    // boundary offsets 0 / size. Native navigation (arrows, Home/End,
+    // Ctrl+arrows, clicks, paste) can leave the DOM caret on the pill's span,
+    // which Lexical maps onto an offset within the hidden text — then
+    // Backspace/Delete do nothing (a lone pill has no text sibling to delete
+    // from) and Enter splits the hidden text into visible garbage. Enforce
+    // the invariant on every selection change: snap to the nearest boundary
+    // outside the chip (before it at offset 0, after it otherwise).
     const unregisterSelectionGuard = editor.registerCommand(
       SELECTION_CHANGE_COMMAND,
       () => {
@@ -1099,8 +1111,11 @@ function MentionChipNavigationPlugin() {
         if (anchor.type !== "text") return false;
         const node = anchor.getNode();
         if (!isComposerInlineTokenNode(node)) return false;
-        if (anchor.offset <= 0 || anchor.offset >= node.getTextContentSize()) return false;
-        setSelectionAfterNode(node);
+        if (anchor.offset <= 0) {
+          setSelectionBeforeNode(node);
+        } else {
+          setSelectionAfterNode(node);
+        }
         return true;
       },
       COMMAND_PRIORITY_HIGH,
@@ -1140,14 +1155,35 @@ function MentionChipNavigationPlugin() {
     // Ctrl+ArrowLeft/Right dispatch MOVE_TO_START/MOVE_TO_END (word-boundary
     // navigation). With a token on the line, the native move can drop the
     // caret inside the chip's span; snap to the token boundary instead.
+    // Ctrl+ArrowLeft/Right dispatch MOVE_TO_START/MOVE_TO_END (word-boundary
+    // navigation). Treat the pill as a word boundary: from "foo[pill]bar|",
+    // Ctrl+Left should stop before the pill ("foo|[pill]bar") rather than
+    // jump past it to the line start, and Ctrl+Right from "foo|[pill]bar"
+    // should stop after it ("foo[pill]|bar") rather than jump to the end.
     const unregisterMoveStartEnd = editor.registerCommand(
       MOVE_TO_START,
-      () => {
+      (event: KeyboardEvent | null) => {
         const selection = $getSelection();
         if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
-        const token = adjacentTokenForSelection(selection);
+        // If we are at the start of a paragraph that follows one ending in a
+        // pill, land after that pill (end of the previous line). Otherwise
+        // snap to the nearest pill before the caret on this line.
+        const previousToken = previousParagraphEndsWithToken(selection);
+        if (previousToken) {
+          setSelectionAfterNode(previousToken);
+          event?.preventDefault();
+          return true;
+        }
+        const lineBreakToken = tokenBeforeLineBreak(selection);
+        if (lineBreakToken) {
+          setSelectionAfterNode(lineBreakToken);
+          event?.preventDefault();
+          return true;
+        }
+        const token = tokenBeforeCaretInParagraph(selection);
         if (!token) return false;
         setSelectionBeforeNode(token);
+        event?.preventDefault();
         return true;
       },
       COMMAND_PRIORITY_HIGH,
@@ -1155,12 +1191,28 @@ function MentionChipNavigationPlugin() {
 
     const unregisterMoveEnd = editor.registerCommand(
       MOVE_TO_END,
-      () => {
+      (event: KeyboardEvent | null) => {
         const selection = $getSelection();
         if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
-        const token = adjacentTokenForSelection(selection);
+        // If we are at the end of a paragraph that is followed by one
+        // starting with a pill, land before that pill (start of the next
+        // line). Otherwise snap to the nearest pill after the caret.
+        const nextToken = nextParagraphStartsWithToken(selection);
+        if (nextToken) {
+          setSelectionBeforeNode(nextToken);
+          event?.preventDefault();
+          return true;
+        }
+        const lineBreakToken = tokenAfterLineBreak(selection);
+        if (lineBreakToken) {
+          setSelectionBeforeNode(lineBreakToken);
+          event?.preventDefault();
+          return true;
+        }
+        const token = tokenAfterCaretInParagraph(selection);
         if (!token) return false;
         setSelectionAfterNode(token);
+        event?.preventDefault();
         return true;
       },
       COMMAND_PRIORITY_HIGH,
@@ -1348,6 +1400,23 @@ function MentionChipNavigationPlugin() {
           return true;
         }
 
+        // At the very start of a paragraph whose previous line ends in a
+        // pill: crossing the line boundary should land after that pill (end
+        // of the previous line), not before it.
+        const previousToken = previousParagraphEndsWithToken(selection);
+        if (previousToken) {
+          setSelectionAfterNode(previousToken);
+          return true;
+        }
+
+        // Same for soft line breaks inside one paragraph: a pill ending the
+        // previous visual line means Left crosses to after it.
+        const lineBreakToken = tokenBeforeLineBreak(selection);
+        if (lineBreakToken) {
+          setSelectionAfterNode(lineBreakToken);
+          return true;
+        }
+
         if ($isTextNode(anchorNode) && selection.anchor.offset === 0) {
           const previous = anchorNode.getPreviousSibling();
           if (isComposerInlineTokenNode(previous)) {
@@ -1378,6 +1447,23 @@ function MentionChipNavigationPlugin() {
 
         if (isComposerInlineTokenNode(anchorNode)) {
           setSelectionAfterNode(anchorNode);
+          return true;
+        }
+
+        // At the very end of a paragraph whose next line starts with a pill:
+        // crossing the line boundary should land before that pill (start of
+        // the next line), not after it.
+        const nextToken = nextParagraphStartsWithToken(selection);
+        if (nextToken) {
+          setSelectionBeforeNode(nextToken);
+          return true;
+        }
+
+        // Same for soft line breaks inside one paragraph: a pill starting the
+        // next visual line means Right crosses to before it.
+        const lineBreakToken = tokenAfterLineBreak(selection);
+        if (lineBreakToken) {
+          setSelectionBeforeNode(lineBreakToken);
           return true;
         }
 

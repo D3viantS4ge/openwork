@@ -1,8 +1,10 @@
 import {
   $createRangeSelection,
   $isElementNode,
+  $isLineBreakNode,
   $isTextNode,
   $setSelection,
+  type ElementNode,
   type LexicalNode,
   type RangeSelection,
   type TextNode,
@@ -56,4 +58,145 @@ export function setSelectionBeforeNode(node: TextNode) {
   selection.anchor.set(parent.getKey(), offset, "element");
   selection.focus.set(parent.getKey(), offset, "element");
   $setSelection(selection);
+}
+
+/**
+ * Find the nearest token chip strictly before the caret within the same
+ * paragraph. Used by Ctrl+Arrow word navigation so the pill acts as a word
+ * boundary: from "foo[pill]bar|", Ctrl+Left should stop before the pill
+ * ("foo|[pill]bar") instead of jumping past it to the line start.
+ */
+export function tokenBeforeCaretInParagraph(selection: RangeSelection): TextNode | null {
+  if (!selection.isCollapsed()) return null;
+  const paragraph = caretParagraph(selection);
+  if (!paragraph) return null;
+  const anchor = selection.anchor;
+  const anchorOffset = anchor.type === "element"
+    ? anchor.offset
+    : anchor.getNode().getIndexWithinParent() + (anchor.offset > 0 ? 1 : 0);
+  for (let index = anchorOffset - 1; index >= 0; index -= 1) {
+    const child = paragraph.getChildAtIndex(index);
+    if (isComposerInlineTokenNode(child)) return child;
+  }
+  return null;
+}
+
+/**
+ * Find the nearest token chip strictly after the caret within the same
+ * paragraph. Used by Ctrl+Arrow word navigation so the pill acts as a word
+ * boundary: from "foo|[pill]bar", Ctrl+Right should stop after the pill
+ * ("foo[pill]|bar") instead of jumping past it to the line end.
+ */
+export function tokenAfterCaretInParagraph(selection: RangeSelection): TextNode | null {
+  if (!selection.isCollapsed()) return null;
+  const paragraph = caretParagraph(selection);
+  if (!paragraph) return null;
+  const anchor = selection.anchor;
+  const anchorOffset = anchor.type === "element"
+    ? anchor.offset
+    : anchor.getNode().getIndexWithinParent() + (anchor.offset > 0 ? 1 : 0);
+  const size = paragraph.getChildrenSize();
+  for (let index = anchorOffset; index < size; index += 1) {
+    const child = paragraph.getChildAtIndex(index);
+    if (isComposerInlineTokenNode(child)) return child;
+  }
+  return null;
+}
+
+/** The top-level paragraph (or other block element) that holds the caret. */
+function caretParagraph(selection: RangeSelection): ElementNode | null {
+  const anchorNode = selection.anchor.getNode();
+  let node: LexicalNode | null = anchorNode;
+  while (node) {
+    if ($isElementNode(node) && node.getParent() !== null && !node.isInline()) return node;
+    node = node.getParent();
+  }
+  return null;
+}
+
+/**
+ * True when the collapsed caret sits at the very end of its paragraph and the
+ * next paragraph starts with a token chip. Used by Right-arrow navigation so
+ * crossing a line boundary lands before a leading pill (start of the line)
+ * instead of after it.
+ */
+export function nextParagraphStartsWithToken(selection: RangeSelection): TextNode | null {
+  if (!selection.isCollapsed()) return null;
+  const paragraph = caretParagraph(selection);
+  if (!paragraph || !$isElementNode(paragraph)) return null;
+  const anchor = selection.anchor;
+  const anchorAtEnd = anchor.type === "element"
+    ? anchor.offset >= paragraph.getChildrenSize()
+    : anchor.getNode().getParent() === paragraph && anchor.offset >= anchor.getNode().getTextContentSize();
+  if (!anchorAtEnd) return null;
+  const next = paragraph.getNextSibling();
+  if (!$isElementNode(next)) return null;
+  const first = next.getChildAtIndex(0);
+  if (isComposerInlineTokenNode(first)) return first;
+  return null;
+}
+
+/**
+ * Mirror of nextParagraphStartsWithToken: true when the caret sits at the
+ * very start of its paragraph and the previous paragraph ends with a token
+ * chip. Used by Left-arrow navigation so crossing a line boundary lands after
+ * a trailing pill (end of the line) instead of before it.
+ */
+export function previousParagraphEndsWithToken(selection: RangeSelection): TextNode | null {
+  if (!selection.isCollapsed()) return null;
+  const paragraph = caretParagraph(selection);
+  if (!paragraph || !$isElementNode(paragraph)) return null;
+  const anchor = selection.anchor;
+  const anchorAtStart = anchor.type === "element"
+    ? anchor.offset <= 0
+    : anchor.getNode().getParent() === paragraph && anchor.offset <= 0;
+  if (!anchorAtStart) return null;
+  const previous = paragraph.getPreviousSibling();
+  if (!$isElementNode(previous)) return null;
+  const last = previous.getChildAtIndex(previous.getChildrenSize() - 1);
+  if (isComposerInlineTokenNode(last)) return last;
+  return null;
+}
+
+/**
+ * The composer renders soft line breaks as LineBreakNode children inside a
+ * single paragraph. When the caret sits at the end of a text segment that is
+ * immediately followed by a line break and then a token chip (i.e. the pill
+ * starts the next visual line), Right-arrow must land before that pill — the
+ * start of the next line — instead of jumping past it to the line end.
+ */
+export function tokenAfterLineBreak(selection: RangeSelection): TextNode | null {
+  if (!selection.isCollapsed()) return null;
+  const anchor = selection.anchor;
+  if (anchor.type !== "text") return null;
+  const anchorNode = anchor.getNode();
+  const parent = anchorNode.getParent();
+  if (!parent || !$isElementNode(parent)) return null;
+  if (anchor.offset < anchorNode.getTextContentSize()) return null;
+  const next = anchorNode.getNextSibling();
+  if (!next || !$isLineBreakNode(next)) return null;
+  const afterBreak = next.getNextSibling();
+  if (isComposerInlineTokenNode(afterBreak)) return afterBreak;
+  return null;
+}
+
+/**
+ * Mirror of tokenAfterLineBreak: when the caret sits at the start of a text
+ * segment that is immediately preceded by a token chip and then a line break
+ * (i.e. the pill ends the previous visual line), Left-arrow must land after
+ * that pill — the end of the previous line — instead of jumping before it.
+ */
+export function tokenBeforeLineBreak(selection: RangeSelection): TextNode | null {
+  if (!selection.isCollapsed()) return null;
+  const anchor = selection.anchor;
+  if (anchor.type !== "text") return null;
+  const anchorNode = anchor.getNode();
+  const parent = anchorNode.getParent();
+  if (!parent || !$isElementNode(parent)) return null;
+  if (anchor.offset > 0) return null;
+  const previous = anchorNode.getPreviousSibling();
+  if (!previous || !$isLineBreakNode(previous)) return null;
+  const beforeBreak = previous.getPreviousSibling();
+  if (isComposerInlineTokenNode(beforeBreak)) return beforeBreak;
+  return null;
 }
