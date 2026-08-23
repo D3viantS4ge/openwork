@@ -49,6 +49,21 @@ export function applyRevertCursor(messages: UIMessage[], revertMessageId: string
   return messages.slice(0, idx);
 }
 
+/**
+ * True when the transcript already extends past the revert cursor (messages
+ * after the reverted message exist). A snapshot read can lag behind the
+ * post-revert prompt and still carry the cursor after the new message was
+ * accepted; truncating then would delete that new message. Callers skip the
+ * cursor truncation when this returns true — the cache is ahead of the
+ * snapshot, i.e. the revert was already consumed.
+ */
+export function extendsPastRevertCursor(messages: UIMessage[], revertMessageId: string | null | undefined): boolean {
+  if (!revertMessageId || messages.length === 0) return false;
+  const idx = messages.findIndex((message) => message.id === revertMessageId);
+  if (idx < 0) return false;
+  return idx < messages.length - 1;
+}
+
 function isSyntheticMessageId(id: string) {
   return id.startsWith(SYNTHETIC_SESSION_ERROR_MESSAGE_PREFIX);
 }
