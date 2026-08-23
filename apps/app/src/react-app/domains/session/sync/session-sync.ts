@@ -44,6 +44,22 @@ type SyncOptions = {
   onSessionStatus?: (update: { sessionId: string; status: SessionStatus }) => void;
 };
 
+/**
+ * Opt-in sync diagnostics for chasing stochastic event-loss bugs: set
+ * `openwork.debugSync` to "1" in localStorage, reproduce, and read the
+ * `[sync]` console lines to see which events arrived vs. were applied.
+ * Logging only — no behavior change.
+ */
+function syncDebug(...args: unknown[]) {
+  try {
+    if (typeof localStorage !== "undefined" && localStorage.getItem("openwork.debugSync") === "1") {
+      console.debug("[sync]", ...args);
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
 type PendingDelta = {
   sessionId: string;
   messageId: string;
@@ -254,9 +270,11 @@ function clearTrackedSession(input: SyncOptions, entry: SyncEntry, sessionId: st
   // Re-arm retention instead; the next tracked event clears the timer.
   const record = useSessionActivityStore.getState().recordsByWorkspaceId[input.workspaceId]?.[sessionId];
   if (record?.runActive) {
+    syncDebug("clearTrackedSession deferred (run active)", { sessionId });
     retainSession(input, entry, sessionId);
     return;
   }
+  syncDebug("clearTrackedSession", { sessionId, bufferLen: entry.deltaFlushBuffer.filter((item) => item.sessionId === sessionId).length });
   entry.trackedSessionRefs.delete(sessionId);
   const retainedTimer = entry.retainedSessionTimers.get(sessionId);
   if (retainedTimer) clearTimeout(retainedTimer);
@@ -950,6 +968,7 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
     const props = (event.properties ?? {}) as { part?: Part };
     const part = props.part;
     if (!part?.sessionID || !part.messageID) return;
+    syncDebug("part.updated", { sessionID: part.sessionID, messageID: part.messageID, partID: part.id, type: part.type, tracked: isTrackedSession(entry, part.sessionID) });
     if (partHasVisibleAssistantOutput(part)) {
       useSessionActivityStore.getState().markAssistantOutput(workspaceId, part.sessionID, part.messageID);
     }
@@ -1014,6 +1033,7 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
       delta?: string;
     };
     if (!props.sessionID || !props.messageID || !props.partID || !props.delta) return;
+    syncDebug("part.delta", { sessionID: props.sessionID, messageID: props.messageID, partID: props.partID, len: props.delta.length, tracked: isTrackedSession(entry, props.sessionID) });
     useSessionActivityStore.getState().markAssistantOutput(workspaceId, props.sessionID, props.messageID, { allowUnknownMessageRole: true });
     // Note: we do NOT trust `props.field` to disambiguate reasoning vs
     // text. Opencode emits `field: "text"` for both kinds; the actual
@@ -1089,6 +1109,7 @@ function flushDeltas(entry: SyncEntry, workspaceId: string) {
   const queryClient = getReactQueryClient();
   const pending = coalescePendingDeltas(entry.deltaFlushBuffer);
   entry.deltaFlushBuffer = [];
+  syncDebug("flush", { count: pending.length });
 
   // Group by session id so each transcript cache is touched at most once
   // per flush.
@@ -1147,6 +1168,7 @@ function flushDeltas(entry: SyncEntry, workspaceId: string) {
             };
             existing.text += item.delta;
             entry.pendingDeltas.set(item.partId, existing);
+            syncDebug("delta deferred (part undeclared)", { partID: item.partId, messageID: item.messageId, pendingLen: existing.text.length });
             continue;
           }
 
@@ -1172,6 +1194,7 @@ function startSync(input: SyncOptions, entry: SyncEntry) {
   const scheduleRetry = () => {
     if (disposed || controller.signal.aborted || retryTimer) return;
     activeConnectionController = null;
+    syncDebug("stream retry scheduled", { delayMs: retryDelayMs });
     retryTimer = setTimeout(() => {
       retryTimer = null;
       void connect();
@@ -1182,6 +1205,7 @@ function startSync(input: SyncOptions, entry: SyncEntry) {
   const connect = async () => {
     const connectionController = new AbortController();
     activeConnectionController = connectionController;
+    syncDebug("stream connect");
     try {
       const stream = await syncSubscriptionFactory(input.baseUrl, entry.openworkToken, connectionController.signal);
       retryDelayMs = 1_000;
