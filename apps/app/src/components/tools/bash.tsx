@@ -1,5 +1,6 @@
 "use client"
 
+import { useMemo } from "react"
 import { SquareTerminalIcon } from "lucide-react"
 import {
   CollapsibleTool,
@@ -7,6 +8,7 @@ import {
   CollapsibleToolStep,
   CollapsibleToolTrigger,
 } from "@/components/tools/collapsible-tool"
+import { parseShellMetadata } from "@/app/lib/shell-metadata"
 import type { BashToolPart } from "@/lib/build-in-tools"
 
 interface BashToolProps {
@@ -16,6 +18,7 @@ interface BashToolProps {
 export function BashTool({ part }: BashToolProps) {
   const exit = typeof part.metadata?.exit === "number" ? part.metadata.exit : null
   const truncated = part.metadata?.truncated === true
+  const parsed = useMemo(() => parseShellMetadata(part.output ?? ""), [part.output])
 
   return (
     <CollapsibleTool>
@@ -56,9 +59,16 @@ export function BashTool({ part }: BashToolProps) {
                 <span className="text-muted-foreground">(output truncated)</span>
               ) : null}
             </span>
-            {part.output ? (
+            {parsed.notes.length > 0 ? (
+              <div className="rounded-md border border-red-7/30 bg-red-2/40 px-2 py-1.5 text-[11px] leading-relaxed text-red-11">
+                {parsed.notes.map((note, index) => (
+                  <div key={index}>{note}</div>
+                ))}
+              </div>
+            ) : null}
+            {parsed.body ? (
               <pre className="max-h-[32rem] overflow-auto whitespace-pre-wrap wrap-break-word opacity-80">
-                {part.output}
+                {parsed.body}
               </pre>
             ) : null}
           </div>

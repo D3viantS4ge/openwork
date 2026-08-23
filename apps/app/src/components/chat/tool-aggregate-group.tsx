@@ -6,6 +6,7 @@ import { ChevronRight } from "lucide-react"
 import { FileChip } from "@/components/chat/file-chip"
 import { DiffView, getToolInputDiff } from "@/components/ui/diff-view"
 import { DotMatrixLoader } from "@/components/ui/dot-matrix-loader"
+import { parseShellMetadata } from "@/app/lib/shell-metadata"
 import {
   getAggregateNowLabel,
   getAggregateRowFile,
@@ -19,6 +20,27 @@ import { trackToolCallDuration } from "@/lib/tool-call-duration"
 import { cn } from "@/lib/utils"
 
 const ROW_CAP = 8
+
+/** Bash output with engine shell_metadata notes (abort, timeout) surfaced as styled messages. */
+function ShellMetadataOutput({ output }: { output: string }) {
+  const parsed = parseShellMetadata(output)
+  return (
+    <>
+      {parsed.notes.length > 0 ? (
+        <div className="rounded-md border border-red-7/30 bg-red-2/40 px-2 py-1 text-[10px] leading-relaxed text-red-11">
+          {parsed.notes.map((note, index) => (
+            <div key={index}>{note}</div>
+          ))}
+        </div>
+      ) : null}
+      {parsed.body ? (
+        <pre className="max-h-40 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] opacity-70">
+          {parsed.body}
+        </pre>
+      ) : null}
+    </>
+  )
+}
 
 /** Expansion persists per group while the session stays mounted (Paper rule). */
 const expandedByGroupKey = new Map<string, boolean>()
@@ -150,9 +172,7 @@ export function ToolAggregateGroup({ parts, className }: ToolAggregateGroupProps
                       $ {part.input.command}
                     </pre>
                     {part.state === "output-available" && part.output ? (
-                      <pre className="max-h-40 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] opacity-70">
-                        {part.output}
-                      </pre>
+                      <ShellMetadataOutput output={part.output} />
                     ) : null}
                   </div>
                 ) : null}
