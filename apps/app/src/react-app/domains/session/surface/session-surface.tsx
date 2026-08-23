@@ -78,6 +78,7 @@ import {
 } from "@/react-app/domains/session/sync/session-sync";
 import { resolveForkBoundaryId } from "@/react-app/domains/session/sync/transcript-reconcile";
 import { getReactQueryClient } from "@/react-app/infra/query-client";
+import { rejectPendingRequests } from "@/app/lib/pending-request-reject";
 import {
   getComposerAttachments,
   getComposerDraft,
@@ -1338,10 +1339,16 @@ export function SessionSurface(props: SessionSurfaceProps) {
       setError({ message: t("session.stop_failed") });
       return;
     }
-    // A stopped run never answers its pending prompts: dismiss any open
-    // permission or question popup for this session instead of leaving it
-    // stuck with no way to close it.
+    // A stopped run never answers its pending prompts: reject them in the
+    // engine (so its registry drains and the popups do not reappear on the
+    // next reload) and dismiss the local popups.
     const queryClient = getReactQueryClient();
+    await rejectPendingRequests(opencodeClient, {
+      sessionId: props.sessionId,
+      workspaceRoot: props.workspaceRoot,
+      permissions: queryClient.getQueryData(permissionKey(props.workspaceId, props.sessionId)) ?? [],
+      questions: queryClient.getQueryData(questionKey(props.workspaceId, props.sessionId)) ?? [],
+    });
     queryClient.setQueryData(permissionKey(props.workspaceId, props.sessionId), []);
     queryClient.setQueryData(questionKey(props.workspaceId, props.sessionId), []);
     captureAnalyticsEvent("task_run_stopped", {});
