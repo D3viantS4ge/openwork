@@ -263,17 +263,6 @@ function partHasVisibleAssistantOutput(part: Part) {
 }
 
 function clearTrackedSession(input: SyncOptions, entry: SyncEntry, sessionId: string) {
-  // A session with a live run must never be untracked: clearing its tracked
-  // refs and delta buffer mid-run permanently loses the run's events — the
-  // edited prompt and the streaming reasoning only reappear at the final
-  // part update or on reload (the orphaned "Thinking" edit-resend bug).
-  // Re-arm retention instead; the next tracked event clears the timer.
-  const record = useSessionActivityStore.getState().recordsByWorkspaceId[input.workspaceId]?.[sessionId];
-  if (record?.runActive) {
-    syncDebug("clearTrackedSession deferred (run active)", { sessionId });
-    retainSession(input, entry, sessionId);
-    return;
-  }
   syncDebug("clearTrackedSession", { sessionId, bufferLen: entry.deltaFlushBuffer.filter((item) => item.sessionId === sessionId).length });
   entry.trackedSessionRefs.delete(sessionId);
   const retainedTimer = entry.retainedSessionTimers.get(sessionId);
