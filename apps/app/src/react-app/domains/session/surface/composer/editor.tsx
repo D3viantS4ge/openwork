@@ -25,6 +25,7 @@ import {
   KEY_ARROW_LEFT_COMMAND,
   KEY_ARROW_RIGHT_COMMAND,
   KEY_BACKSPACE_COMMAND,
+  KEY_DELETE_COMMAND,
   KEY_DOWN_COMMAND,
   KEY_ENTER_COMMAND,
   PASTE_COMMAND,
@@ -1169,6 +1170,62 @@ function MentionChipNavigationPlugin() {
       COMMAND_PRIORITY_HIGH,
     );
 
+    const unregisterDelete = editor.registerCommand(
+      KEY_DELETE_COMMAND,
+      () => {
+        const selection = $getSelection();
+        if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
+        const anchorNode = selection.anchor.getNode();
+
+        // --- Slash command chip: atomic delete (forward) ---
+        // When cursor is in the text node right before a slash chip,
+        // remove the chip (and any trailing whitespace text) in one action.
+        if ($isTextNode(anchorNode)) {
+          const next = anchorNode.getNextSibling();
+          if (next instanceof ComposerSlashCommandNode) {
+            const textAfter = anchorNode.getTextContent().slice(selection.anchor.offset);
+            if (selection.anchor.offset === anchorNode.getTextContentSize() || textAfter.trim() === "") {
+              next.remove();
+              // Also remove the whitespace-only suffix
+              if (selection.anchor.offset < anchorNode.getTextContentSize()) {
+                const remaining = anchorNode.getTextContent().slice(0, selection.anchor.offset);
+                if (remaining) {
+                  anchorNode.setTextContent(remaining);
+                  const sel = $createRangeSelection();
+                  sel.anchor.set(anchorNode.getKey(), remaining.length, "text");
+                  sel.focus.set(anchorNode.getKey(), remaining.length, "text");
+                  $setSelection(sel);
+                } else {
+                  anchorNode.remove();
+                }
+              }
+              return true;
+            }
+          }
+        }
+
+        // --- Mention / pasted-text / attachment chips: atomic delete (forward) ---
+        if ($isTextNode(anchorNode) && selection.anchor.offset === anchorNode.getTextContentSize()) {
+          const next = anchorNode.getNextSibling();
+          if (isComposerInlineTokenNode(next) && !(next instanceof ComposerSlashCommandNode)) {
+            next.remove();
+            return true;
+          }
+        }
+
+        if ($isElementNode(anchorNode)) {
+          const next = anchorNode.getChildAtIndex(selection.anchor.offset);
+          if (isComposerInlineTokenNode(next)) {
+            next.remove();
+            return true;
+          }
+        }
+
+        return false;
+      },
+      COMMAND_PRIORITY_HIGH,
+    );
+
     const unregisterLeft = editor.registerCommand(
       KEY_ARROW_LEFT_COMMAND,
       () => {
@@ -1221,6 +1278,7 @@ function MentionChipNavigationPlugin() {
 
     return () => {
       unregisterBackspace();
+      unregisterDelete();
       unregisterLeft();
       unregisterRight();
       unregisterEndHome();
