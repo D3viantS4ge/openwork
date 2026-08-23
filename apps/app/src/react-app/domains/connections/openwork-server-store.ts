@@ -520,7 +520,7 @@ export function createOpenworkServerStore(options: CreateOpenworkServerStoreOpti
       }
 
       const client = getClient();
-      if (!client || state.openworkServerStatus === "disconnected") {
+      if (!client) {
         setStateField("openworkServerDiagnostics", null);
         return;
       }
