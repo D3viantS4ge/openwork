@@ -981,23 +981,21 @@ function PasteChipPlugin(props: { onPasteText?: (text: string, placeholder: stri
         if (shouldCollapsePastedText(text, wouldOverflowComposer)) {
           if (!onPasteTextRef.current) return false;
           event.preventDefault();
-          // Build a placeholder token that serializes into the draft as
-          // `[pasted text <label>]` and resolves back into the pill on the
-          // next SyncPlugin rebuild. Insert it at the caret (replacing any
-          // selection) so the collapsed pill lands exactly where the cursor
-          // is, instead of the React handler appending to the end of the
-          // draft — which dumped the pill at the end of the last line
-          // regardless of caret position. The chip (and its random label)
-          // is created here so the placeholder matches the registered part.
+          // Insert the actual pill node at the caret (replacing any
+          // selection), so the collapsed paste lands exactly where the cursor
+          // is. Inserting the node directly — instead of a plain-text
+          // placeholder plus a SyncPlugin rebuild — keeps the cursor in place
+          // (no rebuild, no selectEnd) and makes undo remove the pill cleanly.
+          // The chip (and its random label) is created here so the pill's
+          // serialized `[pasted text <label>]` matches the registered part.
           const chip = createPastedTextChip(text);
-          const placeholder = `[pasted text ${chip.label}]`;
           let serializedAfterInsert = "";
           editor.update(() => {
             // The draft round-trip (OnChange -> store -> SyncPlugin rebuild)
             // can leave Lexical's model selection stale (e.g. parked at the
             // end of the last paragraph) while the DOM caret sits elsewhere.
             // Rebuild the model selection from the live DOM selection so the
-            // placeholder lands exactly where the cursor actually is.
+            // pill lands exactly where the cursor actually is.
             const domSelection = getDOMSelection(window);
             let selection = $getSelection();
             if (domSelection && domSelection.rangeCount > 0) {
@@ -1012,10 +1010,12 @@ function PasteChipPlugin(props: { onPasteText?: (text: string, placeholder: stri
             // Force the model selection to match before inserting; Lexical's
             // PASTE_COMMAND can leave a stale/mismatched selection.
             $setSelection(selection);
-            selection.insertText(placeholder);
+            const pillNode = $createComposerPastedTextNode(chip.label, chip.lines);
+            selection.insertNodes([pillNode]);
+            setSelectionAfterNode(pillNode);
             serializedAfterInsert = serializePromptFromRoot();
           });
-          onPasteTextRef.current(text, placeholder, chip, serializedAfterInsert);
+          onPasteTextRef.current(text, "", chip, serializedAfterInsert);
           return true;
         }
         event.preventDefault();
