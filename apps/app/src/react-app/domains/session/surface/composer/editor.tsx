@@ -1098,17 +1098,26 @@ function MentionChipNavigationPlugin() {
     // must never place the caret inside the chip's DOM — Lexical maps that
     // onto an offset within the token's hidden model text. Snap the caret to
     // after the node instead. The Expand/remove buttons are excluded; their
-    // own plugins handle them.
+    // own plugins handle them. Only clicks that resolve to a token chip are
+    // intercepted — everything else keeps the browser's default caret
+    // placement so clicking normal text still works.
     const handleChipMouseDown = (event: MouseEvent) => {
       if (!(event.target instanceof Element)) return;
       if (event.target.closest("button")) return;
       const targetNode = event.target;
+      let chipNode: ComposerInlineTokenNode | null = null;
+      // Use editor.read() (not getEditorState().read()) so the active-editor
+      // context is set — $getNearestNodeFromDOMNode requires it.
+      editor.read(() => {
+        const node = $getNearestNodeFromDOMNode(targetNode);
+        if (isComposerInlineTokenNode(node)) chipNode = node;
+      });
+      if (!chipNode) return;
       event.preventDefault();
       event.stopPropagation();
+      const target = chipNode;
       editor.update(() => {
-        const node = $getNearestNodeFromDOMNode(targetNode);
-        if (!isComposerInlineTokenNode(node)) return;
-        setSelectionAfterNode(node);
+        setSelectionAfterNode(target);
       });
     };
 
@@ -1233,8 +1242,21 @@ function MentionChipNavigationPlugin() {
         if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
         const anchorNode = selection.anchor.getNode();
 
+        if (isComposerInlineTokenNode(anchorNode)) {
+          setSelectionBeforeNode(anchorNode);
+          return true;
+        }
+
         if ($isTextNode(anchorNode) && selection.anchor.offset === 0) {
           const previous = anchorNode.getPreviousSibling();
+          if (isComposerInlineTokenNode(previous)) {
+            setSelectionBeforeNode(previous);
+            return true;
+          }
+        }
+
+        if ($isElementNode(anchorNode)) {
+          const previous = anchorNode.getChildAtIndex(selection.anchor.offset - 1);
           if (isComposerInlineTokenNode(previous)) {
             setSelectionBeforeNode(previous);
             return true;
