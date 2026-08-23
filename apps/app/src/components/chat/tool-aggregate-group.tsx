@@ -96,7 +96,10 @@ export function ToolAggregateGroup({ parts, className }: ToolAggregateGroupProps
         ) : null}
       </button>
 
-      {nowLabel ? (
+      {/* The "Now:" line is the live indicator for the collapsed state; when
+          the rows are expanded (the default) the running command already
+          shows in its own row, so rendering it here too duplicates it. */}
+      {!expanded && nowLabel ? (
         <div className="mt-1 flex min-w-0 items-center gap-2 ps-5 text-sm text-muted-foreground">
           <DotMatrixLoader label={nowLabel} className="text-muted-foreground" />
           <span className="min-w-0 truncate">
