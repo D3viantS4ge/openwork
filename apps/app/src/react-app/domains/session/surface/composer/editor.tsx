@@ -24,13 +24,18 @@ import {
   COMMAND_PRIORITY_CRITICAL,
   COMMAND_PRIORITY_HIGH,
   getDOMSelection,
+  KEY_ARROW_DOWN_COMMAND,
   KEY_ARROW_LEFT_COMMAND,
   KEY_ARROW_RIGHT_COMMAND,
+  KEY_ARROW_UP_COMMAND,
   KEY_BACKSPACE_COMMAND,
   KEY_DELETE_COMMAND,
   KEY_DOWN_COMMAND,
   KEY_ENTER_COMMAND,
+  MOVE_TO_END,
+  MOVE_TO_START,
   PASTE_COMMAND,
+  SELECTION_CHANGE_COMMAND,
   type SerializedTextNode,
   type Spread,
   TextNode,
@@ -42,6 +47,7 @@ import { decodeComposerMentionValue, encodeComposerMentionValue, type ComposerMe
 import { parseConnectSkillToken } from "./connect-skill-token";
 import { createPastedTextChip, shouldCollapsePastedText, splitPastedText } from "./pasted-text";
 import { insertPastedText } from "./pasted-text-insertion";
+import { adjacentTokenForSelection, setSelectionAfterNode, setSelectionBeforeNode } from "./token-navigation";
 
 type PastedTextToken = { id: string; label: string; lines: number; text: string };
 
@@ -672,26 +678,6 @@ function isComposerInlineTokenNode(node: unknown): node is ComposerInlineTokenNo
     || node instanceof ComposerAttachmentNode;
 }
 
-function setSelectionAfterNode(node: TextNode) {
-  const parent = node.getParent();
-  if (!parent || !$isElementNode(parent)) return;
-  const selection = $createRangeSelection();
-  const offset = node.getIndexWithinParent() + 1;
-  selection.anchor.set(parent.getKey(), offset, "element");
-  selection.focus.set(parent.getKey(), offset, "element");
-  $setSelection(selection);
-}
-
-function setSelectionBeforeNode(node: ComposerInlineTokenNode) {
-  const parent = node.getParent();
-  if (!parent || !$isElementNode(parent)) return;
-  const selection = $createRangeSelection();
-  const offset = node.getIndexWithinParent();
-  selection.anchor.set(parent.getKey(), offset, "element");
-  selection.focus.set(parent.getKey(), offset, "element");
-  $setSelection(selection);
-}
-
 function appendSegmentWithNewlines(
   paragraph: ReturnType<typeof $createParagraphNode>,
   segment: string,
@@ -1096,15 +1082,39 @@ function MentionChipNavigationPlugin() {
   const [editor] = useLexicalComposerContext();
 
   useEffect(() => {
+    // The caret must never sit strictly inside a token chip's hidden text.
+    // The visible pill label ("Pasted · 196 lines") and the token's model
+    // text ("[pasted text x · 196 lines]") differ in length, so native
+    // navigation (arrows, Home/End, Ctrl+arrows, clicks, paste) can leave
+    // the DOM caret inside the pill's span, which Lexical maps onto an
+    // offset within the hidden text — then Backspace/Delete do nothing and
+    // Enter splits it, leaking fragments like "· 196 lines]". Enforce the
+    // invariant on every selection change: snap to just after the token.
+    const unregisterSelectionGuard = editor.registerCommand(
+      SELECTION_CHANGE_COMMAND,
+      () => {
+        const selection = $getSelection();
+        if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
+        const anchor = selection.anchor;
+        if (anchor.type !== "text") return false;
+        const node = anchor.getNode();
+        if (!isComposerInlineTokenNode(node)) return false;
+        if (anchor.offset <= 0 || anchor.offset >= node.getTextContentSize()) return false;
+        setSelectionAfterNode(node);
+        return true;
+      },
+      COMMAND_PRIORITY_HIGH,
+    );
+
     // The plain End/Home keys are not Lexical commands (only Ctrl+ArrowRight
     // maps to MOVE_TO_END), so the browser moves the caret to the end of the
-    // DOM line natively. When the caret sits inside a token chip (e.g. after
-    // clicking the paste pill, whose visible text differs from its hidden
-    // model text), the browser places it within the chip's span and Lexical
-    // maps it onto an offset inside the token's text content — then
-    // Shift+Enter splits that hidden text, leaking fragments like
-    // "· 196 lines]" onto the new line. Snap End/Home to the paragraph
-    // boundary past the tokens instead.
+    // DOM line natively. When the caret sits next to a token chip, the
+    // browser may drop it inside the chip's span, which Lexical maps onto an
+    // offset within the token's hidden text — then Shift+Enter splits that
+    // hidden text, leaking fragments like "· 196 lines]" onto the new line.
+    // Snap End/Home to the token boundary (just before/after the chip on the
+    // current line), not the paragraph start — paragraph start would jump to
+    // the first line in a multiline draft.
     const unregisterEndHome = editor.registerCommand(
       KEY_DOWN_COMMAND,
       (event: KeyboardEvent) => {
@@ -1113,31 +1123,77 @@ function MentionChipNavigationPlugin() {
         if (event.ctrlKey || event.metaKey) return false;
         const selection = $getSelection();
         if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
-        const anchorNode = selection.anchor.getNode();
-        // Only intercept when the caret is inside a token (or at an element
-        // offset that resolves into one). Ordinary text End/Home keep the
-        // native behavior.
-        const anchorIsToken = isComposerInlineTokenNode(anchorNode);
-        const anchorChildIsToken = $isElementNode(anchorNode)
-          ? isComposerInlineTokenNode(anchorNode.getChildAtIndex(selection.anchor.offset))
-          : false;
-        if (!anchorIsToken && !anchorChildIsToken) return false;
-
-        const paragraph = $isElementNode(anchorNode)
-          ? anchorNode
-          : anchorNode.getParent();
-        if (!paragraph || !$isElementNode(paragraph)) return false;
-
+        // Resolve the token this caret is inside or adjacent to.
+        const token = adjacentTokenForSelection(selection);
+        if (!token) return false;
         if (event.key === "End") {
-          paragraph.select(paragraph.getChildrenSize(), paragraph.getChildrenSize());
+          setSelectionAfterNode(token);
         } else {
-          paragraph.select(0, 0);
+          setSelectionBeforeNode(token);
         }
         event.preventDefault();
         return true;
       },
       COMMAND_PRIORITY_HIGH,
     );
+
+    // Ctrl+ArrowLeft/Right dispatch MOVE_TO_START/MOVE_TO_END (word-boundary
+    // navigation). With a token on the line, the native move can drop the
+    // caret inside the chip's span; snap to the token boundary instead.
+    const unregisterMoveStartEnd = editor.registerCommand(
+      MOVE_TO_START,
+      () => {
+        const selection = $getSelection();
+        if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
+        const token = adjacentTokenForSelection(selection);
+        if (!token) return false;
+        setSelectionBeforeNode(token);
+        return true;
+      },
+      COMMAND_PRIORITY_HIGH,
+    );
+
+    const unregisterMoveEnd = editor.registerCommand(
+      MOVE_TO_END,
+      () => {
+        const selection = $getSelection();
+        if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
+        const token = adjacentTokenForSelection(selection);
+        if (!token) return false;
+        setSelectionAfterNode(token);
+        return true;
+      },
+      COMMAND_PRIORITY_HIGH,
+    );
+
+    // Up/Down arrow navigation from a caret adjacent to a token can drop it
+    // inside the chip's span (the browser treats the pill as a line segment).
+    // Snap to the token boundary so the caret never enters the hidden text.
+    const unregisterUpDown = editor.registerCommand(
+      KEY_ARROW_UP_COMMAND,
+      () => snapAdjacentCaret("up"),
+      COMMAND_PRIORITY_HIGH,
+    );
+    const unregisterDown = editor.registerCommand(
+      KEY_ARROW_DOWN_COMMAND,
+      () => snapAdjacentCaret("down"),
+      COMMAND_PRIORITY_HIGH,
+    );
+
+    function snapAdjacentCaret(direction: "up" | "down") {
+      const selection = $getSelection();
+      if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
+      const token = adjacentTokenForSelection(selection);
+      if (!token) return false;
+      // With a token adjacent, Up/Down just crosses the chip without entering
+      // it: Up lands before, Down lands after.
+      if (direction === "up") {
+        setSelectionBeforeNode(token);
+      } else {
+        setSelectionAfterNode(token);
+      }
+      return true;
+    }
 
     // Clicking inside a token chip (paste pill text, mention label, etc.)
     // must never place the caret inside the chip's DOM — Lexical maps that
@@ -1344,11 +1400,16 @@ function MentionChipNavigationPlugin() {
     });
 
     return () => {
+      unregisterSelectionGuard();
+      unregisterEndHome();
+      unregisterMoveStartEnd();
+      unregisterMoveEnd();
+      unregisterUpDown();
+      unregisterDown();
       unregisterBackspace();
       unregisterDelete();
       unregisterLeft();
       unregisterRight();
-      unregisterEndHome();
       unregisterRootListener();
     };
   }, [editor]);
