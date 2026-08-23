@@ -784,7 +784,16 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
     const tracked = isTrackedSession(entry, props.sessionID);
     if (tracked) queryClient.setQueryData(statusKey(workspaceId, props.sessionID), props.status);
     for (const listener of entry.sessionStatusListeners) listener({ sessionId: props.sessionID, status: props.status });
-    if (input && tracked && !isLiveStatus(props.status)) releaseRetainedSessionSoon(input, entry, props.sessionID);
+    if (input && tracked && !isLiveStatus(props.status)) {
+      releaseRetainedSessionSoon(input, entry, props.sessionID);
+      // The run just ended (completed or stopped). The SSE stream can end
+      // before the final part events reach the renderer, leaving tool parts
+      // stuck in-flight ("Running") with no further events to correct them —
+      // the orphaned Running text pinned at the bottom of the session.
+      // Reconcile against the server snapshot, where the terminal part state
+      // wins, so any lingering in-flight parts settle to their final state.
+      void queryClient.invalidateQueries({ queryKey: snapshotKey(workspaceId, props.sessionID) });
+    }
     return;
   }
 
