@@ -495,13 +495,23 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
     () => ({
       appVersionLabel: appBuild?.version ?? "—",
       appCommitLabel: appBuild?.gitSha ?? "—",
-      opencodeVersionLabel: engineInfoState?.baseUrl ? "managed" : "—",
+      // Desktop: "managed" once the bridge reports the engine. Web/server:
+      // no bridge, so fall back to the engine SDK base URL (managed) or the
+      // server-reported OpenCode version.
+      opencodeVersionLabel:
+        engineInfoState?.baseUrl
+          ? "managed"
+          : opencodeBaseUrl
+            ? "managed"
+            : openworkServerSnapshot.openworkServerDiagnostics?.opencodeVersion ?? "—",
       openworkServerVersionLabel: openworkServerSnapshot.openworkServerDiagnostics?.version ?? "—",
     }),
     [
       appBuild?.gitSha,
       appBuild?.version,
       engineInfoState?.baseUrl,
+      opencodeBaseUrl,
+      openworkServerSnapshot.openworkServerDiagnostics?.opencodeVersion,
       openworkServerSnapshot.openworkServerDiagnostics?.version,
     ],
   );
