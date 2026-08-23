@@ -71,6 +71,8 @@ type UseDebugViewModelOptions = {
   openworkServerSnapshot: OpenworkServerStoreSnapshot;
   runtimeWorkspaceId: string | null;
   selectedWorkspaceRoot: string;
+  /** The OpenCode engine SDK base URL for the active workspace. */
+  opencodeBaseUrl: string;
   setRouteError: (value: string | null) => void;
 };
 
@@ -183,18 +185,24 @@ function auditStatusPill(status: "idle" | "loading" | "error"): {
   };
 }
 
-function describeEngine(info: EngineInfo | null) {
-  const running = Boolean(info?.running);
+function describeEngine(info: EngineInfo | null, fallbackBaseUrl?: string) {
+  // Web/server runtime has no desktop bridge to report the engine; fall back
+  // to the known engine SDK base URL so the card shows Connected instead of
+  // an em-dash wall. Desktop keeps its full field set.
+  const running = Boolean(info?.running) || (!info && Boolean(fallbackBaseUrl));
+  const lines = info
+    ? [
+        t("settings.debug_base_url", { url: info.baseUrl ?? "—" }),
+        t("settings.debug_runtime", { runtime: info.runtime ?? "—" }),
+        t("settings.diag_opencode_binary", { binary: formatOpencodeBinary(info) }),
+        t("settings.debug_pid", { pid: info.pid ? String(info.pid) : "—" }),
+        t("settings.debug_hostname", { hostname: info.hostname ?? "—" }),
+        t("settings.debug_port", { port: info.port ? String(info.port) : "—" }),
+      ]
+    : [t("settings.debug_base_url", { url: fallbackBaseUrl || "—" })];
   return {
     ...statusPill(running),
-    lines: [
-      t("settings.debug_base_url", { url: info?.baseUrl ?? "—" }),
-      t("settings.debug_runtime", { runtime: info?.runtime ?? "—" }),
-      t("settings.diag_opencode_binary", { binary: formatOpencodeBinary(info) }),
-      t("settings.debug_pid", { pid: info?.pid ? String(info.pid) : "—" }),
-      t("settings.debug_hostname", { hostname: info?.hostname ?? "—" }),
-      t("settings.debug_port", { port: info?.port ? String(info.port) : "—" }),
-    ],
+    lines,
     stdout: info?.lastStdout ?? null,
     stderr: info?.lastStderr ?? null,
     execution: info?.execution ?? null,
@@ -289,17 +297,34 @@ function describeOpenworkServer(info: OpenworkServerInfo | null, fallback?: Open
   };
 }
 
-function describeOpencodeConnect(engine: EngineInfo | null) {
-  const running = Boolean(engine?.baseUrl);
+function describeOpencodeConnect(
+  engine: EngineInfo | null,
+  fallback?: { baseUrl: string; projectDir: string },
+) {
+  // Web/server runtime: the browser→engine connection is the workspace's
+  // OpenCode SDK link, which the app already holds — show it instead of
+  // "Disconnected" when the desktop bridge is absent.
+  const running = Boolean(engine?.baseUrl) || Boolean(!engine && fallback?.baseUrl);
+  const lines = engine
+    ? [
+        t("settings.debug_base_url", { url: engine.baseUrl ?? "—" }),
+        t("settings.debug_project_dir", { path: engine.projectDir ?? "—" }),
+        t("settings.debug_runtime", { runtime: engine.runtime ?? "—" }),
+      ]
+    : fallback?.baseUrl
+      ? [
+          t("settings.debug_base_url", { url: fallback.baseUrl }),
+          t("settings.debug_project_dir", { path: fallback.projectDir || "—" }),
+        ]
+      : [
+          t("settings.debug_base_url", { url: "—" }),
+          t("settings.debug_project_dir", { path: "—" }),
+          t("settings.debug_runtime", { runtime: "—" }),
+        ];
   return {
     ...statusPill(running),
-    lines: [
-      t("settings.debug_base_url", { url: engine?.baseUrl ?? "—" }),
-      t("settings.debug_project_dir", { path: engine?.projectDir ?? "—" }),
-      t("settings.debug_runtime", { runtime: engine?.runtime ?? "—" }),
-    ],
+    lines,
     metricsLines: [] as string[],
-    error: null as string | null,
   };
 }
 
@@ -310,6 +335,7 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
     openworkServerSnapshot,
     runtimeWorkspaceId,
     selectedWorkspaceRoot,
+    opencodeBaseUrl,
     setRouteError,
   } = options;
 
@@ -520,7 +546,18 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
     [bootstrapConfigDebug],
   );
 
-  const engineCard = useMemo(() => describeEngine(engineInfoState), [engineInfoState]);
+  // On web/server runtime there is no desktop bridge for engine info; the
+  // engine SDK base URL (and workspace root) are the real connection, so the
+  // engine + SDK link cards show them instead of em-dashes. Desktop keeps the
+  // bridge path.
+  const engineFallbackBaseUrl = !isDesktopRuntime() ? opencodeBaseUrl : "";
+  const connectFallbackBaseUrl = !isDesktopRuntime() ? opencodeBaseUrl : "";
+  const connectFallbackProjectDir = !isDesktopRuntime() ? selectedWorkspaceRoot : "";
+
+  const engineCard = useMemo(
+    () => describeEngine(engineInfoState, engineFallbackBaseUrl),
+    [engineInfoState, engineFallbackBaseUrl],
+  );
   const openworkCard = useMemo(
     () =>
       describeOpenworkServer(openworkServerSnapshot.openworkServerHostInfo, {
@@ -534,8 +571,14 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
     ],
   );
   const opencodeConnectCard = useMemo(
-    () => describeOpencodeConnect(engineInfoState),
-    [engineInfoState],
+    () =>
+      describeOpencodeConnect(
+        engineInfoState,
+        connectFallbackBaseUrl
+          ? { baseUrl: connectFallbackBaseUrl, projectDir: connectFallbackProjectDir }
+          : undefined,
+      ),
+    [connectFallbackBaseUrl, connectFallbackProjectDir, engineInfoState],
   );
 
   const onCopyRuntimeDebugReport = useCallback(async () => {

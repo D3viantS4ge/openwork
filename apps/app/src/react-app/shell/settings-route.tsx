@@ -956,6 +956,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     openworkServerSnapshot,
     runtimeWorkspaceId: selectedWorkspace?.id ?? null,
     selectedWorkspaceRoot,
+    opencodeBaseUrl,
     setRouteError: (message) => {
       if (message) {
         toast.error(message);
