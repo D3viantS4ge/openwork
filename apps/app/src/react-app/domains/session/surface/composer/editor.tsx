@@ -166,6 +166,7 @@ class ComposerMentionNode extends TextNode {
     dom.className = MENTION_PILL_CLASS[this.__kind];
     dom.textContent = mentionPillText(this.__value, this.__kind);
     dom.contentEditable = "false";
+    dom.style.userSelect = "none";
     dom.setAttribute("spellcheck", "false");
     dom.title = `@${this.__value}`;
     return dom;
@@ -235,6 +236,7 @@ class ComposerSlashCommandNode extends TextNode {
     dom.className = "inline-flex items-center rounded-full border border-violet-6/35 bg-violet-3/20 px-2.5 py-1 text-xs font-medium text-violet-11";
     dom.textContent = `/${this.__commandName}`;
     dom.contentEditable = "false";
+    dom.style.userSelect = "none";
     dom.setAttribute("spellcheck", "false");
     dom.title = `/${this.__commandName}`;
     return dom;
@@ -306,6 +308,7 @@ class ComposerSkillNode extends TextNode {
     dom.className = "inline-flex items-center rounded-full border border-violet-6/35 bg-violet-3/20 px-2.5 py-1 text-xs font-medium text-violet-11";
     dom.textContent = `/${this.__skillName}`;
     dom.contentEditable = "false";
+    dom.style.userSelect = "none";
     dom.setAttribute("spellcheck", "false");
     dom.title = `Skill: ${this.__skillName}`;
     return dom;
@@ -348,6 +351,7 @@ function createPastedTextChipDom(label: string, lines: number) {
   const dom = document.createElement("span");
   dom.className = "inline-flex items-center gap-1 rounded-full border border-amber-6/35 bg-amber-3/15 px-2.5 py-1 text-xs font-medium text-amber-11";
   dom.contentEditable = "false";
+  dom.style.userSelect = "none";
   dom.setAttribute("spellcheck", "false");
   dom.title = `Pasted text · ${label}`;
 
@@ -475,6 +479,7 @@ function createAttachmentChipDom(attachment: ComposerAttachmentToken) {
   const dom = document.createElement("span");
   dom.className = "relative mx-0.5 inline-flex h-10 max-w-[140px] shrink-0 items-center align-middle";
   dom.contentEditable = "false";
+  dom.style.userSelect = "none";
   dom.setAttribute("spellcheck", "false");
   dom.title = attachment.name;
   dom.dataset.attachmentId = attachment.id;
@@ -1223,16 +1228,16 @@ function MentionChipNavigationPlugin() {
     // Snap to the token boundary so the caret never enters the hidden text.
     const unregisterUpDown = editor.registerCommand(
       KEY_ARROW_UP_COMMAND,
-      () => snapAdjacentCaret("up"),
+      (event: KeyboardEvent | null) => snapAdjacentCaret("up", event),
       COMMAND_PRIORITY_HIGH,
     );
     const unregisterDown = editor.registerCommand(
       KEY_ARROW_DOWN_COMMAND,
-      () => snapAdjacentCaret("down"),
+      (event: KeyboardEvent | null) => snapAdjacentCaret("down", event),
       COMMAND_PRIORITY_HIGH,
     );
 
-    function snapAdjacentCaret(direction: "up" | "down") {
+    function snapAdjacentCaret(direction: "up" | "down", event: KeyboardEvent | null = null) {
       const selection = $getSelection();
       if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
       const token = adjacentTokenForSelection(selection);
@@ -1244,6 +1249,7 @@ function MentionChipNavigationPlugin() {
       } else {
         setSelectionAfterNode(token);
       }
+      event?.preventDefault();
       return true;
     }
 
@@ -1390,13 +1396,14 @@ function MentionChipNavigationPlugin() {
 
     const unregisterLeft = editor.registerCommand(
       KEY_ARROW_LEFT_COMMAND,
-      () => {
+      (event: KeyboardEvent | null) => {
         const selection = $getSelection();
         if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
         const anchorNode = selection.anchor.getNode();
 
         if (isComposerInlineTokenNode(anchorNode)) {
           setSelectionBeforeNode(anchorNode);
+          event?.preventDefault();
           return true;
         }
 
@@ -1406,6 +1413,7 @@ function MentionChipNavigationPlugin() {
         const previousToken = previousParagraphEndsWithToken(selection);
         if (previousToken) {
           setSelectionAfterNode(previousToken);
+          event?.preventDefault();
           return true;
         }
 
@@ -1414,6 +1422,7 @@ function MentionChipNavigationPlugin() {
         const lineBreakToken = tokenBeforeLineBreak(selection);
         if (lineBreakToken) {
           setSelectionAfterNode(lineBreakToken);
+          event?.preventDefault();
           return true;
         }
 
@@ -1421,6 +1430,7 @@ function MentionChipNavigationPlugin() {
           const previous = anchorNode.getPreviousSibling();
           if (isComposerInlineTokenNode(previous)) {
             setSelectionBeforeNode(previous);
+            event?.preventDefault();
             return true;
           }
         }
@@ -1429,6 +1439,7 @@ function MentionChipNavigationPlugin() {
           const previous = anchorNode.getChildAtIndex(selection.anchor.offset - 1);
           if (isComposerInlineTokenNode(previous)) {
             setSelectionBeforeNode(previous);
+            event?.preventDefault();
             return true;
           }
         }
@@ -1440,13 +1451,14 @@ function MentionChipNavigationPlugin() {
 
     const unregisterRight = editor.registerCommand(
       KEY_ARROW_RIGHT_COMMAND,
-      () => {
+      (event: KeyboardEvent | null) => {
         const selection = $getSelection();
         if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
         const anchorNode = selection.anchor.getNode();
 
         if (isComposerInlineTokenNode(anchorNode)) {
           setSelectionAfterNode(anchorNode);
+          event?.preventDefault();
           return true;
         }
 
@@ -1456,6 +1468,7 @@ function MentionChipNavigationPlugin() {
         const nextToken = nextParagraphStartsWithToken(selection);
         if (nextToken) {
           setSelectionBeforeNode(nextToken);
+          event?.preventDefault();
           return true;
         }
 
@@ -1464,6 +1477,7 @@ function MentionChipNavigationPlugin() {
         const lineBreakToken = tokenAfterLineBreak(selection);
         if (lineBreakToken) {
           setSelectionBeforeNode(lineBreakToken);
+          event?.preventDefault();
           return true;
         }
 
@@ -1471,6 +1485,7 @@ function MentionChipNavigationPlugin() {
           const current = anchorNode.getChildAtIndex(selection.anchor.offset);
           if (isComposerInlineTokenNode(current)) {
             setSelectionAfterNode(current);
+            event?.preventDefault();
             return true;
           }
         }
@@ -1483,6 +1498,49 @@ function MentionChipNavigationPlugin() {
     const unregisterRootListener = editor.registerRootListener((rootElement, previousRootElement) => {
       previousRootElement?.removeEventListener("mousedown", handleChipMouseDown, true);
       rootElement?.addEventListener("mousedown", handleChipMouseDown, true);
+
+      // DOM-level guard: if the native caret ever lands inside a chip span
+      // (a lone pill after paste, or after clicking near it, the browser can
+      // place the caret inside the contenteditable=false span — visible as a
+      // yellow caret in the amber pill text), snap the DOM selection to just
+      // after the chip. The Lexical model guard alone can't move the native
+      // caret; this closes the loop so native navigation (arrows, word jumps)
+      // always starts from outside the chip.
+      const handleDomSelectionChange = () => {
+        const domSelection = getDOMSelection(window);
+        if (!domSelection || domSelection.rangeCount === 0) return;
+        const range = domSelection.getRangeAt(0);
+        if (!range.collapsed) return;
+        const anchor = range.startContainer;
+        const chip = anchor instanceof Element
+          ? anchor.closest("[contenteditable='false']")
+          : anchor.parentElement?.closest("[contenteditable='false']");
+        if (!chip) return;
+        // Ignore the Expand/remove buttons: their own handlers manage them.
+        if (anchor instanceof Element && anchor.closest("button")) return;
+        if (anchor instanceof Text && anchor.parentElement?.closest("button")) return;
+        let chipNode: ComposerInlineTokenNode | null = null;
+        // Use editor.read() (not getEditorState().read()) so the active-editor
+        // context is set — $getNearestNodeFromDOMNode requires it.
+        editor.read(() => {
+          const node = $getNearestNodeFromDOMNode(chip);
+          if (isComposerInlineTokenNode(node)) chipNode = node;
+        });
+        if (!chipNode) return;
+        const target = chipNode;
+        editor.update(() => {
+          setSelectionAfterNode(target);
+        });
+      };
+
+      const nextDoc = rootElement?.ownerDocument;
+      if (nextDoc) {
+        nextDoc.addEventListener("selectionchange", handleDomSelectionChange, true);
+      }
+      const prevDoc = previousRootElement?.ownerDocument;
+      if (prevDoc) {
+        prevDoc.removeEventListener("selectionchange", handleDomSelectionChange, true);
+      }
     });
 
     return () => {
