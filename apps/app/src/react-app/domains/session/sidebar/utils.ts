@@ -71,6 +71,18 @@ export const partitionArchivedSessions = (sessions: WorkspaceSessionGroup["sessi
 };
 
 /**
+ * Order archived sessions most-recently-archived first. The server returns
+ * sessions ordered by `time.updated`, so a session archived moments ago (for
+ * example a freshly forked session) would otherwise render below older
+ * archives that merely happen to have a newer `time.updated`.
+ */
+export const orderArchivedSessions = <T>(
+  entries: readonly T[],
+  archivedAt: (entry: T) => number | null | undefined,
+): T[] =>
+  [...entries].sort((left, right) => (archivedAt(right) ?? 0) - (archivedAt(left) ?? 0));
+
+/**
  * Order root sessions: pinned first, then manual order, then server recency.
  */
 export const orderRootSessions = (

@@ -126,6 +126,7 @@ import {
   isActiveWorkSessionStatus,
   isNeedsAttentionSessionStatus,
   isSessionArchived,
+  orderArchivedSessions,
   partitionArchivedSessions,
   workspaceKindLabel,
   workspaceLabel,
@@ -1086,7 +1087,10 @@ export function AppSidebar(props: AppSidebarProps) {
         entries.push({ group, session });
       }
     }
-    return entries;
+    // Most-recently-archived first. The server orders sessions by
+    // time.updated, so a just-archived fork would otherwise land below older
+    // archives that merely have a newer time.updated.
+    return orderArchivedSessions(entries, (entry) => entry.session.time?.archived);
   }, [props.workspaceSessionGroups]);
 
   return (
