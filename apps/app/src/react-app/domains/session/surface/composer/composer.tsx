@@ -101,7 +101,7 @@ type ComposerProps = {
   onInsertMention: (kind: ComposerMentionKind, value: string) => void;
   /** Sent-prompt history (oldest first) recalled with ArrowUp/ArrowDown (#2012). */
   inputHistory?: string[];
-  onPasteText: (text: string) => void;
+  onPasteText: (text: string, placeholder: string, chip: PastedTextChip, serializedAfterInsert?: string) => void;
   onUnsupportedFileLinks: (links: string[]) => void;
   pastedText: PastedTextChip[];
   onExpandPastedText: (id: string) => void;
@@ -719,7 +719,7 @@ export function ReactSessionComposer(props: ComposerProps) {
     return fuzzysort.go(mentionQuery, mentionItems, { keys: ["label"], limit: 8 }).map((entry) => entry.obj);
   }, [mentionItems, mentionOpen, mentionQuery]);
   const pastedTextTokens = useMemo(
-    () => props.pastedText.map((item) => ({ label: item.label, lines: item.lines, text: item.text })),
+    () => props.pastedText.map((item) => ({ id: item.id, label: item.label, lines: item.lines, text: item.text })),
     [props.pastedText],
   );
 

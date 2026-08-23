@@ -10,6 +10,7 @@ import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext
 import {
   $applyNodeReplacement,
   $createRangeSelection,
+  $createRangeSelectionFromDom,
   $createParagraphNode,
   $createTextNode,
   $getNearestNodeFromDOMNode,
@@ -22,6 +23,7 @@ import {
   $isTextNode,
   COMMAND_PRIORITY_CRITICAL,
   COMMAND_PRIORITY_HIGH,
+  getDOMSelection,
   KEY_ARROW_LEFT_COMMAND,
   KEY_ARROW_RIGHT_COMMAND,
   KEY_BACKSPACE_COMMAND,
@@ -38,10 +40,10 @@ import {
 import type { InitialConfigType } from "@lexical/react/LexicalComposer.js";
 import { decodeComposerMentionValue, encodeComposerMentionValue, type ComposerMentionKind } from "./mention-encoding";
 import { parseConnectSkillToken } from "./connect-skill-token";
-import { shouldCollapsePastedText, splitPastedText } from "./pasted-text";
+import { createPastedTextChip, shouldCollapsePastedText, splitPastedText } from "./pasted-text";
 import { insertPastedText } from "./pasted-text-insertion";
 
-type PastedTextToken = { label: string; lines: number; text: string };
+type PastedTextToken = { id: string; label: string; lines: number; text: string };
 
 export type ComposerAttachmentToken = {
   id: string;
@@ -62,7 +64,7 @@ type EditorProps = {
   onExpandPastedText?: (label: string) => void;
   onRemoveAttachment?: (id: string) => void;
   onPaste?: React.ClipboardEventHandler<HTMLDivElement>;
-  onPasteText?: (text: string) => void;
+  onPasteText?: (text: string, placeholder: string, chip: PastedTextToken, serializedAfterInsert?: string) => void;
   onDrop?: React.DragEventHandler<HTMLDivElement>;
   onDragOver?: React.DragEventHandler<HTMLDivElement>;
   onDragLeave?: React.DragEventHandler<HTMLDivElement>;
@@ -840,7 +842,16 @@ function SyncPlugin(props: {
     // must wrap it in editor.getEditorState().read().
     const currentText = editor.getEditorState().read(() => serializePromptFromRoot());
     const forceRebuild = !props.value.trim() && currentText.trim() !== "";
-    if (!forceRebuild && valueRef.current === props.value) return;
+    // If the draft contains paste placeholders that are not yet materialized
+    // as pill nodes (e.g. right after PasteChipPlugin inserted the token and
+    // the paste part was registered), rebuild even though the serialized text
+    // matches — the text check alone would skip the placeholder -> pill swap.
+    const unresolvedPlaceholders = editor.getEditorState().read(() => {
+      const text = serializePromptFromRoot();
+      if (!/\[pasted text [^\]]+\]/.test(text)) return false;
+      return $nodesOfType(ComposerPastedTextNode).length === 0;
+    });
+    if (!forceRebuild && !unresolvedPlaceholders && valueRef.current === props.value) return;
     valueRef.current = props.value;
     // Check whether the editor already reflects the desired state BEFORE
     // entering editor.update(). Even a bail-out inside editor.update()
@@ -848,11 +859,11 @@ function SyncPlugin(props: {
     // selection and reset the cursor (e.g. after a multi-line paste the
     // cursor jumps to position 0 instead of staying after the pasted
     // content). The read() above already gave us `currentText` — reuse it.
-    if (!forceRebuild && currentText === props.value) return;
+    if (!forceRebuild && !unresolvedPlaceholders && currentText === props.value) return;
     editor.update(() => {
       // Double-check inside the update in case another queued update
       // changed the state between the read above and this callback.
-      if (!forceRebuild && serializePromptFromRoot() === props.value) return;
+      if (!forceRebuild && !unresolvedPlaceholders && serializePromptFromRoot() === props.value) return;
       setPrompt(props.value, props.mentions, props.pastedText, props.attachments);
       // $getRoot().selectEnd() doesn't work when the last node is a
       // token (chip) — Lexical can't position a cursor inside a token,
@@ -947,7 +958,7 @@ function pastedTextWouldOverflowEditor(text: string, editorElement: HTMLElement 
   }
 }
 
-function PasteChipPlugin(props: { onPasteText?: (text: string) => void }) {
+function PasteChipPlugin(props: { onPasteText?: (text: string, placeholder: string, chip: PastedTextToken, serializedAfterInsert?: string) => void }) {
   const [editor] = useLexicalComposerContext();
   const onPasteTextRef = useRef(props.onPasteText);
 
@@ -970,7 +981,41 @@ function PasteChipPlugin(props: { onPasteText?: (text: string) => void }) {
         if (shouldCollapsePastedText(text, wouldOverflowComposer)) {
           if (!onPasteTextRef.current) return false;
           event.preventDefault();
-          onPasteTextRef.current(text);
+          // Build a placeholder token that serializes into the draft as
+          // `[pasted text <label>]` and resolves back into the pill on the
+          // next SyncPlugin rebuild. Insert it at the caret (replacing any
+          // selection) so the collapsed pill lands exactly where the cursor
+          // is, instead of the React handler appending to the end of the
+          // draft — which dumped the pill at the end of the last line
+          // regardless of caret position. The chip (and its random label)
+          // is created here so the placeholder matches the registered part.
+          const chip = createPastedTextChip(text);
+          const placeholder = `[pasted text ${chip.label}]`;
+          let serializedAfterInsert = "";
+          editor.update(() => {
+            // The draft round-trip (OnChange -> store -> SyncPlugin rebuild)
+            // can leave Lexical's model selection stale (e.g. parked at the
+            // end of the last paragraph) while the DOM caret sits elsewhere.
+            // Rebuild the model selection from the live DOM selection so the
+            // placeholder lands exactly where the cursor actually is.
+            const domSelection = getDOMSelection(window);
+            let selection = $getSelection();
+            if (domSelection && domSelection.rangeCount > 0) {
+              const fromDom = $createRangeSelectionFromDom(domSelection, editor);
+              if (fromDom) selection = fromDom;
+            }
+            if (!$isRangeSelection(selection)) {
+              $getRoot().selectEnd();
+              selection = $getSelection();
+            }
+            if (!$isRangeSelection(selection)) return false;
+            // Force the model selection to match before inserting; Lexical's
+            // PASTE_COMMAND can leave a stale/mismatched selection.
+            $setSelection(selection);
+            selection.insertText(placeholder);
+            serializedAfterInsert = serializePromptFromRoot();
+          });
+          onPasteTextRef.current(text, placeholder, chip, serializedAfterInsert);
           return true;
         }
         event.preventDefault();

@@ -1498,10 +1498,22 @@ export function SessionSurface(props: SessionSurfaceProps) {
     }
   };
 
-  const handlePasteText = (text: string) => {
-    const pasted = createPastedTextChip(text);
-    setComposerPasteParts(props.sessionId, [...pasteParts, pasted]);
-    setComposerDraft(props.sessionId, `${draft}[pasted text ${pasted.label}]`);
+  // The editor inserts `[pasted text <label>]` at the caret, reports the raw
+  // text (plus the chip it created so the placeholder and part labels match
+  // exactly), and returns the serialized draft it produced. This handler
+  // registers the paste part AND stores that serialized draft so the
+  // SyncPlugin rebuild renders the placeholder at the caret — without the
+  // draft value the rebuild would wipe the insertion and re-append the pill
+  // at the end of the last line.
+  const handlePasteText = (text: string, _placeholder?: string, chip?: { id: string; label: string; lines: number; text: string }, serializedAfterInsert?: string) => {
+    const pasted = chip ?? createPastedTextChip(text);
+    setComposerPasteParts(props.sessionId, [
+      ...pasteParts.filter((item) => item.label !== pasted.label),
+      pasted,
+    ]);
+    if (serializedAfterInsert) {
+      setComposerDraft(props.sessionId, serializedAfterInsert);
+    }
   };
 
   const handleExpandPastedText = (id: string) => {

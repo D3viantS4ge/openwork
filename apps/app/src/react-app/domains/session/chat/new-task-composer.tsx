@@ -180,10 +180,20 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
     setMentions((previous) => ({ ...previous, [value]: kind }));
   };
 
-  const handlePasteText = (text: string) => {
-    const pasted = createPastedTextChip(text);
-    setPastedText((current) => [...current, pasted]);
-    props.onDraftChange(`${props.draft}[pasted text ${pasted.label}]`);
+  // The editor inserts `[pasted text <label>]` at the caret and reports the
+  // raw text (plus the chip it created so placeholder and part labels match)
+  // and the serialized draft it produced. Register the part and adopt the
+  // serialized draft so the pill renders at the caret — appending here would
+  // dump the pill at the end of the last line regardless of caret position.
+  const handlePasteText = (text: string, _placeholder?: string, chip?: Pick<PastedTextChip, "id" | "label" | "lines" | "text">, serializedAfterInsert?: string) => {
+    const pasted = chip ?? createPastedTextChip(text);
+    setPastedText((current) => [
+      ...current.filter((item) => item.label !== pasted.label),
+      pasted,
+    ]);
+    if (serializedAfterInsert) {
+      props.onDraftChange(serializedAfterInsert);
+    }
   };
 
   const handleExpandPastedText = (id: string) => {
