@@ -53,7 +53,7 @@ import { PaperGrainGradient } from "@openwork/ui/react";
 import { useShellConfig } from "@/react-app/shell/shell-config";
 import { useReactRenderWatchdog } from "@/react-app/shell/react-render-watchdog";
 import { SessionDebugPanel } from "./debug-panel";
-import { deriveRenderedSessionMessages, resolveRenderedSessionSnapshot } from "./session-render-state";
+import { deriveRenderedSessionMessages, resolveEffectiveRevertState, resolveRenderedSessionSnapshot } from "./session-render-state";
 import { useLocal } from "@/react-app/kernel/local-provider";
 import { resolveAttachmentFileMetadata } from "@/react-app/domains/session/sync/attachment-file-part";
 import { deriveSessionRenderModel } from "@/react-app/domains/session/sync/transition-controller";
@@ -661,11 +661,6 @@ function withoutRevertTarget(draft: ComposerDraft | null): ComposerDraft | null 
   return { ...draft, revertMessageId: undefined };
 }
 
-function hiddenMessageCount(snapshot: OpenworkSessionSnapshot, revertMessageId: string): number {
-  const index = snapshot.messages.findIndex((message) => message.info.id === revertMessageId);
-  return index < 0 ? snapshot.messages.length : snapshot.messages.length - index;
-}
-
 export function SessionSurface(props: SessionSurfaceProps) {
   const local = useLocal();
   const { config: shellConfig } = useShellConfig();
@@ -886,8 +881,14 @@ export function SessionSurface(props: SessionSurfaceProps) {
     currentSnapshot,
     cachedRendered: rendered,
   });
-  const revertMessageId = snapshot?.session.revert?.messageID ?? null;
-  const revertedMessageCount = snapshot && revertMessageId ? hiddenMessageCount(snapshot, revertMessageId) : 0;
+  // The revert cursor is only effective while the revert is pending: once the
+  // live cache holds the replacement prompt + streaming output (post-revert
+  // content the snapshot lacks), a stale cursor re-stamped by a snapshot
+  // refetch must neither hide the transcript nor surface the restore banner.
+  const { revertMessageId, hiddenCount: revertedMessageCount } = resolveEffectiveRevertState({
+    snapshot,
+    liveMessages: transcriptState ?? [],
+  });
   const liveStatus = statusState ?? snapshot?.status ?? IDLE_STATUS;
   const preparingCloudTools = props.cloudMcpSubmissionState.status === "checking" ||
     props.cloudMcpSubmissionState.status === "repairing";
