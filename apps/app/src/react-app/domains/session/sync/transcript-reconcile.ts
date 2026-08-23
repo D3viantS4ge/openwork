@@ -12,6 +12,13 @@ export type ReconcileTranscriptInput = {
   snapshotMessages: UIMessage[];
   /** Why this reconciliation is happening. Reserved for explicit truncation rules. */
   reason?: TranscriptReconcileReason;
+  /**
+   * Effective revert cursor (from the incoming snapshot or a locally-known
+   * revert). Snapshot messages at/after the cursor are dropped by the merge —
+   * they are stale reverted messages — while cached-only messages past the
+   * cursor (the post-revert replacement prompt) are preserved.
+   */
+  revertMessageId?: string | null;
 };
 
 /**
@@ -30,7 +37,7 @@ export function reconcileTranscriptMessages(input: ReconcileTranscriptInput): UI
   if (current.length === 0) return snapshot;
   if (snapshot.length === 0) return current;
 
-  return mergeSnapshotIntoCachedMessages(snapshot, current);
+  return mergeSnapshotIntoCachedMessages(snapshot, current, input.revertMessageId);
 }
 
 /**
@@ -47,21 +54,6 @@ export function applyRevertCursor(messages: UIMessage[], revertMessageId: string
   const idx = messages.findIndex((message) => message.id === revertMessageId);
   if (idx < 0) return messages;
   return messages.slice(0, idx);
-}
-
-/**
- * True when the transcript already extends past the revert cursor (messages
- * after the reverted message exist). A snapshot read can lag behind the
- * post-revert prompt and still carry the cursor after the new message was
- * accepted; truncating then would delete that new message. Callers skip the
- * cursor truncation when this returns true — the cache is ahead of the
- * snapshot, i.e. the revert was already consumed.
- */
-export function extendsPastRevertCursor(messages: UIMessage[], revertMessageId: string | null | undefined): boolean {
-  if (!revertMessageId || messages.length === 0) return false;
-  const idx = messages.findIndex((message) => message.id === revertMessageId);
-  if (idx < 0) return false;
-  return idx < messages.length - 1;
 }
 
 function isSyntheticMessageId(id: string) {

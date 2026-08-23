@@ -118,14 +118,29 @@ export function mergeSnapshotAndLiveMessages(
   return sortFullyTimestampedMessages(merged);
 }
 
-export function mergeSnapshotIntoCachedMessages(snapshotMessages: UIMessage[], cachedMessages: UIMessage[]) {
-  if (snapshotMessages.length === 0) return cachedMessages;
-  if (cachedMessages.length === 0) return snapshotMessages;
+export function mergeSnapshotIntoCachedMessages(
+  snapshotMessages: UIMessage[],
+  cachedMessages: UIMessage[],
+  revertMessageId?: string | null,
+) {
+  // Snapshot reads can race the revert: a snapshot captured before the revert
+  // (or before the replacement prompt) may still carry the reverted messages,
+  // while the cache was already truncated locally and may hold the new
+  // post-revert message. Drop snapshot messages at/after the revert cursor —
+  // they are stale server-side — and let the cached-only (new) messages
+  // survive the merge below.
+  let snapshotToMerge = snapshotMessages;
+  if (revertMessageId) {
+    const cursorIndex = snapshotMessages.findIndex((message) => message.id === revertMessageId);
+    if (cursorIndex >= 0) snapshotToMerge = snapshotMessages.slice(0, cursorIndex);
+  }
+  if (snapshotToMerge.length === 0) return cachedMessages;
+  if (cachedMessages.length === 0) return snapshotToMerge;
 
-  const snapshotById = new Map(snapshotMessages.map((message) => [message.id, message]));
+  const snapshotById = new Map(snapshotToMerge.map((message) => [message.id, message]));
   const cachedById = new Map(cachedMessages.map((message) => [message.id, message]));
   const seen = new Set<string>();
-  const merged = snapshotMessages.map((message) => {
+  const merged = snapshotToMerge.map((message) => {
     seen.add(message.id);
     const snapshotMessage = snapshotById.get(message.id);
     const cachedMessage = cachedById.get(message.id);

@@ -22,7 +22,7 @@ import {
   STRUCTURED_OUTPUT_TOOL,
 } from "./parse-tool-parts";
 import type { OpenworkSessionSnapshot } from "@/app/lib/openwork-server";
-import { applyRevertCursor, extendsPastRevertCursor, reconcileTranscriptMessages } from "./transcript-reconcile";
+import { applyRevertCursor, reconcileTranscriptMessages } from "./transcript-reconcile";
 import {
   useSessionActivityStore,
 } from "../status/session-activity-store";
@@ -1353,23 +1353,24 @@ export function seedSessionState(workspaceId: string, snapshot: OpenworkSessionS
   }
 
   // The snapshot's revert cursor is authoritative: messages at/after it are
-  // reverted server-side, so the cache must not keep them alive (a later
-  // merge would resurrect them once the server deletes them on next prompt).
-  // But a lagging snapshot can still carry the cursor after the post-revert
-  // prompt was already accepted — truncating then would delete the new
-  // message. Skip the truncation when the reconciled transcript already
-  // extends past the cursor (the revert was consumed).
-  const reconciled = reconcileTranscriptMessages({
-    currentMessages: existing ?? [],
-    snapshotMessages: incoming,
-    reason: "snapshot",
-  });
-  const revertMessageId = snapshot.session.revert?.messageID ?? null;
+  // reverted server-side. But snapshots can race the revert/prompt: one read
+  // before the revert has no cursor yet and still carries the reverted
+  // messages, and one read before the replacement prompt still carries the
+  // cursor. Prefer the locally-known revert (stamped by applySessionRevert)
+  // when the incoming snapshot has none, and let the merge drop stale
+  // snapshot messages past the cursor while preserving cached-only
+  // post-revert messages (the new prompt).
+  const cachedSnapshot = queryClient.getQueryData<OpenworkSessionSnapshot>(snapshotKey(workspaceId, snapshot.session.id));
+  const localRevertMessageId = cachedSnapshot?.session.revert?.messageID ?? null;
+  const revertMessageId = snapshot.session.revert?.messageID ?? localRevertMessageId;
   queryClient.setQueryData(
     key,
-    extendsPastRevertCursor(reconciled, revertMessageId)
-      ? reconciled
-      : applyRevertCursor(reconciled, revertMessageId),
+    reconcileTranscriptMessages({
+      currentMessages: existing ?? [],
+      snapshotMessages: incoming,
+      reason: "snapshot",
+      revertMessageId,
+    }),
   );
 
   queryClient.setQueryData(todoKey(workspaceId, snapshot.session.id), snapshot.todos);
