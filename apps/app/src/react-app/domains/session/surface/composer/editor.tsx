@@ -64,6 +64,12 @@ import {
 
 type PastedTextToken = { id: string; label: string; lines: number; text: string };
 
+// Invisible anchor text node inserted next to a pill so Chrome can paint a
+// caret at the pill's edge even when there is no real text neighbor (blank
+// box, pill at line start, pill after a line break). Stripped from the
+// serialized draft so it never reaches the stored text or the sent message.
+const ZERO_WIDTH_SPACE = "\u200b";
+
 export type ComposerAttachmentToken = {
   id: string;
   name: string;
@@ -827,7 +833,8 @@ function serializePromptFromRoot(): string {
   return root
     .getChildren()
     .map((child) => child.getTextContent())
-    .join("\n");
+    .join("\n")
+    .replaceAll(ZERO_WIDTH_SPACE, "");
 }
 
 function SyncPlugin(props: {
@@ -1025,6 +1032,20 @@ function PasteChipPlugin(props: { onPasteText?: (text: string, placeholder: stri
             $setSelection(selection);
             const pillNode = $createComposerPastedTextNode(chip.label, chip.lines);
             selection.insertNodes([pillNode]);
+            // Chrome cannot paint a caret at a bare element boundary next to a
+            // contenteditable=false inline: when the pill is pasted at the very
+            // start or end of a line (no editable text neighbor), the caret
+            // renders INSIDE the pill ("[pill|]") instead of at its edge.
+            // Anchor the caret in a zero-width-space text node on the pill's
+            // right (and left) so the boundary stays paintable. The ZWSPs are
+            // stripped from the serialized draft, so they never reach the
+            // stored text or the sent message.
+            if (!$isTextNode(pillNode.getPreviousSibling())) {
+              pillNode.insertBefore($createTextNode(ZERO_WIDTH_SPACE));
+            }
+            if (!$isTextNode(pillNode.getNextSibling())) {
+              pillNode.insertAfter($createTextNode(ZERO_WIDTH_SPACE));
+            }
             setSelectionAfterNode(pillNode);
             serializedAfterInsert = serializePromptFromRoot();
           });
