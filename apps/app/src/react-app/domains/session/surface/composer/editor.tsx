@@ -9,6 +9,7 @@ import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin.js";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext.js";
 import {
   $applyNodeReplacement,
+  $createLineBreakNode,
   $createRangeSelection,
   $createRangeSelectionFromDom,
   $createParagraphNode,
@@ -32,6 +33,7 @@ import {
   KEY_DELETE_COMMAND,
   KEY_DOWN_COMMAND,
   KEY_ENTER_COMMAND,
+  INSERT_LINE_BREAK_COMMAND,
   MOVE_TO_END,
   MOVE_TO_START,
   PASTE_COMMAND,
@@ -1563,6 +1565,49 @@ function MentionChipNavigationPlugin() {
       COMMAND_PRIORITY_HIGH,
     );
 
+    // Shift+Enter while the caret sits in a caret anchor next to a pill must
+    // keep the anchor attached to the pill. Lexical's default linebreak
+    // insertion splits at the caret offset — inside the anchor — leaving the
+    // leading anchor on the old line and the pill starting the new line with
+    // no editable neighbor, so the caret paints inside the pill.
+    const unregisterInsertLineBreak = editor.registerCommand(
+      INSERT_LINE_BREAK_COMMAND,
+      (event) => {
+        const selection = $getSelection();
+        if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
+        const anchorNode = selection.anchor.getNode();
+        if (!isComposerCaretAnchorNode(anchorNode)) return false;
+        const previous = anchorNode.getPreviousSibling();
+        const next = anchorNode.getNextSibling();
+        const pill = isComposerInlineTokenNode(previous)
+          ? previous
+          : isComposerInlineTokenNode(next)
+            ? next
+            : null;
+        if (!pill) return false;
+        // Leading anchor ("|[pill]"): the linebreak goes before the anchor so
+        // the anchor stays at the start of the pill's new line and the caret
+        // stays in it. Trailing anchor ("[pill]|"): the linebreak goes after
+        // the anchor so the caret moves to the new (empty) line.
+        const lineBreak = $createLineBreakNode();
+        if (next === pill) {
+          anchorNode.insertBefore(lineBreak);
+        } else {
+          anchorNode.insertAfter(lineBreak);
+          const parent = anchorNode.getParent();
+          if (parent && $isElementNode(parent)) {
+            const sel = $createRangeSelection();
+            const offset = anchorNode.getIndexWithinParent() + 2;
+            sel.anchor.set(parent.getKey(), offset, "element");
+            sel.focus.set(parent.getKey(), offset, "element");
+            $setSelection(sel);
+          }
+        }
+        return true;
+      },
+      COMMAND_PRIORITY_HIGH,
+    );
+
     const unregisterLeft = editor.registerCommand(
       KEY_ARROW_LEFT_COMMAND,
       (event: KeyboardEvent | null) => {
@@ -1621,8 +1666,14 @@ function MentionChipNavigationPlugin() {
 
         if ($isElementNode(anchorNode)) {
           const previous = anchorNode.getChildAtIndex(selection.anchor.offset - 1);
-          if (isComposerInlineTokenNode(previous)) {
-            setSelectionBeforeNode(previous);
+          // A caret anchor between the caret and the pill is invisible: look
+          // through it so crossing from past the trailing anchor lands before
+          // the pill in one press.
+          const target = isComposerCaretAnchorNode(previous)
+            ? previous.getPreviousSibling()
+            : previous;
+          if (isComposerInlineTokenNode(target)) {
+            setSelectionBeforeNode(target);
             event?.preventDefault();
             return true;
           }
@@ -1680,8 +1731,14 @@ function MentionChipNavigationPlugin() {
 
         if ($isElementNode(anchorNode)) {
           const current = anchorNode.getChildAtIndex(selection.anchor.offset);
-          if (isComposerInlineTokenNode(current)) {
-            setSelectionAfterNode(current);
+          // A caret anchor between the caret and the pill is invisible: look
+          // through it so crossing from before the leading anchor lands after
+          // the pill in one press.
+          const target = isComposerCaretAnchorNode(current)
+            ? current.getNextSibling()
+            : current;
+          if (isComposerInlineTokenNode(target)) {
+            setSelectionAfterNode(target);
             event?.preventDefault();
             return true;
           }
@@ -1766,6 +1823,7 @@ function MentionChipNavigationPlugin() {
       unregisterMoveEnd();
       unregisterBackspace();
       unregisterDelete();
+      unregisterInsertLineBreak();
       unregisterLeft();
       unregisterRight();
       unregisterRootListener();
