@@ -351,12 +351,20 @@ function pastedTextChipLabel(lines: number) {
 }
 
 function createPastedTextChipDom(label: string, lines: number) {
+  // The pill must be non-atomic inline content: Chrome treats inline-flex /
+  // inline-block as an atomic inline box and refuses to paint a caret at the
+  // paragraph boundary before it at line start (the caret is resolved into
+  // the pill's own text instead of "|[pill]"). Both the outer span and the
+  // styled wrapper stay display:inline so the boundary stays paintable; the
+  // wrapper carries the pill styling (nowrap keeps it from wrapping).
   const dom = document.createElement("span");
-  dom.className = "inline-flex items-center gap-1 rounded-full border border-amber-6/35 bg-amber-3/15 px-2.5 py-1 text-xs font-medium text-amber-11";
   dom.contentEditable = "false";
   dom.style.userSelect = "none";
   dom.setAttribute("spellcheck", "false");
   dom.title = `Pasted text · ${label}`;
+
+  const pill = document.createElement("span");
+  pill.className = "whitespace-nowrap rounded-full border border-amber-6/35 bg-amber-3/15 px-2.5 py-1 text-xs font-medium text-amber-11 align-middle";
 
   const text = document.createElement("span");
   text.textContent = pastedTextChipLabel(lines);
@@ -384,12 +392,13 @@ function createPastedTextChipDom(label: string, lines: number) {
   path.setAttribute("d", "m6 3 5 5-5 5");
   svg.append(path);
   button.append(actionText, svg);
-  dom.append(text, button);
+  pill.append(text, button);
+  dom.append(pill);
   return dom;
 }
 
 function updatePastedTextChipDom(dom: HTMLElement, label: string, lines: number) {
-  const text = dom.firstElementChild;
+  const text = dom.querySelector(":scope > span > span");
   if (text) text.textContent = pastedTextChipLabel(lines);
   const button = dom.querySelector("button[data-pasted-expand-label]");
   if (button instanceof HTMLButtonElement) {

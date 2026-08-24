@@ -43,6 +43,19 @@ export function adjacentTokenForSelection(selection: RangeSelection): TextNode |
 export function setSelectionAfterNode(node: TextNode) {
   const parent = node.getParent();
   if (!parent || !$isElementNode(parent)) return;
+  // Anchor the caret inside the next editable text node when there is one:
+  // Chrome renders a caret at a bare element boundary preceding a
+  // contenteditable=false inline INSIDE that inline's content (yellow caret
+  // inside the pill). A text anchor at the next sibling's start paints a
+  // normal caret just outside the pill.
+  const next = node.getNextSibling();
+  if ($isTextNode(next) && !next.isToken() && next.getTextContentSize() > 0) {
+    const selection = $createRangeSelection();
+    selection.anchor.set(next.getKey(), 0, "text");
+    selection.focus.set(next.getKey(), 0, "text");
+    $setSelection(selection);
+    return;
+  }
   const selection = $createRangeSelection();
   const offset = node.getIndexWithinParent() + 1;
   selection.anchor.set(parent.getKey(), offset, "element");
@@ -53,6 +66,18 @@ export function setSelectionAfterNode(node: TextNode) {
 export function setSelectionBeforeNode(node: TextNode) {
   const parent = node.getParent();
   if (!parent || !$isElementNode(parent)) return;
+  // Anchor the caret inside the previous editable text node when there is
+  // one: a bare element boundary before the pill renders the caret inside
+  // the pill's padded content in Chrome.
+  const previous = node.getPreviousSibling();
+  if ($isTextNode(previous) && !previous.isToken() && previous.getTextContentSize() > 0) {
+    const selection = $createRangeSelection();
+    const offset = previous.getTextContentSize();
+    selection.anchor.set(previous.getKey(), offset, "text");
+    selection.focus.set(previous.getKey(), offset, "text");
+    $setSelection(selection);
+    return;
+  }
   const selection = $createRangeSelection();
   const offset = node.getIndexWithinParent();
   selection.anchor.set(parent.getKey(), offset, "element");
