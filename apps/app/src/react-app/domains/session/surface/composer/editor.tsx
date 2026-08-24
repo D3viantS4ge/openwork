@@ -49,6 +49,9 @@ import { createPastedTextChip, shouldCollapsePastedText, splitPastedText } from 
 import { insertPastedText } from "./pasted-text-insertion";
 import {
   adjacentTokenForSelection,
+  caretAtTokenLeftEdge,
+  caretAtTokenRightEdge,
+  caretParagraphOffset,
   nextParagraphStartsWithToken,
   previousParagraphEndsWithToken,
   setSelectionAfterNode,
@@ -1171,8 +1174,7 @@ function MentionChipNavigationPlugin() {
         const selection = $getSelection();
         if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
         // If we are at the start of a paragraph that follows one ending in a
-        // pill, land after that pill (end of the previous line). Otherwise
-        // snap to the nearest pill before the caret on this line.
+        // pill, land after that pill (end of the previous line).
         const previousToken = previousParagraphEndsWithToken(selection);
         if (previousToken) {
           setSelectionAfterNode(previousToken);
@@ -1185,11 +1187,31 @@ function MentionChipNavigationPlugin() {
           event?.preventDefault();
           return true;
         }
+        // Ctrl+Left treats the pill as a word: the caret moves to the START of
+        // the word it is in, which stops at the pill's right edge when coming
+        // from the right ("foo[pill]bar|" -> "foo[pill]|bar"), and only a
+        // caret already sitting at the right edge crosses to before the pill.
+        const anchorNode = selection.anchor.getNode();
+        if (isComposerInlineTokenNode(anchorNode)) {
+          // Caret inside the pill: Ctrl+Left exits to its left edge.
+          setSelectionBeforeNode(anchorNode);
+          event?.preventDefault();
+          return true;
+        }
         const token = tokenBeforeCaretInParagraph(selection);
-        if (!token) return false;
-        setSelectionBeforeNode(token);
-        event?.preventDefault();
-        return true;
+        if (token) {
+          const caret = caretParagraphOffset(selection);
+          if (caret !== null && caret >= token.getIndexWithinParent() + 1) {
+            if (caretAtTokenRightEdge(selection, token)) {
+              setSelectionBeforeNode(token);
+            } else {
+              setSelectionAfterNode(token);
+            }
+            event?.preventDefault();
+            return true;
+          }
+        }
+        return false;
       },
       COMMAND_PRIORITY_HIGH,
     );
@@ -1201,7 +1223,7 @@ function MentionChipNavigationPlugin() {
         if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
         // If we are at the end of a paragraph that is followed by one
         // starting with a pill, land before that pill (start of the next
-        // line). Otherwise snap to the nearest pill after the caret.
+        // line).
         const nextToken = nextParagraphStartsWithToken(selection);
         if (nextToken) {
           setSelectionBeforeNode(nextToken);
@@ -1214,44 +1236,41 @@ function MentionChipNavigationPlugin() {
           event?.preventDefault();
           return true;
         }
+        // Ctrl+Right treats the pill as a word: the caret moves to the END of
+        // the word it is in, which stops at the pill's left edge when coming
+        // from the left ("|foo[pill]bar" -> "foo|[pill]bar"), and only a
+        // caret already sitting at the left edge crosses to after the pill.
+        const anchorNode = selection.anchor.getNode();
+        if (isComposerInlineTokenNode(anchorNode)) {
+          // Caret inside the pill: Ctrl+Right exits to its right edge.
+          setSelectionAfterNode(anchorNode);
+          event?.preventDefault();
+          return true;
+        }
         const token = tokenAfterCaretInParagraph(selection);
-        if (!token) return false;
-        setSelectionAfterNode(token);
-        event?.preventDefault();
-        return true;
+        if (token) {
+          const caret = caretParagraphOffset(selection);
+          if (caret !== null && caret <= token.getIndexWithinParent()) {
+            if (caretAtTokenLeftEdge(selection, token)) {
+              setSelectionAfterNode(token);
+            } else {
+              setSelectionBeforeNode(token);
+            }
+            event?.preventDefault();
+            return true;
+          }
+        }
+        return false;
       },
       COMMAND_PRIORITY_HIGH,
     );
 
-    // Up/Down arrow navigation from a caret adjacent to a token can drop it
-    // inside the chip's span (the browser treats the pill as a line segment).
-    // Snap to the token boundary so the caret never enters the hidden text.
-    const unregisterUpDown = editor.registerCommand(
-      KEY_ARROW_UP_COMMAND,
-      (event: KeyboardEvent | null) => snapAdjacentCaret("up", event),
-      COMMAND_PRIORITY_HIGH,
-    );
-    const unregisterDown = editor.registerCommand(
-      KEY_ARROW_DOWN_COMMAND,
-      (event: KeyboardEvent | null) => snapAdjacentCaret("down", event),
-      COMMAND_PRIORITY_HIGH,
-    );
-
-    function snapAdjacentCaret(direction: "up" | "down", event: KeyboardEvent | null = null) {
-      const selection = $getSelection();
-      if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
-      const token = adjacentTokenForSelection(selection);
-      if (!token) return false;
-      // With a token adjacent, Up/Down just crosses the chip without entering
-      // it: Up lands before, Down lands after.
-      if (direction === "up") {
-        setSelectionBeforeNode(token);
-      } else {
-        setSelectionAfterNode(token);
-      }
-      event?.preventDefault();
-      return true;
-    }
+    // Up/Down arrow navigation stays native: the browser moves vertically
+    // between lines itself, and a caret that lands inside a chip's span is
+    // snapped out by the DOM selectionchange guard (user-select:none keeps
+    // the caret from being selectable inside the pill). Intercepting Up/Down
+    // here used to pin the caret to the pill boundary and block reaching the
+    // line above/below.
 
     // Clicking inside a token chip (paste pill text, mention label, etc.)
     // must never place the caret inside the chip's DOM — Lexical maps that
@@ -1502,10 +1521,12 @@ function MentionChipNavigationPlugin() {
       // DOM-level guard: if the native caret ever lands inside a chip span
       // (a lone pill after paste, or after clicking near it, the browser can
       // place the caret inside the contenteditable=false span — visible as a
-      // yellow caret in the amber pill text), snap the DOM selection to just
-      // after the chip. The Lexical model guard alone can't move the native
-      // caret; this closes the loop so native navigation (arrows, word jumps)
-      // always starts from outside the chip.
+      // yellow caret in the amber pill text), snap the DOM selection to the
+      // nearest chip edge. The Lexical model guard alone can't move the
+      // native caret; this closes the loop so native navigation (arrows, word
+      // jumps) always starts from outside the chip. Which edge depends on
+      // where in the pill the caret landed: near its start -> before the
+      // pill, near its end -> after.
       const handleDomSelectionChange = () => {
         const domSelection = getDOMSelection(window);
         if (!domSelection || domSelection.rangeCount === 0) return;
@@ -1528,8 +1549,25 @@ function MentionChipNavigationPlugin() {
         });
         if (!chipNode) return;
         const target = chipNode;
+        // Snap to the nearer edge of the pill. A text caret at offset 0 (or
+        // an element caret at the chip's first child) means the browser
+        // parked it at the pill's left boundary -> before the pill; a caret
+        // at the end of the text (or last child) -> after the pill.
+        let snapBefore = false;
+        if (anchor instanceof Text) {
+          const size = anchor.textContent?.length ?? 0;
+          snapBefore = size > 0
+            ? domSelection.anchorOffset <= Math.floor(size / 2)
+            : domSelection.anchorOffset === 0;
+        } else if (anchor instanceof Element) {
+          snapBefore = domSelection.anchorOffset === 0;
+        }
         editor.update(() => {
-          setSelectionAfterNode(target);
+          if (snapBefore) {
+            setSelectionBeforeNode(target);
+          } else {
+            setSelectionAfterNode(target);
+          }
         });
       };
 
@@ -1548,8 +1586,6 @@ function MentionChipNavigationPlugin() {
       unregisterEndHome();
       unregisterMoveStartEnd();
       unregisterMoveEnd();
-      unregisterUpDown();
-      unregisterDown();
       unregisterBackspace();
       unregisterDelete();
       unregisterLeft();

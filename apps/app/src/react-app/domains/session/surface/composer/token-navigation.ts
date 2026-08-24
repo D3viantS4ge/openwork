@@ -115,6 +115,49 @@ function caretParagraph(selection: RangeSelection): ElementNode | null {
 }
 
 /**
+ * Paragraph-relative caret offset: the element offset equivalent of the
+ * anchor, so callers can compare the caret position against a child index
+ * regardless of whether the anchor is element- or text-typed. Returns null
+ * when the selection is not collapsed.
+ */
+export function caretParagraphOffset(selection: RangeSelection): number | null {
+  if (!selection.isCollapsed()) return null;
+  const anchor = selection.anchor;
+  if (anchor.type === "element") return anchor.offset;
+  const node = anchor.getNode();
+  if (!$isTextNode(node) || !node.getParent()) return null;
+  return node.getIndexWithinParent() + (anchor.offset > 0 ? 1 : 0);
+}
+
+/**
+ * True when the collapsed caret sits exactly at the LEFT edge of a token chip
+ * (just before it): an element anchor at the token's index, or a text anchor
+ * at the end of the token's previous sibling.
+ */
+export function caretAtTokenLeftEdge(selection: RangeSelection, token: TextNode): boolean {
+  if (!selection.isCollapsed()) return false;
+  const anchor = selection.anchor;
+  if (anchor.type === "element") return anchor.offset === token.getIndexWithinParent();
+  const node = anchor.getNode();
+  if (!$isTextNode(node)) return false;
+  return node.getNextSibling() === token && anchor.offset >= node.getTextContentSize();
+}
+
+/**
+ * True when the collapsed caret sits exactly at the RIGHT edge of a token
+ * chip (just after it): an element anchor at the token's index + 1, or a text
+ * anchor at the start of the token's next sibling.
+ */
+export function caretAtTokenRightEdge(selection: RangeSelection, token: TextNode): boolean {
+  if (!selection.isCollapsed()) return false;
+  const anchor = selection.anchor;
+  if (anchor.type === "element") return anchor.offset === token.getIndexWithinParent() + 1;
+  const node = anchor.getNode();
+  if (!$isTextNode(node)) return false;
+  return node.getPreviousSibling() === token && anchor.offset === 0;
+}
+
+/**
  * True when the collapsed caret sits at the very end of its paragraph and the
  * next paragraph starts with a token chip. Used by Right-arrow navigation so
  * crossing a line boundary lands before a leading pill (start of the line)
