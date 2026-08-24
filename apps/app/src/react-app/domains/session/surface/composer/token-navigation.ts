@@ -22,6 +22,17 @@ export function isComposerInlineTokenNode(node: LexicalNode | null | undefined):
 }
 
 /**
+ * True when a node is the zero-width caret anchor that sits next to a pill so
+ * Chrome can paint a caret at the pill's edge. It is a plain (non-token)
+ * text node holding exactly one ZWSP; navigation and deletion treat it as
+ * invisible. Duck-typed on the node type name so this pure module does not
+ * import the editor.
+ */
+export function isComposerCaretAnchorNode(node: LexicalNode | null | undefined): boolean {
+  return $isTextNode(node) && node.getType() === "composer-caret-anchor";
+}
+
+/**
  * Resolve the token chip the collapsed caret is inside of or immediately
  * adjacent to (previous or next sibling at the anchor's element offset), or
  * null when the caret sits in plain text away from any chip. Used by the
@@ -32,6 +43,15 @@ export function adjacentTokenForSelection(selection: RangeSelection): TextNode |
   if (!selection.isCollapsed()) return null;
   const anchorNode = selection.anchor.getNode();
   if (isComposerInlineTokenNode(anchorNode)) return anchorNode;
+  if (isComposerCaretAnchorNode(anchorNode)) {
+    // The caret is inside a ZWSP anchor next to a pill: treat it as being at
+    // the pill boundary itself.
+    const next = anchorNode.getNextSibling();
+    const previous = anchorNode.getPreviousSibling();
+    if (isComposerInlineTokenNode(next)) return next;
+    if (isComposerInlineTokenNode(previous)) return previous;
+    return null;
+  }
   if (!$isElementNode(anchorNode)) return null;
   const at = anchorNode.getChildAtIndex(selection.anchor.offset);
   const before = anchorNode.getChildAtIndex(selection.anchor.offset - 1);
@@ -95,10 +115,8 @@ export function tokenBeforeCaretInParagraph(selection: RangeSelection): TextNode
   if (!selection.isCollapsed()) return null;
   const paragraph = caretParagraph(selection);
   if (!paragraph) return null;
-  const anchor = selection.anchor;
-  const anchorOffset = anchor.type === "element"
-    ? anchor.offset
-    : anchor.getNode().getIndexWithinParent() + (anchor.offset > 0 ? 1 : 0);
+  const anchorOffset = caretParagraphOffset(selection);
+  if (anchorOffset === null) return null;
   for (let index = anchorOffset - 1; index >= 0; index -= 1) {
     const child = paragraph.getChildAtIndex(index);
     if (isComposerInlineTokenNode(child)) return child;
@@ -116,10 +134,8 @@ export function tokenAfterCaretInParagraph(selection: RangeSelection): TextNode 
   if (!selection.isCollapsed()) return null;
   const paragraph = caretParagraph(selection);
   if (!paragraph) return null;
-  const anchor = selection.anchor;
-  const anchorOffset = anchor.type === "element"
-    ? anchor.offset
-    : anchor.getNode().getIndexWithinParent() + (anchor.offset > 0 ? 1 : 0);
+  const anchorOffset = caretParagraphOffset(selection);
+  if (anchorOffset === null) return null;
   const size = paragraph.getChildrenSize();
   for (let index = anchorOffset; index < size; index += 1) {
     const child = paragraph.getChildAtIndex(index);
@@ -144,6 +160,11 @@ function caretParagraph(selection: RangeSelection): ElementNode | null {
  * anchor, so callers can compare the caret position against a child index
  * regardless of whether the anchor is element- or text-typed. Returns null
  * when the selection is not collapsed.
+ *
+ * A caret anchor node next to a pill is invisible: the caret is reported as
+ * sitting at the pill boundary on the anchor's side (one index past the pill
+ * when the anchor follows it, the pill's own index when it precedes it), so
+ * word navigation and the edge checks never see the extra ZWSP character.
  */
 export function caretParagraphOffset(selection: RangeSelection): number | null {
   if (!selection.isCollapsed()) return null;
@@ -151,13 +172,22 @@ export function caretParagraphOffset(selection: RangeSelection): number | null {
   if (anchor.type === "element") return anchor.offset;
   const node = anchor.getNode();
   if (!$isTextNode(node) || !node.getParent()) return null;
+  if (isComposerCaretAnchorNode(node)) {
+    const previous = node.getPreviousSibling();
+    const next = node.getNextSibling();
+    if (isComposerInlineTokenNode(previous)) return previous.getIndexWithinParent() + 1;
+    if (isComposerInlineTokenNode(next)) return next.getIndexWithinParent();
+    // Stray anchor with no pill neighbor: treat as its own (invisible) slot.
+    return node.getIndexWithinParent() + (anchor.offset > 0 ? 1 : 0);
+  }
   return node.getIndexWithinParent() + (anchor.offset > 0 ? 1 : 0);
 }
 
 /**
  * True when the collapsed caret sits exactly at the LEFT edge of a token chip
  * (just before it): an element anchor at the token's index, or a text anchor
- * at the end of the token's previous sibling.
+ * at the end of the token's previous sibling. A caret anchored in a caret
+ * anchor that precedes the token counts as the left edge.
  */
 export function caretAtTokenLeftEdge(selection: RangeSelection, token: TextNode): boolean {
   if (!selection.isCollapsed()) return false;
@@ -165,13 +195,15 @@ export function caretAtTokenLeftEdge(selection: RangeSelection, token: TextNode)
   if (anchor.type === "element") return anchor.offset === token.getIndexWithinParent();
   const node = anchor.getNode();
   if (!$isTextNode(node)) return false;
+  if (isComposerCaretAnchorNode(node)) return node.getNextSibling() === token;
   return node.getNextSibling() === token && anchor.offset >= node.getTextContentSize();
 }
 
 /**
  * True when the collapsed caret sits exactly at the RIGHT edge of a token
  * chip (just after it): an element anchor at the token's index + 1, or a text
- * anchor at the start of the token's next sibling.
+ * anchor at the start of the token's next sibling. A caret anchored in a
+ * caret anchor that follows the token counts as the right edge.
  */
 export function caretAtTokenRightEdge(selection: RangeSelection, token: TextNode): boolean {
   if (!selection.isCollapsed()) return false;
@@ -179,6 +211,7 @@ export function caretAtTokenRightEdge(selection: RangeSelection, token: TextNode
   if (anchor.type === "element") return anchor.offset === token.getIndexWithinParent() + 1;
   const node = anchor.getNode();
   if (!$isTextNode(node)) return false;
+  if (isComposerCaretAnchorNode(node)) return node.getPreviousSibling() === token;
   return node.getPreviousSibling() === token && anchor.offset === 0;
 }
 

@@ -493,6 +493,96 @@ function $createComposerPastedTextNode(label: string, lines: number) {
   return $applyNodeReplacement(new ComposerPastedTextNode(label, lines));
 }
 
+type SerializedComposerCaretAnchorNode = Spread<
+  {
+    type: "composer-caret-anchor";
+    version: 1;
+  },
+  SerializedTextNode
+>;
+
+/**
+ * Invisible, zero-width caret anchor that sits next to a pill so Chrome can
+ * paint the caret at the pill's edge even when there is no real text
+ * neighbor. Unlike a plain ZWSP text node it is:
+ *  - transparent to navigation: every caret helper skips it, so arrows cross
+ *    the pill boundary in one press (no extra press "over the ZWSP"), and
+ *  - undeletable: Backspace/Delete never remove it (they act on the pill or
+ *    its real-text neighbors instead).
+ * The DOM renders the ZWSP so Chrome has a real text position to paint a
+ * caret at; the serialized draft strips it so it never reaches the stored
+ * text or the sent message.
+ */
+class ComposerCaretAnchorNode extends TextNode {
+  static override getType() {
+    return "composer-caret-anchor";
+  }
+
+  static override clone(node: ComposerCaretAnchorNode) {
+    return new ComposerCaretAnchorNode(node.__key);
+  }
+
+  static override importJSON(serializedNode: SerializedComposerCaretAnchorNode) {
+    return $createComposerCaretAnchorNode();
+  }
+
+  constructor(key?: NodeKey) {
+    super(ZERO_WIDTH_SPACE, key);
+  }
+
+  override exportJSON(): SerializedComposerCaretAnchorNode {
+    return {
+      ...super.exportJSON(),
+      type: "composer-caret-anchor",
+      version: 1,
+    };
+  }
+
+  override createDOM(_config: EditorConfig) {
+    const dom = document.createElement("span");
+    dom.textContent = ZERO_WIDTH_SPACE;
+    return dom;
+  }
+
+  override updateDOM(): false {
+    return false;
+  }
+
+  // Prevent the ZWSP from merging with text typed next to the pill: typing
+  // at "[pill]|" creates a fresh text node after the anchor instead of
+  // growing the anchor's text, so the anchor stays a pure caret anchor.
+  override canInsertTextBefore(): false {
+    return false;
+  }
+
+  override canInsertTextAfter(): false {
+    return false;
+  }
+}
+
+function $createComposerCaretAnchorNode() {
+  return $applyNodeReplacement(new ComposerCaretAnchorNode());
+}
+
+function isComposerCaretAnchorNode(node: unknown): node is ComposerCaretAnchorNode {
+  // Only a pure ZWSP node is a caret anchor. Once the user types into it the
+  // text grows (e.g. "x\u200b") and it must behave as ordinary text again.
+  return node instanceof ComposerCaretAnchorNode && node.getTextContent() === ZERO_WIDTH_SPACE;
+}
+
+/**
+ * Remove a pill/chip node together with any caret anchors directly beside it,
+ * so deleting a pill never leaves stray invisible ZWSP nodes behind. Used by
+ * the Backspace/Delete handlers for atomic pill deletion.
+ */
+function removePillWithAnchors(pill: TextNode) {
+  const previous = pill.getPreviousSibling();
+  const next = pill.getNextSibling();
+  pill.remove();
+  if (isComposerCaretAnchorNode(previous)) previous.remove();
+  if (isComposerCaretAnchorNode(next)) next.remove();
+}
+
 function createAttachmentChipDom(attachment: ComposerAttachmentToken) {
   const dom = document.createElement("span");
   dom.className = "relative mx-0.5 inline-flex h-10 max-w-[140px] shrink-0 items-center align-middle";
@@ -1041,10 +1131,10 @@ function PasteChipPlugin(props: { onPasteText?: (text: string, placeholder: stri
             // stripped from the serialized draft, so they never reach the
             // stored text or the sent message.
             if (!$isTextNode(pillNode.getPreviousSibling())) {
-              pillNode.insertBefore($createTextNode(ZERO_WIDTH_SPACE));
+              pillNode.insertBefore($createComposerCaretAnchorNode());
             }
             if (!$isTextNode(pillNode.getNextSibling())) {
-              pillNode.insertAfter($createTextNode(ZERO_WIDTH_SPACE));
+              pillNode.insertAfter($createComposerCaretAnchorNode());
             }
             setSelectionAfterNode(pillNode);
             serializedAfterInsert = serializePromptFromRoot();
@@ -1336,6 +1426,21 @@ function MentionChipNavigationPlugin() {
         if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
         const anchorNode = selection.anchor.getNode();
 
+        // --- Caret anchor: never delete the invisible ZWSP itself ---
+        // A caret in the anchor after a pill ("[pill]|") backspaces into the
+        // pill (atomic delete); a caret in the anchor before a pill
+        // ("|[pill]") moves before the anchor so the native handler deletes
+        // whatever precedes the pill instead.
+        if (isComposerCaretAnchorNode(anchorNode)) {
+          const previous = anchorNode.getPreviousSibling();
+          if (isComposerInlineTokenNode(previous) && !(previous instanceof ComposerSlashCommandNode)) {
+            removePillWithAnchors(previous);
+            return true;
+          }
+          setSelectionBeforeNode(anchorNode);
+          return false;
+        }
+
         // --- Slash command chip: atomic delete ---
         // When cursor is in the text node right after a slash chip,
         // remove the chip (and any trailing whitespace text) in one action.
@@ -1369,7 +1474,7 @@ function MentionChipNavigationPlugin() {
         if ($isTextNode(anchorNode) && selection.anchor.offset === 0) {
           const previous = anchorNode.getPreviousSibling();
           if (isComposerInlineTokenNode(previous) && !(previous instanceof ComposerSlashCommandNode)) {
-            previous.remove();
+            removePillWithAnchors(previous);
             return true;
           }
         }
@@ -1377,7 +1482,7 @@ function MentionChipNavigationPlugin() {
         if ($isElementNode(anchorNode)) {
           const previous = anchorNode.getChildAtIndex(selection.anchor.offset - 1);
           if (isComposerInlineTokenNode(previous)) {
-            previous.remove();
+            removePillWithAnchors(previous);
             return true;
           }
         }
@@ -1393,6 +1498,21 @@ function MentionChipNavigationPlugin() {
         const selection = $getSelection();
         if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
         const anchorNode = selection.anchor.getNode();
+
+        // --- Caret anchor: never delete the invisible ZWSP itself ---
+        // A caret in the anchor before a pill ("|[pill]") deletes forward into
+        // the pill (atomic delete); a caret in the anchor after a pill
+        // ("[pill]|") moves after the anchor so the native handler deletes
+        // whatever follows the pill instead.
+        if (isComposerCaretAnchorNode(anchorNode)) {
+          const next = anchorNode.getNextSibling();
+          if (isComposerInlineTokenNode(next) && !(next instanceof ComposerSlashCommandNode)) {
+            removePillWithAnchors(next);
+            return true;
+          }
+          setSelectionAfterNode(anchorNode);
+          return false;
+        }
 
         // --- Slash command chip: atomic delete (forward) ---
         // When cursor is in the text node right before a slash chip,
@@ -1425,7 +1545,7 @@ function MentionChipNavigationPlugin() {
         if ($isTextNode(anchorNode) && selection.anchor.offset === anchorNode.getTextContentSize()) {
           const next = anchorNode.getNextSibling();
           if (isComposerInlineTokenNode(next) && !(next instanceof ComposerSlashCommandNode)) {
-            next.remove();
+            removePillWithAnchors(next);
             return true;
           }
         }
@@ -1433,7 +1553,7 @@ function MentionChipNavigationPlugin() {
         if ($isElementNode(anchorNode)) {
           const next = anchorNode.getChildAtIndex(selection.anchor.offset);
           if (isComposerInlineTokenNode(next)) {
-            next.remove();
+            removePillWithAnchors(next);
             return true;
           }
         }
@@ -1449,6 +1569,21 @@ function MentionChipNavigationPlugin() {
         const selection = $getSelection();
         if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
         const anchorNode = selection.anchor.getNode();
+
+        if (isComposerCaretAnchorNode(anchorNode)) {
+          // The caret is inside the invisible ZWSP anchor next to a pill:
+          // Left treats it as being at the pill boundary on the anchor's
+          // side — a trailing anchor ("[pill]|") crosses before the pill, a
+          // leading anchor ("|[pill]") continues past the anchor to whatever
+          // precedes it.
+          if (isComposerInlineTokenNode(anchorNode.getPreviousSibling())) {
+            setSelectionBeforeNode(anchorNode.getPreviousSibling() as TextNode);
+          } else {
+            setSelectionBeforeNode(anchorNode);
+          }
+          event?.preventDefault();
+          return true;
+        }
 
         if (isComposerInlineTokenNode(anchorNode)) {
           setSelectionBeforeNode(anchorNode);
@@ -1504,6 +1639,19 @@ function MentionChipNavigationPlugin() {
         const selection = $getSelection();
         if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
         const anchorNode = selection.anchor.getNode();
+
+        if (isComposerCaretAnchorNode(anchorNode)) {
+          // Mirror of Left: a leading anchor ("|[pill]") crosses to after the
+          // pill, a trailing anchor ("[pill]|") continues past the anchor to
+          // whatever follows it.
+          if (isComposerInlineTokenNode(anchorNode.getNextSibling())) {
+            setSelectionAfterNode(anchorNode.getNextSibling() as TextNode);
+          } else {
+            setSelectionAfterNode(anchorNode);
+          }
+          event?.preventDefault();
+          return true;
+        }
 
         if (isComposerInlineTokenNode(anchorNode)) {
           setSelectionAfterNode(anchorNode);
@@ -1701,7 +1849,7 @@ export const LexicalPromptEditor = forwardRef<LexicalPromptEditorHandle, EditorP
         throw error;
       },
         editable: !props.disabled,
-        nodes: [ComposerMentionNode, ComposerSlashCommandNode, ComposerSkillNode, ComposerPastedTextNode, ComposerAttachmentNode],
+        nodes: [ComposerMentionNode, ComposerSlashCommandNode, ComposerSkillNode, ComposerPastedTextNode, ComposerAttachmentNode, ComposerCaretAnchorNode],
         editorState: () => {
           setPrompt(props.value, props.mentions, props.pastedText, props.attachments);
         },
