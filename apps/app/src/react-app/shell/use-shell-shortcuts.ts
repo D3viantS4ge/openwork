@@ -92,7 +92,7 @@ export function useShellShortcuts(input: UseShellShortcutsInput) {
   //   Cmd/Ctrl+N        -> new task in selected workspace
   //   Cmd/Ctrl+K        -> toggle command palette
   //   Cmd/Ctrl+J        -> toggle terminal panel (matches VS Code)
-  //   Cmd/Ctrl+F        -> find in current conversation (handled by session surface)
+  //   Cmd/Ctrl+Alt+F    -> find in current conversation (handled by session surface)
   //   Cmd/Ctrl+Shift+F  -> search every session (titles + messages)
   //   Cmd/Ctrl+T        -> next session tab (desktop only; the browser owns
   //                        new-tab in the web UI, so it passes through)

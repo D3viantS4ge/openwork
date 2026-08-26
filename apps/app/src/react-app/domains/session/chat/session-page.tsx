@@ -5,6 +5,7 @@ import { usePanelRef } from "react-resizable-panels";
 import { Cloud, FileText, Globe, Mic2, MoreHorizontal, PanelRight, TextSearch, Zap } from "lucide-react";
 
 import { resolveExtensionIconSrc } from "@/react-app/design-system/extension-icon-src";
+import { isMacPlatform } from "@/app/utils";
 import { t } from "../../../../i18n";
 import { OPENWORK_EXTENSION_CATALOG } from "../../../../app/constants";
 import { buildDenAuthUrl, readDenBootstrapConfig } from "../../../../app/lib/den";
@@ -1137,7 +1138,7 @@ export function SessionPage(props: SessionPageProps) {
                       </Button>
                     }
                   />
-                  <TooltipContent>Find in conversation (⌘F)</TooltipContent>
+                  <TooltipContent>Find in conversation ({isMacPlatform() ? "⌘⌥F" : "Ctrl+Alt+F"})</TooltipContent>
                 </Tooltip>
               ) : null}
               <Tooltip>

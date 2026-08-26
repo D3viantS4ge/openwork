@@ -2187,7 +2187,7 @@ export function SessionRoute() {
       id: "session-find.open",
       title: "Find in conversation",
       detail: "Search within the current conversation",
-      meta: "Cmd/Ctrl+F",
+      meta: "Cmd/Ctrl+Alt+F",
       searchText: "find search current conversation session messages transcript",
       action: () => {
         setCommandPaletteOpen(false);

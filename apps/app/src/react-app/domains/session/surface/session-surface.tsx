@@ -1743,7 +1743,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
   const handleFindShortcut = useEffectEvent((event: KeyboardEvent) => {
     const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
     const mod = isMac ? event.metaKey : event.ctrlKey;
-    if (!mod || event.shiftKey || event.altKey || event.key?.toLowerCase() !== "f") return;
+    if (!mod || !event.altKey || event.shiftKey || event.key?.toLowerCase() !== "f") return;
 
     event.preventDefault();
     if (resolveFindOwnerSessionId() === props.sessionId) {
