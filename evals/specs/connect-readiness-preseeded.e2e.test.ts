@@ -144,7 +144,7 @@ test.skipIf(!e2eTestsEnabled || !mysqlOpen)(title, async ({ evidence, place }) =
   const skillName = `pr3806-connect-proof-${run}`;
   const connectionName = `PR3806 conn ${String(run).slice(-6)}`;
   const nonsenseName = `no-such-capability-${run}`;
-  const rawSourceText = `---\nname: ${skillName}\ndescription: Proves preseeded Connect skill discovery on OpenCode 1.18.18.\n---\n\nReturn the PR 3806 Connect proof phrase.`;
+  const rawSourceText = `---\nname: ${skillName}\ndescription: Proves preseeded Connect skill discovery on OpenCode 1.18.23.\n---\n\nReturn the PR 3806 Connect proof phrase.`;
 
   await using den = await server({
     place,
@@ -241,7 +241,7 @@ test.skipIf(!e2eTestsEnabled || !mysqlOpen)(title, async ({ evidence, place }) =
 
   const health = await eventually(() => readCloudMcpHealth(desktopApp, desktopApp.workspaceId), {
     within: 180_000,
-    label: "OpenCode 1.18.18 openwork-cloud engine and agent-tool readiness",
+    label: "OpenCode 1.18.23 openwork-cloud engine and agent-tool readiness",
     until: healthIsReady,
   });
   const engine = requireRecord(health.engine, "Cloud MCP engine health");
@@ -257,7 +257,7 @@ test.skipIf(!e2eTestsEnabled || !mysqlOpen)(title, async ({ evidence, place }) =
     "openwork-cloud_execute_capability",
   ]));
   evidence.recordAssertionEvidence(
-    "OpenCode 1.18.18 connects openwork-cloud with both agent tools",
+    "OpenCode 1.18.23 connects openwork-cloud with both agent tools",
     `Health payload: ${JSON.stringify({ phase: health.phase, usable: health.usable, engine, tools: tools.present })}.`,
     healthIsReady(health)
       && engine.status !== "needs_auth"

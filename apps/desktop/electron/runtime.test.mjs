@@ -87,7 +87,7 @@ describe("bundled OpenCode runtime", () => {
 
     // OpenCode #40990 stops old assistant messages with lexicographically
     // later IDs from short-circuiting a newly appended user turn.
-    assert.equal(constants.opencodeVersion, "v1.18.18");
+    assert.equal(constants.opencodeVersion, "v1.18.23");
   });
 });
 

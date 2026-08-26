@@ -248,10 +248,10 @@ test.skipIf(!e2eTestsEnabled)(title, { timeout: 600_000 }, async ({ evidence }) 
     evidence.recordAssertionEvidence(
       "The local OpenWork server reports the fixed bundled OpenCode engine",
       `GET /status observed ${JSON.stringify({ opencodeVersion: versionRaw })}.`,
-      engineVersion === "1.18.18" && !engineVersion.startsWith("1.17."),
+      engineVersion === "1.18.23" && !engineVersion.startsWith("1.17."),
     );
     expect(engineVersion, `stale 1.17.x engine reported by /status: ${engineVersion}`).not.toMatch(/^1\.17\./);
-    expect(engineVersion).toBe("1.18.18");
+    expect(engineVersion).toBe("1.18.23");
 
     const configured = await evalIn(firstApp, `(async () => {
       const port = localStorage.getItem("openwork.server.port");

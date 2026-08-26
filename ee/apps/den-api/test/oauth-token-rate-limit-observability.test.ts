@@ -69,7 +69,7 @@ test("categorizes MCP clients without logging raw user agents", async () => {
     ["Cursor/3.17.3", "cursor"],
     ["claude-code/2.1.235", "claude_code"],
     ["codex-mcp-client/0.148.0", "codex"],
-    ["opencode/1.18.18", "opencode"],
+    ["opencode/1.18.23", "opencode"],
   ] as const
 
   for (const [userAgent, category] of clients) {
