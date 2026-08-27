@@ -66,4 +66,28 @@ describe("reconcileTranscriptMessages", () => {
     });
     expect(result.map((item) => item.id)).toEqual(["m1", "m2"]);
   });
+
+  test("applies the revert cursor when seeding an empty cache (reverted messages must not be resurrected)", () => {
+    // A fresh page load after a revert: the cache is empty, but the snapshot
+    // still carries the cursor and the not-yet-cleaned-up reverted messages.
+    const snapshotMessages = [message("m1"), message("m2"), message("m3")];
+    const result = reconcileTranscriptMessages({
+      currentMessages: [],
+      snapshotMessages,
+      revertMessageId: "m2",
+    });
+    expect(result.map((item) => item.id)).toEqual(["m1"]);
+  });
+
+  test("seeding an empty cache behind a first-message cursor yields an empty transcript", () => {
+    // Reverting the first message hides it and everything after; an empty
+    // cache must stay empty instead of being re-seeded with the full snapshot.
+    const snapshotMessages = [message("m1"), message("m2")];
+    const result = reconcileTranscriptMessages({
+      currentMessages: [],
+      snapshotMessages,
+      revertMessageId: "m1",
+    });
+    expect(result).toEqual([]);
+  });
 });

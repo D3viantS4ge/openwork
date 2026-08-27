@@ -31,13 +31,17 @@ export type ReconcileTranscriptInput = {
  * truncation path instead of relying on snapshot absence.
  */
 export function reconcileTranscriptMessages(input: ReconcileTranscriptInput): UIMessage[] {
-  const current = input.currentMessages;
-  const snapshot = input.snapshotMessages;
-
-  if (current.length === 0) return snapshot;
-  if (snapshot.length === 0) return current;
-
-  return mergeSnapshotIntoCachedMessages(snapshot, current, input.revertMessageId);
+  // mergeSnapshotIntoCachedMessages already handles empty caches and applies
+  // the revert cursor to the snapshot. Delegating unconditionally keeps the
+  // cursor effective when the cache is empty — a fresh page load after a
+  // revert, or a revert that truncated the transcript to nothing (e.g. the
+  // first message) — instead of re-seeding the reverted snapshot messages
+  // past the cursor.
+  return mergeSnapshotIntoCachedMessages(
+    input.snapshotMessages,
+    input.currentMessages,
+    input.revertMessageId,
+  );
 }
 
 /**
