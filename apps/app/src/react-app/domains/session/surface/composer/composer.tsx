@@ -315,6 +315,12 @@ export function ReactSessionComposer(props: ComposerProps) {
     }
   }, [props.modelPickerOpen, props.onModelPickerOpenChange, props.steering]);
 
+  useEffect(() => {
+    if (props.steering && agentMenuOpen) {
+      setAgentMenuOpen(false);
+    }
+  }, [agentMenuOpen, props.steering]);
+
   const handleRefreshOrganizationModels = useCallback(async () => {
     if (!props.onRefreshOrganizationModels || refreshingOrganizationModels) return;
 
@@ -929,6 +935,7 @@ export function ReactSessionComposer(props: ComposerProps) {
   };
 
   const applyAgentSelection = (name: string | null) => {
+    if (props.steering) return;
     props.onSelectAgent(name);
     setAgentMenuOpen(false);
     setToolMenuOpen(false);
@@ -1028,8 +1035,7 @@ export function ReactSessionComposer(props: ComposerProps) {
       if (event.key === "Enter" || event.key === "Tab") {
         event.preventDefault();
         const selected = agentMenuIndex === 0 ? null : nonDefaultAgents[agentMenuIndex - 1]?.name ?? null;
-        props.onSelectAgent(selected);
-        setAgentMenuOpen(false);
+        applyAgentSelection(selected);
         return;
       }
       if (event.key === "Escape") {
@@ -1647,7 +1653,7 @@ export function ReactSessionComposer(props: ComposerProps) {
                     type="button"
                     className="flex h-9 max-h-9 items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12"
                     onClick={() => setAgentMenuOpen((value) => !value)}
-                    disabled={props.busy}
+                    disabled={props.steering}
                     aria-expanded={agentMenuOpen}
                     title={t("composer.agent_label")}
                   >
