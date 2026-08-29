@@ -1958,10 +1958,11 @@ export function SessionSurface(props: SessionSurfaceProps) {
   }, [props.onForkAtMessage, props.sessionId, renderedMessages]);
 
   const handleEditUserMessage = useCallback((messageId: string, text: string) => {
-    // Preserve the boundary with the draft; the destructive revert is deferred
-    // until the replacement prompt is actually sent.
-    void typeComposerText(text, messageId);
-  }, [typeComposerText]);
+    // Editing a prompt behaves like reverting to it: rewind the transcript
+    // immediately, then load the message text into the composer for editing.
+    void props.onRevertToMessage?.(messageId, props.sessionId);
+    void typeComposerText(text);
+  }, [props.onRevertToMessage, props.sessionId, typeComposerText]);
 
   const handleRestoreRevertedSession = useCallback(() => {
     if (!props.onRestoreRevertedSession || restoringRevertedMessages) return;
