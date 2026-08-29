@@ -59,13 +59,13 @@ export function SessionStats({ session, contextTokens, className }: SessionStats
 
   const detail = [
     cost !== null ? `cost ${formatCost(cost)}` : null,
+    contextTokens != null ? `${formatTokens(contextTokens)} context` : null,
     hasTokens ? `${formatTokens(totalInput)} in` : null,
     hasTokens ? `${formatTokens(totalOutput)} out` : null,
     reasoning !== null ? `${formatTokens(reasoning)} reasoning` : null,
     cacheRead !== null ? `${formatTokens(cacheRead)} cache read` : null,
     cacheWrite !== null ? `${formatTokens(cacheWrite)} cache write` : null,
     cacheHitRate !== null ? `${cacheHitRate.toFixed(1)}% cache hit` : null,
-    contextTokens != null ? `${formatTokens(contextTokens)} context` : null,
   ]
     .filter((value): value is string => value !== null)
     .join(" · ")
@@ -80,6 +80,7 @@ export function SessionStats({ session, contextTokens, className }: SessionStats
       title={detail}
     >
       {cost !== null ? <span>{formatCost(cost)}</span> : null}
+      {contextTokens != null && contextTokens > 0 ? <span>{formatTokens(contextTokens)} context</span> : null}
       {hasTokens ? (
         <span>
           {formatTokens(totalInput)} in · {formatTokens(totalOutput)} out
@@ -89,7 +90,6 @@ export function SessionStats({ session, contextTokens, className }: SessionStats
       {cacheRead !== null && cacheRead > 0 ? <span>{formatTokens(cacheRead)} cache read</span> : null}
       {cacheWrite !== null && cacheWrite > 0 ? <span>{formatTokens(cacheWrite)} cache write</span> : null}
       {cacheHitRate !== null && cacheHitRate > 0 ? <span>{cacheHitRate.toFixed(1)}% cache hit</span> : null}
-      {contextTokens != null && contextTokens > 0 ? <span>{formatTokens(contextTokens)} context</span> : null}
     </div>
   )
 }
