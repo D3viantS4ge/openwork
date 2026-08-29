@@ -62,6 +62,7 @@ export function SessionStats({ session, className }: SessionStatsProps) {
     reasoning !== null ? `reasoning ${formatTokens(reasoning)}` : null,
     cacheRead !== null ? `cache read ${formatTokens(cacheRead)}` : null,
     cacheWrite !== null ? `cache write ${formatTokens(cacheWrite)}` : null,
+    cacheHitRate !== null ? `cache ${cacheHitRate.toFixed(1)}%` : null,
   ]
     .filter((value): value is string => value !== null)
     .join(" · ")
@@ -81,10 +82,10 @@ export function SessionStats({ session, className }: SessionStatsProps) {
           {formatTokens(totalInput)} in · {formatTokens(totalOutput)} out
         </span>
       ) : null}
-      {reasoning !== null ? <span>reasoning {formatTokens(reasoning)}</span> : null}
-      {cacheRead !== null ? <span>cache read {formatTokens(cacheRead)}</span> : null}
-      {cacheWrite !== null ? <span>cache write {formatTokens(cacheWrite)}</span> : null}
-      {cacheHitRate !== null ? <span>cache {cacheHitRate.toFixed(1)}%</span> : null}
+      {reasoning !== null && reasoning > 0 ? <span>reasoning {formatTokens(reasoning)}</span> : null}
+      {cacheRead !== null && cacheRead > 0 ? <span>cache read {formatTokens(cacheRead)}</span> : null}
+      {cacheWrite !== null && cacheWrite > 0 ? <span>cache write {formatTokens(cacheWrite)}</span> : null}
+      {cacheHitRate !== null && cacheHitRate > 0 ? <span>cache {cacheHitRate.toFixed(1)}%</span> : null}
     </div>
   )
 }
