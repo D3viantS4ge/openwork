@@ -102,6 +102,11 @@ export function buildOpenworkRuntimeConfigObjectFromSnapshot(
   const provider = runtimeProviderMap(runtimeConfig);
   return {
     ...runtimeConfig,
+    // Filesystem snapshots let the engine undo/revert file changes on session
+    // revert and edit. OpenWork tracks file history in git itself, so disable
+    // them: reverting or editing a prompt must rewind only the transcript,
+    // never `git checkout` the working tree (which clobbers committed work).
+    snapshot: false,
     default_agent: runtimeConfig.default_agent ?? "openwork",
     agent: {
       openwork: {

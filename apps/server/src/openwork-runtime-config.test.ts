@@ -73,6 +73,7 @@ describe("openwork runtime config file", () => {
     expect(mcp.posthog?.enabled).toBe(true);
     expect(mcp["openwork-connect-stale"]).toBeUndefined();
     expect(parsed.default_agent).toBe("openwork");
+    expect(parsed.snapshot).toBe(false);
     expect(Array.isArray(parsed.plugin)).toBe(true);
     expect(parsed.agent).toMatchObject({
       openwork: {
