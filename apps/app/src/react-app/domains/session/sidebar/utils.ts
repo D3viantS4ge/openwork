@@ -168,6 +168,81 @@ export const buildSessionTreeState = (
   };
 };
 
+/**
+ * Collect every descendant session id of `sessionId` (subsessions, forks, and
+ * their children) by following `parentID` links within the session list.
+ */
+export const collectSessionDescendants = (
+  sessions: WorkspaceSessionGroup["sessions"],
+  sessionId: string,
+): string[] => {
+  const childrenByParent = new Map<string, string[]>();
+  for (const session of sessions) {
+    const parentID = session.parentID?.trim();
+    if (!parentID) continue;
+    const siblings = childrenByParent.get(parentID) ?? [];
+    siblings.push(session.id);
+    childrenByParent.set(parentID, siblings);
+  }
+
+  const descendants: string[] = [];
+  const visited = new Set<string>();
+  const stack = [sessionId];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) continue;
+    for (const child of childrenByParent.get(current) ?? []) {
+      if (visited.has(child)) continue;
+      visited.add(child);
+      descendants.push(child);
+      stack.push(child);
+    }
+  }
+  return descendants;
+};
+
+/**
+ * Map each non-archived session id to whether it has at least one direct,
+ * non-archived child. Archived sessions are excluded from both roles — they
+ * render in their own flat section, matching `buildSessionTreeState`.
+ */
+export const directChildPresenceBySessionId = (
+  sessions: WorkspaceSessionGroup["sessions"],
+): Map<string, boolean> => {
+  const presence = new Map<string, boolean>();
+  const visibleIds = new Set<string>();
+  for (const session of sessions) {
+    if (!isSessionArchived(session)) visibleIds.add(session.id);
+  }
+  for (const session of sessions) {
+    if (isSessionArchived(session)) continue;
+    if (!presence.has(session.id)) presence.set(session.id, false);
+  }
+  for (const session of sessions) {
+    if (isSessionArchived(session)) continue;
+    const parentID = session.parentID?.trim();
+    if (parentID && visibleIds.has(parentID)) presence.set(parentID, true);
+  }
+  return presence;
+};
+
+/**
+ * Session ids that crossed from "no children" to "has children" between two
+ * snapshots. Only a strict `false` in the previous snapshot triggers an
+ * unfold, so sessions that first appear already-parented (e.g. on initial
+ * load) are not auto-expanded.
+ */
+export const sessionsNewlyWithChildren = (
+  previous: Map<string, boolean>,
+  current: Map<string, boolean>,
+): string[] => {
+  const newly: string[] = [];
+  for (const [id, hasChildren] of current) {
+    if (hasChildren && previous.get(id) === false) newly.push(id);
+  }
+  return newly;
+};
+
 export const flattenSessionRows = (
   sessions: WorkspaceSessionGroup["sessions"],
   rootLimit: number,

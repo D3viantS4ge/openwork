@@ -114,6 +114,7 @@ import { useModelBehavior } from "@/react-app/domains/session/surface/use-model-
 import { useSessionFindStore } from "@/react-app/domains/session/surface/find-store";
 import { useModelPicker } from "@/react-app/domains/session/modals/use-model-picker";
 import { getSessionModelSelection, useSessionModelStore } from "@/react-app/domains/session/surface/session-model-store";
+import { collectSessionDescendants } from "@/react-app/domains/session/sidebar/utils";
 import { openModelPickerEvent, openProviderAuthEvent } from "@/react-app/shell/new-providers-listener";
 import { appMentionInstruction } from "@/react-app/domains/session/surface/composer/app-mentions";
 import { decodeComposerMentionValue } from "@/react-app/domains/session/surface/composer/mention-encoding";
@@ -2347,12 +2348,24 @@ export function SessionRoute() {
     async (sessionId: string, archived: boolean) => {
       if (!opencodeClient) return;
       try {
-        await setSessionArchived(
-          opencodeClient,
-          sessionId,
-          archived,
-          selectedWorkspaceRoot || undefined,
-        );
+        // Archiving cascades to the session's whole subtree: subsessions
+        // (subagent runs, forks, children) would otherwise surface as orphans
+        // in the archived/active sections. Unarchiving restores just the
+        // selected session.
+        const targetIds = archived
+          ? [sessionId, ...collectSessionDescendants(
+            workspaceSessionGroups.flatMap((group) => group.sessions),
+            sessionId,
+          )]
+          : [sessionId];
+        for (const targetId of targetIds) {
+          await setSessionArchived(
+            opencodeClient,
+            targetId,
+            archived,
+            selectedWorkspaceRoot || undefined,
+          );
+        }
         await refreshRouteState();
       } catch (error) {
         console.error("[session-route] archive session failed", error);
@@ -2364,7 +2377,7 @@ export function SessionRoute() {
         );
       }
     },
-    [opencodeClient, refreshRouteState, selectedWorkspaceRoot],
+    [opencodeClient, refreshRouteState, selectedWorkspaceRoot, workspaceSessionGroups],
   );
 
   const handleCreateWorkspace = useCallback(async (

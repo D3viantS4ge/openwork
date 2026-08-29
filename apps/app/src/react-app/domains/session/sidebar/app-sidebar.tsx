@@ -120,6 +120,7 @@ import type { SidebarContextValue } from "./app-sidebar-provider";
 import {
   MAX_SESSIONS_PREVIEW,
   buildSessionTreeState,
+  directChildPresenceBySessionId,
   flattenSessionRows,
   formatSessionRelativeTime,
   getRootSessions,
@@ -128,6 +129,7 @@ import {
   isSessionArchived,
   orderArchivedSessions,
   partitionArchivedSessions,
+  sessionsNewlyWithChildren,
   workspaceKindLabel,
   workspaceLabel,
 } from "./utils";
@@ -910,6 +912,42 @@ export function AppSidebar(props: AppSidebarProps) {
   const [expandedSessionIds, setExpandedSessionIds] = React.useState<Set<string>>(
     () => new Set(),
   );
+
+  // Which sessions currently have at least one direct, non-archived child,
+  // computed across every workspace. Used to unfold a session the moment its
+  // first subsession appears (e.g. a spawned subagent) without disturbing
+  // trees that were already folded.
+  const directChildPresence = React.useMemo(
+    () => directChildPresenceBySessionId(
+      props.workspaceSessionGroups.flatMap((group) => group.sessions),
+    ),
+    [props.workspaceSessionGroups],
+  );
+
+  // Auto-unfold a session only when it crosses from "no children" to "has
+  // children". The ref records the prior snapshot so that pre-existing
+  // subsessions (present on first load) and additional children on an
+  // already-parented session leave the folded/unfolded state untouched.
+  const previousDirectChildPresenceRef = React.useRef<Map<string, boolean> | null>(null);
+  React.useEffect(() => {
+    const previous = previousDirectChildPresenceRef.current;
+    previousDirectChildPresenceRef.current = directChildPresence;
+    if (previous === null) return;
+    const newlyWithChildren = sessionsNewlyWithChildren(previous, directChildPresence);
+    if (newlyWithChildren.length === 0) return;
+    setExpandedSessionIds((current) => {
+      let changed = false;
+      const next = new Set(current);
+      for (const id of newlyWithChildren) {
+        if (!next.has(id)) {
+          next.add(id);
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [directChildPresence]);
+
   const previousSessionStatusRef = React.useRef<Record<string, string>>({});
   // Subscribed directly to the shortcuts store: holding Ctrl/Cmd only
   // re-renders this sidebar, never the session surface (a bare modifier
