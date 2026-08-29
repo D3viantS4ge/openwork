@@ -22,6 +22,7 @@ import {
   type ConnectSkillDescriptor,
   type EngineMcpDescriptor,
 } from "./openwork-provider-adapters.js";
+import { readEngineAgentContext } from "./openwork-engine-agent-context.js";
 
 type ExtensionActionPayload = {
   extensionId: string;
@@ -917,6 +918,7 @@ function contextPayload(context: OpenCodeContext) {
 export const OpenWorkExtensionsPreview = async (factoryInput?: unknown) => {
   const factoryContext = normalizeOpenCodeContext(factoryInput);
   const engineMcpStatusClient = readEngineMcpStatusClient(factoryInput);
+  const engineAgentContext = readEngineAgentContext(factoryInput);
   const engineMcpStatusDirectory = factoryContext.directory ?? factoryContext.worktree;
   return {
   "tool.execute.after": async (_input: unknown, output: unknown) => {
@@ -927,6 +929,17 @@ export const OpenWorkExtensionsPreview = async (factoryInput?: unknown) => {
     preserveMcpResult(output);
   },
   "experimental.chat.system.transform": async (input: unknown, output: { system: string[] }) => {
+    // Skip the OpenWork instructions when the session's agent opts out via its
+    // `openwork: false` option (e.g. the `plain` agent).
+    if (engineAgentContext && isRecord(input)) {
+      const sessionID = optionalStringProperty(input, "sessionID");
+      if (sessionID) {
+        const agentName = await engineAgentContext.sessionAgent(sessionID);
+        if (agentName !== undefined && !(await engineAgentContext.isOpenworkEnabled(agentName))) {
+          return;
+        }
+      }
+    }
     const mergedInput = mergeTransformInputWithFactoryContext(input, factoryContext);
     const [extensionInstruction, skillInstruction, automationInstruction] = await Promise.all([
       resolveOpenWorkExtensionDiscoveryInstruction(mergedInput, fetch, {

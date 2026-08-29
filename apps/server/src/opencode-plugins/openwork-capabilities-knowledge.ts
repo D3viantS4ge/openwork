@@ -2,6 +2,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { readEngineAgentContext, readSessionID } from "./openwork-engine-agent-context.js";
 
 /**
  * OpenWork Capabilities Knowledge Plugin
@@ -243,10 +244,23 @@ function excerpt(content: string, query: string): string {
   return content.slice(from, from + 500).replace(/\s+/g, " ").trim();
 }
 
-export const OpenWorkCapabilitiesKnowledge = async () => ({
-  "experimental.chat.system.transform": async (_input: unknown, output: { system: string[] }) => {
-    output.system.push(OPENWORK_CAPABILITIES_KNOWLEDGE);
-  },
+export const OpenWorkCapabilitiesKnowledge = async (factoryInput?: unknown) => {
+  const engineAgentContext = readEngineAgentContext(factoryInput);
+  return {
+    "experimental.chat.system.transform": async (input: unknown, output: { system: string[] }) => {
+      // Skip the OpenWork capabilities knowledge when the session's agent opts
+      // out via its `openwork: false` option (e.g. the `plain` agent).
+      if (engineAgentContext) {
+        const sessionID = readSessionID(input);
+        if (sessionID) {
+          const agentName = await engineAgentContext.sessionAgent(sessionID);
+          if (agentName !== undefined && !(await engineAgentContext.isOpenworkEnabled(agentName))) {
+            return;
+          }
+        }
+      }
+      output.system.push(OPENWORK_CAPABILITIES_KNOWLEDGE);
+    },
   tool: {
     openwork_docs_search: {
       description: "Search the bundled OpenWork documentation. Use this first for OpenWork product questions before inspecting implementation code.",
@@ -282,4 +296,5 @@ export const OpenWorkCapabilitiesKnowledge = async () => ({
       },
     },
   },
-});
+  };
+};

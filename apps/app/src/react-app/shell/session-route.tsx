@@ -469,6 +469,15 @@ function singlePickedDirectory(selection: string | string[] | null) {
       : null;
 }
 
+/** OpenWork extension tools denied when an agent opts out of OpenWork context. */
+const OPENWORK_TOOL_DENIALS = {
+  openwork_context: false,
+  openwork_query: false,
+  openwork_execute: false,
+  openwork_docs_search: false,
+  openwork_docs_read: false,
+};
+
 export function SessionRoute() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -1333,6 +1342,11 @@ export function SessionRoute() {
         // sends with it instead of the global default.
         const rememberedAgent = getSessionAgent(targetSessionId);
         const sendAgent = rememberedAgent === undefined ? selectedAgent : rememberedAgent;
+        // The agent's `openwork` option (false on the `plain` agent) opts a
+        // session out of the OpenWork system prompt and extension tools.
+        const agentName = sendAgent ?? "openwork";
+        const agents = await listAgents();
+        const openworkEnabled = (agents.find((agent) => agent.name === agentName)?.options?.openwork) !== false;
         if (!sessionModelSelection && selectedModelUnavailable) throw new Error("Selected model is unavailable. Choose another model before sending.");
 
         return submitWithCloudMcpReadiness({
@@ -1404,16 +1418,19 @@ export function SessionRoute() {
                 }
 
                 const parts = await draftToParts(draft, selectedWorkspaceRoot, targetSessionId, selectedWorkspaceEndpoint);
-                const envSystemContext = await buildOpenworkEnvSystemContext(client, {
-                  cacheKey: targetSessionId,
-                  runtimeKey: environmentRuntimeKey,
-                });
+                const envSystemContext = openworkEnabled
+                  ? await buildOpenworkEnvSystemContext(client, {
+                      cacheKey: targetSessionId,
+                      runtimeKey: environmentRuntimeKey,
+                    })
+                  : undefined;
                 const result = await opencodeClient.session.promptAsync({
                   sessionID: targetSessionId,
                   parts,
                   model: sendModel ?? undefined,
                   agent: sendAgent ?? undefined,
                   ...(sendVariant ? { variant: sendVariant } : {}),
+                  ...(openworkEnabled ? {} : { tools: OPENWORK_TOOL_DENIALS }),
                   ...(envSystemContext ? { system: envSystemContext } : {}),
                 });
                 if (result.error) {

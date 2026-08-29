@@ -126,6 +126,24 @@ export function buildOpenworkRuntimeConfigObjectFromSnapshot(
           },
         },
       },
+      plain: {
+        description: "OpenWork without the OpenWork system prompt and tools",
+        mode: "primary",
+        temperature: 0.2,
+        // Declarative opt-out: the `openwork` option (normalized into the
+        // agent's `options`) is what the send path and system-prompt plugins
+        // key on to skip the OpenWork prompt, instructions, and tools.
+        openwork: false,
+        permission: {
+          skill: {
+            "customize-opencode": "deny",
+            "get-started": "deny",
+            "command-creator": "deny",
+            "agent-creator": "deny",
+            "plugin-creator": "deny",
+          },
+        },
+      },
     },
     plugin: [
       "opencode-chrome-devtools",
