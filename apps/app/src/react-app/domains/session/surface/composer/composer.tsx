@@ -118,6 +118,8 @@ type ComposerProps = {
   stats?: SessionStatsProps["session"];
   /** Current conversation context size in tokens. */
   contextTokens?: number | null;
+  /** Estimated cost of the current context, or null when free/unavailable. */
+  contextCost?: number | null;
 };
 
 const FLUSH_PROMPT_EVENT = "openwork:flushPromptDraft";
@@ -1819,7 +1821,7 @@ export function ReactSessionComposer(props: ComposerProps) {
             </div>
           </div>
         </div>
-        <SessionStats session={props.stats} contextTokens={props.contextTokens} className="mt-1" />
+        <SessionStats session={props.stats} contextTokens={props.contextTokens} contextCost={props.contextCost} className="mt-1" />
       </div>
     </div>
   );

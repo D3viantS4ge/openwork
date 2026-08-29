@@ -41,6 +41,7 @@ import type {
   CloudMcpSubmissionResult,
 } from "@/react-app/domains/connections/cloud-mcp-submit-readiness";
 import { ReactSessionComposer } from "./composer/composer";
+import { estimateContextCost } from "./context-cost";
 import { useSessionModelSelection } from "./session-model-store";
 import type { ProviderCatalog } from "./use-model-behavior";
 import { decodeComposerMentionValue, encodeComposerMentionValue, type ComposerMentionKind } from "./composer/mention-encoding";
@@ -803,6 +804,16 @@ export function SessionSurface(props: SessionSurfaceProps) {
     }
     return null;
   }, [currentSnapshot?.messages]);
+
+  // Estimated cost of the current context using the selected model's pricing
+  // (cache-write rate, or uncached input fallback), accounting for context
+  // tiers/over-200K. Recomputes when the model selection changes.
+  const contextCost = useMemo(() => {
+    if (contextTokens == null) return null;
+    const model =
+      props.providerCatalog?.[sessionModel.selectedModel.providerID]?.[sessionModel.selectedModel.modelID];
+    return estimateContextCost(model?.cost, contextTokens);
+  }, [contextTokens, props.providerCatalog, sessionModel.selectedModel]);
   const transcriptState = useSharedQueryState<UIMessage[]>(transcriptQueryKey, EMPTY_TRANSCRIPT);
   const statusState = useSharedQueryState(statusQueryKey, currentSnapshot?.status ?? IDLE_STATUS);
 
@@ -2204,6 +2215,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
           mentions={mentions}
           stats={currentSnapshot?.session}
           contextTokens={contextTokens}
+          contextCost={contextCost}
           onDraftChange={handleComposerDraftChange}
         onSend={handleSend}
         onSteer={handleSteer}

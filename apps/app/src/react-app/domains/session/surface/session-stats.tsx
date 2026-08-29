@@ -8,18 +8,17 @@ export type SessionStatsProps = {
   session?: Pick<Session, "cost" | "tokens"> | null
   /** Current conversation context size in tokens (latest turn's total input + output). */
   contextTokens?: number | null
+  /** Estimated cost of the current context, or null when free/unavailable. */
+  contextCost?: number | null
   className?: string
 }
 
 function formatCost(cost: number): string {
-  if (cost < 0.01) {
-    return `$${cost.toFixed(4)}`
-  }
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: 2,
-    maximumFractionDigits: 4,
+    maximumFractionDigits: 2,
   }).format(cost)
 }
 
@@ -36,7 +35,7 @@ function formatTokens(value: number): string {
  * breakdown (reasoning tokens, cache read/write). Hidden while the engine
  * has not reported any usage for the session.
  */
-export function SessionStats({ session, contextTokens, className }: SessionStatsProps) {
+export function SessionStats({ session, contextTokens, contextCost, className }: SessionStatsProps) {
   const cost = typeof session?.cost === "number" ? session.cost : null
   const tokens = session?.tokens
   const input = typeof tokens?.input === "number" ? tokens.input : null
@@ -59,7 +58,9 @@ export function SessionStats({ session, contextTokens, className }: SessionStats
 
   const detail = [
     cost !== null ? `cost ${formatCost(cost)}` : null,
-    contextTokens != null ? `${formatTokens(contextTokens)} context` : null,
+    contextTokens != null
+      ? `${formatTokens(contextTokens)} context${contextCost != null ? ` (${formatCost(contextCost)})` : ""}`
+      : null,
     hasTokens ? `${formatTokens(totalInput)} in` : null,
     hasTokens ? `${formatTokens(totalOutput)} out` : null,
     reasoning !== null ? `${formatTokens(reasoning)} reasoning` : null,
@@ -80,7 +81,11 @@ export function SessionStats({ session, contextTokens, className }: SessionStats
       title={detail}
     >
       {cost !== null ? <span>{formatCost(cost)}</span> : null}
-      {contextTokens != null && contextTokens > 0 ? <span>{formatTokens(contextTokens)} context</span> : null}
+      {contextTokens != null && contextTokens > 0 ? (
+        <span>
+          {formatTokens(contextTokens)} context{contextCost != null ? ` (${formatCost(contextCost)})` : ""}
+        </span>
+      ) : null}
       {hasTokens ? (
         <span>
           {formatTokens(totalInput)} in · {formatTokens(totalOutput)} out
