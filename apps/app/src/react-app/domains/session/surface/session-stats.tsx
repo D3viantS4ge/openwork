@@ -6,6 +6,8 @@ import { cn } from "@/lib/utils"
 
 export type SessionStatsProps = {
   session?: Pick<Session, "cost" | "tokens"> | null
+  /** Current conversation context size in tokens (latest turn's total input + output). */
+  contextTokens?: number | null
   className?: string
 }
 
@@ -34,7 +36,7 @@ function formatTokens(value: number): string {
  * breakdown (reasoning tokens, cache read/write). Hidden while the engine
  * has not reported any usage for the session.
  */
-export function SessionStats({ session, className }: SessionStatsProps) {
+export function SessionStats({ session, contextTokens, className }: SessionStatsProps) {
   const cost = typeof session?.cost === "number" ? session.cost : null
   const tokens = session?.tokens
   const input = typeof tokens?.input === "number" ? tokens.input : null
@@ -57,12 +59,13 @@ export function SessionStats({ session, className }: SessionStatsProps) {
 
   const detail = [
     cost !== null ? `cost ${formatCost(cost)}` : null,
-    hasTokens ? `in ${formatTokens(totalInput)}` : null,
-    hasTokens ? `out ${formatTokens(totalOutput)}` : null,
-    reasoning !== null ? `reasoning ${formatTokens(reasoning)}` : null,
-    cacheRead !== null ? `cache read ${formatTokens(cacheRead)}` : null,
-    cacheWrite !== null ? `cache write ${formatTokens(cacheWrite)}` : null,
-    cacheHitRate !== null ? `cache ${cacheHitRate.toFixed(1)}%` : null,
+    hasTokens ? `${formatTokens(totalInput)} in` : null,
+    hasTokens ? `${formatTokens(totalOutput)} out` : null,
+    reasoning !== null ? `${formatTokens(reasoning)} reasoning` : null,
+    cacheRead !== null ? `${formatTokens(cacheRead)} cache read` : null,
+    cacheWrite !== null ? `${formatTokens(cacheWrite)} cache write` : null,
+    cacheHitRate !== null ? `${cacheHitRate.toFixed(1)}% cache hit` : null,
+    contextTokens != null ? `${formatTokens(contextTokens)} context` : null,
   ]
     .filter((value): value is string => value !== null)
     .join(" · ")
@@ -82,10 +85,11 @@ export function SessionStats({ session, className }: SessionStatsProps) {
           {formatTokens(totalInput)} in · {formatTokens(totalOutput)} out
         </span>
       ) : null}
-      {reasoning !== null && reasoning > 0 ? <span>reasoning {formatTokens(reasoning)}</span> : null}
-      {cacheRead !== null && cacheRead > 0 ? <span>cache read {formatTokens(cacheRead)}</span> : null}
-      {cacheWrite !== null && cacheWrite > 0 ? <span>cache write {formatTokens(cacheWrite)}</span> : null}
-      {cacheHitRate !== null && cacheHitRate > 0 ? <span>cache {cacheHitRate.toFixed(1)}%</span> : null}
+      {reasoning !== null && reasoning > 0 ? <span>{formatTokens(reasoning)} reasoning</span> : null}
+      {cacheRead !== null && cacheRead > 0 ? <span>{formatTokens(cacheRead)} cache read</span> : null}
+      {cacheWrite !== null && cacheWrite > 0 ? <span>{formatTokens(cacheWrite)} cache write</span> : null}
+      {cacheHitRate !== null && cacheHitRate > 0 ? <span>{cacheHitRate.toFixed(1)}% cache hit</span> : null}
+      {contextTokens != null && contextTokens > 0 ? <span>{formatTokens(contextTokens)} context</span> : null}
     </div>
   )
 }

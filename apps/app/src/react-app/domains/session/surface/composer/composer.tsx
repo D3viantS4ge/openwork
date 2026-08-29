@@ -116,6 +116,8 @@ type ComposerProps = {
   topAccessory?: ReactNode;
   /** Session usage stats (cost/tokens/cache) rendered below the composer box. */
   stats?: SessionStatsProps["session"];
+  /** Current conversation context size in tokens. */
+  contextTokens?: number | null;
 };
 
 const FLUSH_PROMPT_EVENT = "openwork:flushPromptDraft";
@@ -1817,7 +1819,7 @@ export function ReactSessionComposer(props: ComposerProps) {
             </div>
           </div>
         </div>
-        <SessionStats session={props.stats} className="mt-1" />
+        <SessionStats session={props.stats} contextTokens={props.contextTokens} className="mt-1" />
       </div>
     </div>
   );

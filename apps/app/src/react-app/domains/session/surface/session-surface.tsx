@@ -786,6 +786,23 @@ export function SessionSurface(props: SessionSurfaceProps) {
   });
 
   const currentSnapshot = snapshotQuery.data?.session.id === props.sessionId ? snapshotQuery.data : null;
+
+  // Current conversation context size in tokens: the latest assistant turn's
+  // total input (fresh + cache read/write) plus its total output (visible +
+  // reasoning). Walks newest-first because the tail is often a token-less
+  // user message or an empty assistant step.
+  const contextTokens = useMemo(() => {
+    const messages = currentSnapshot?.messages ?? [];
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const info = messages[index].info;
+      if (info.role !== "assistant") continue;
+      const tokens = info.tokens;
+      const turnTokens =
+        tokens.input + tokens.cache.read + tokens.cache.write + tokens.output + tokens.reasoning;
+      if (turnTokens > 0) return turnTokens;
+    }
+    return null;
+  }, [currentSnapshot?.messages]);
   const transcriptState = useSharedQueryState<UIMessage[]>(transcriptQueryKey, EMPTY_TRANSCRIPT);
   const statusState = useSharedQueryState(statusQueryKey, currentSnapshot?.status ?? IDLE_STATUS);
 
@@ -2186,6 +2203,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
           draft={draft}
           mentions={mentions}
           stats={currentSnapshot?.session}
+          contextTokens={contextTokens}
           onDraftChange={handleComposerDraftChange}
         onSend={handleSend}
         onSteer={handleSteer}
