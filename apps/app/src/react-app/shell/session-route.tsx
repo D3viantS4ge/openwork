@@ -114,6 +114,7 @@ import { useModelBehavior } from "@/react-app/domains/session/surface/use-model-
 import { useSessionFindStore } from "@/react-app/domains/session/surface/find-store";
 import { useModelPicker } from "@/react-app/domains/session/modals/use-model-picker";
 import { getSessionModelSelection, useSessionModelStore } from "@/react-app/domains/session/surface/session-model-store";
+import { getSessionAgent } from "@/react-app/domains/session/surface/session-agent-store";
 import { collectSessionDescendants } from "@/react-app/domains/session/sidebar/utils";
 import { openModelPickerEvent, openProviderAuthEvent } from "@/react-app/shell/new-providers-listener";
 import { appMentionInstruction } from "@/react-app/domains/session/surface/composer/app-mentions";
@@ -1328,6 +1329,10 @@ export function SessionRoute() {
         const sessionModelSelection = getSessionModelSelection(targetSessionId);
         const sendModel = sessionModelSelection?.model ?? local.prefs.defaultModel;
         const sendVariant = sessionModelSelection ? sessionModelSelection.variant : modelVariantValue;
+        // Per-conversation agent memory: a session that picked its own agent
+        // sends with it instead of the global default.
+        const rememberedAgent = getSessionAgent(targetSessionId);
+        const sendAgent = rememberedAgent === undefined ? selectedAgent : rememberedAgent;
         if (!sessionModelSelection && selectedModelUnavailable) throw new Error("Selected model is unavailable. Choose another model before sending.");
 
         return submitWithCloudMcpReadiness({
@@ -1407,7 +1412,7 @@ export function SessionRoute() {
                   sessionID: targetSessionId,
                   parts,
                   model: sendModel ?? undefined,
-                  agent: selectedAgent ?? undefined,
+                  agent: sendAgent ?? undefined,
                   ...(sendVariant ? { variant: sendVariant } : {}),
                   ...(envSystemContext ? { system: envSystemContext } : {}),
                 });

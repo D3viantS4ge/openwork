@@ -42,6 +42,7 @@ import type {
 } from "@/react-app/domains/connections/cloud-mcp-submit-readiness";
 import { ReactSessionComposer } from "./composer/composer";
 import { estimateContextCost } from "./context-cost";
+import { useSessionAgentStore } from "./session-agent-store";
 import { useSessionModelSelection } from "./session-model-store";
 import type { ProviderCatalog } from "./use-model-behavior";
 import { decodeComposerMentionValue, encodeComposerMentionValue, type ComposerMentionKind } from "./composer/mention-encoding";
@@ -715,6 +716,17 @@ export function SessionSurface(props: SessionSurfaceProps) {
     providerCatalog: props.providerCatalog,
     onFallbackVariantChange: props.onModelVariantChange,
   });
+  // Per-conversation agent (mode) controls: each session remembers its own
+  // agent, falling back to the global default, mirroring model selection.
+  const rememberedAgent = useSessionAgentStore((state) => state.bySessionId[props.sessionId]);
+  const resolvedAgent = rememberedAgent === undefined ? props.selectedAgent : rememberedAgent;
+  const agentLabel = resolvedAgent
+    ? resolvedAgent.charAt(0).toUpperCase() + resolvedAgent.slice(1)
+    : t("session.default_agent");
+  const handleSelectAgent = useCallback((agent: string | null) => {
+    useSessionAgentStore.getState().setAgent(props.sessionId, agent);
+    props.onSelectAgent(agent);
+  }, [props.onSelectAgent, props.sessionId]);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const handleModelPickerOpenChange = useCallback((open: boolean) => {
     setModelPickerOpen(open);
@@ -2248,10 +2260,10 @@ export function SessionSurface(props: SessionSurfaceProps) {
         modelVariant={sessionModel.modelVariant}
         modelBehaviorOptions={sessionModel.modelBehaviorOptions}
         onModelVariantChange={handleModelVariantChange}
-        agentLabel={props.agentLabel}
-        selectedAgent={props.selectedAgent}
+        agentLabel={agentLabel}
+        selectedAgent={resolvedAgent}
         listAgents={props.listAgents}
-        onSelectAgent={props.onSelectAgent}
+        onSelectAgent={handleSelectAgent}
         listCommands={props.listCommands}
         listSkills={listSkills}
         skills={toolSkills}
