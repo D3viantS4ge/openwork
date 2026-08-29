@@ -41,12 +41,17 @@ export function resolveEffectiveRevertState(input: {
   const revertMessageId = snapshot?.session.revert?.messageID ?? null;
   if (!revertMessageId || !snapshot) return { revertMessageId: null, hiddenCount: 0 };
 
-  const snapshotIds = new Set(snapshot.messages.map((message) => message.info.id));
+  // Compare against the snapshot-derived UI messages (not the raw message
+  // list): synthetic error messages for failed turns (`session-error:*`) are
+  // part of the transcript, not post-revert replacement content, and must not
+  // suppress the banner or skew the hidden count.
+  const snapshotMessages = snapshotToUIMessages(snapshot);
+  const snapshotIds = new Set(snapshotMessages.map((message) => message.id));
   const hasLiveOnlyMessages = input.liveMessages.some((message) => !snapshotIds.has(message.id));
   if (hasLiveOnlyMessages) return { revertMessageId: null, hiddenCount: 0 };
 
-  const cursorIndex = snapshot.messages.findIndex((message) => message.info.id === revertMessageId);
-  const hiddenCount = cursorIndex < 0 ? 0 : snapshot.messages.length - cursorIndex;
+  const cursorIndex = snapshotMessages.findIndex((message) => message.id === revertMessageId);
+  const hiddenCount = cursorIndex < 0 ? 0 : snapshotMessages.length - cursorIndex;
   return { revertMessageId, hiddenCount };
 }
 

@@ -19,7 +19,7 @@ function textMessage(id: string, role: "user" | "assistant", text: string, creat
   };
 }
 
-function snapshotWith(messages: Array<{ id: string; role: "user" | "assistant"; text: string; created: number }>, opts: {
+function snapshotWith(messages: Array<{ id: string; role: "user" | "assistant"; text: string; created: number; error?: boolean }>, opts: {
   revertMessageID?: string | null;
 } = {}): OpenworkSessionSnapshot {
   const { revertMessageID } = opts;
@@ -40,6 +40,7 @@ function snapshotWith(messages: Array<{ id: string; role: "user" | "assistant"; 
         role: message.role,
         sessionID: sessionId,
         time: { created: message.created },
+        ...(message.error ? { error: { name: "UnknownError", data: { message: "test failure" } } } : {}),
       },
       parts: [{
         id: `${message.id}-part`,
@@ -162,6 +163,31 @@ describe("resolveEffectiveRevertState", () => {
     expect(resolveEffectiveRevertState({ snapshot, liveMessages: [] })).toEqual({
       revertMessageId: null,
       hiddenCount: 0,
+    });
+  });
+
+  test("keeps the banner and counts UI messages when a synthetic error precedes the cursor", () => {
+    // A failed assistant turn (msg-2) surfaces as a synthetic `session-error:`
+    // UI message. It is part of the transcript history, not post-revert
+    // replacement content, so it must not suppress the banner; the hidden
+    // count reflects the UI messages at/after the cursor (msg-3, msg-4).
+    const snapshot = snapshotWith(
+      [
+        { id: "msg-1", role: "user", text: "first", created: 10 },
+        { id: "msg-2", role: "assistant", text: "answer", created: 20, error: true },
+        { id: "msg-3", role: "user", text: "edited-away", created: 30 },
+        { id: "msg-4", role: "assistant", text: "reverted answer", created: 40 },
+      ],
+      { revertMessageID: "msg-3" },
+    );
+    const live = [
+      textMessage("msg-1", "user", "first", 10),
+      textMessage("msg-2", "assistant", "answer", 20),
+      textMessage("session-error:msg-2", "assistant", "test failure", 20),
+    ];
+    expect(resolveEffectiveRevertState({ snapshot, liveMessages: live })).toEqual({
+      revertMessageId: "msg-3",
+      hiddenCount: 2,
     });
   });
 });
