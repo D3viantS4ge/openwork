@@ -47,15 +47,18 @@ export function SessionStats({ session, className }: SessionStatsProps) {
     return null
   }
 
-  const cacheHitRate =
-    cacheRead !== null && input !== null && cacheRead + input > 0
-      ? (cacheRead / (cacheRead + input)) * 100
-      : null
+  // Inclusive totals matching the LLM Usage contract: total input is fresh +
+  // cached-read + cached-write, and total output is visible output + reasoning.
+  const totalInput = (input ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0)
+  const totalOutput = (output ?? 0) + (reasoning ?? 0)
+  const hasTokens = input !== null || output !== null || cacheRead !== null || cacheWrite !== null
+
+  const cacheHitRate = cacheRead !== null && totalInput > 0 ? (cacheRead / totalInput) * 100 : null
 
   const detail = [
     cost !== null ? `cost ${formatCost(cost)}` : null,
-    input !== null ? `in ${formatTokens(input)}` : null,
-    output !== null ? `out ${formatTokens(output)}` : null,
+    hasTokens ? `in ${formatTokens(totalInput)}` : null,
+    hasTokens ? `out ${formatTokens(totalOutput)}` : null,
     reasoning !== null ? `reasoning ${formatTokens(reasoning)}` : null,
     cacheRead !== null ? `cache read ${formatTokens(cacheRead)}` : null,
     cacheWrite !== null ? `cache write ${formatTokens(cacheWrite)}` : null,
@@ -73,12 +76,15 @@ export function SessionStats({ session, className }: SessionStatsProps) {
       title={detail}
     >
       {cost !== null ? <span>{formatCost(cost)}</span> : null}
-      {input !== null || output !== null ? (
+      {hasTokens ? (
         <span>
-          {formatTokens(input ?? 0)} in · {formatTokens(output ?? 0)} out
+          {formatTokens(totalInput)} in · {formatTokens(totalOutput)} out
         </span>
       ) : null}
-      {cacheHitRate !== null ? <span>cache {cacheHitRate.toFixed(0)}%</span> : null}
+      {reasoning !== null ? <span>reasoning {formatTokens(reasoning)}</span> : null}
+      {cacheRead !== null ? <span>cache read {formatTokens(cacheRead)}</span> : null}
+      {cacheWrite !== null ? <span>cache write {formatTokens(cacheWrite)}</span> : null}
+      {cacheHitRate !== null ? <span>cache {cacheHitRate.toFixed(1)}%</span> : null}
     </div>
   )
 }
