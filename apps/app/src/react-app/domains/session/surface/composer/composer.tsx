@@ -369,7 +369,6 @@ export function ReactSessionComposer(props: ComposerProps) {
   const mentionOpenNext = Boolean(mentionMatch);
   const mentionQuery = mentionMatch?.[1] ?? "";
   const nonDefaultAgents = useMemo(() => agents.filter(isNonDefaultAgent), [agents]);
-  const showAgentPicker = props.selectedAgent !== null;
 
   useEffect(() => {
     setSlashOpen(slashOpenNext);
@@ -385,10 +384,6 @@ export function ReactSessionComposer(props: ComposerProps) {
     if (!agentMenuOpen && !(toolMenuOpen && toolMenuSection === "agents")) return;
     void props.listAgents().then(setAgents).catch(() => setAgents([]));
   }, [agentMenuOpen, toolMenuOpen, toolMenuSection, props.listAgents]);
-
-  useEffect(() => {
-    if (!showAgentPicker) setAgentMenuOpen(false);
-  }, [showAgentPicker]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1645,10 +1640,9 @@ export function ReactSessionComposer(props: ComposerProps) {
                   <Paperclip size={16} />
                 </button>
 
-                {/* Agent picker (#2101/#1971). Only shown once a non-default
-                    agent is selected. Switching back to Default agent lives in
-                    this menu and in the + tools menu. */}
-                <div ref={agentMenuRef} className={showAgentPicker ? "relative" : "hidden"}>
+                {/* Agent picker (#2101/#1971). Always visible so the selected
+                    agent (including Default) can be changed from the composer. */}
+                <div ref={agentMenuRef} className="relative">
                   <button
                     type="button"
                     className="flex h-9 max-h-9 items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12"
