@@ -109,7 +109,7 @@ function startFakeOpenWorkServer() {
         authorization: request.headers.get("authorization"),
         method: request.method,
       };
-      if (request.method === "POST") record.body = await request.json();
+      if (request.method === "POST" || request.method === "PATCH") record.body = await request.json();
       requests.push(record);
 
       if (request.headers.get("authorization") !== "Bearer test-token") {
@@ -170,6 +170,27 @@ function startFakeOpenWorkServer() {
           }, { status: 201 });
         }
         return Response.json({ items: [sessionArchive] });
+      }
+
+      if (url.pathname === "/workspace/ws_1/sessions/ses_alpha" && request.method === "PATCH") {
+        const body = z.object({ title: z.string().optional() }).parse(record.body);
+        return Response.json({
+          item: {
+            id: "ses_alpha",
+            title: body.title ?? sessionAlpha.title,
+            time: { created: 100, updated: 400 },
+          },
+        });
+      }
+      if (url.pathname === "/workspace/ws_2/sessions/ses_archive" && request.method === "PATCH") {
+        const body = z.object({ archived: z.boolean().optional() }).parse(record.body);
+        return Response.json({
+          item: {
+            id: "ses_archive",
+            title: sessionArchive.title,
+            time: { created: 10, updated: 100, ...(body.archived !== undefined ? { archived: body.archived ? 400 : 0 } : {}) },
+          },
+        });
       }
 
       if (url.pathname === "/workspace/ws_1/sessions/ses_alpha") return Response.json({ item: sessionAlpha });
@@ -546,6 +567,72 @@ describe("OpenWorkExtensionsPreview session tools", () => {
     expect(parsed.result.created).toHaveLength(21);
     expect(parsed.result.failures).toEqual([]);
     expect(fake.requests.filter((request) => request.pathname === "/workspace/ws_2/sessions" && request.method === "POST")).toHaveLength(21);
+  });
+
+  test("renames a session through the OpenWork backend", async () => {
+    const fake = startFakeOpenWorkServer();
+    const plugin = await OpenWorkExtensionsPreview();
+
+    const output = await plugin.tool.openwork_execute.execute({
+      id: "session.rename",
+      args: { sessionId: "ses_alpha", title: "Renamed alpha" },
+    }, { sessionID: "ses_origin" });
+    const parsed = affordanceResultSchema("session.rename", z.object({
+      ok: z.literal(true),
+      sessionId: z.string(),
+      workspaceId: z.string(),
+      title: z.string(),
+    }).passthrough()).parse(JSON.parse(output));
+
+    expect(parsed.result).toMatchObject({
+      sessionId: "ses_alpha",
+      workspaceId: "ws_1",
+      title: "Renamed alpha",
+    });
+    const patchRequest = fake.requests.find((request) => request.pathname === "/workspace/ws_1/sessions/ses_alpha" && request.method === "PATCH");
+    expect(patchRequest?.body).toEqual({ title: "Renamed alpha" });
+    expect(patchRequest?.authorization).toBe("Bearer test-token");
+  });
+
+  test("archives and unarchives a session through the OpenWork backend", async () => {
+    const fake = startFakeOpenWorkServer();
+    const plugin = await OpenWorkExtensionsPreview();
+
+    const archiveOutput = await plugin.tool.openwork_execute.execute({
+      id: "session.archive",
+      args: { sessionId: "ses_archive", archived: true },
+    }, { sessionID: "ses_origin" });
+    const archived = affordanceResultSchema("session.archive", z.object({
+      ok: z.literal(true),
+      sessionId: z.string(),
+      workspaceId: z.string(),
+      archived: z.boolean(),
+    }).passthrough()).parse(JSON.parse(archiveOutput));
+
+    expect(archived.result).toMatchObject({
+      sessionId: "ses_archive",
+      workspaceId: "ws_2",
+      archived: true,
+    });
+
+    const unarchiveOutput = await plugin.tool.openwork_execute.execute({
+      id: "session.archive",
+      args: { sessionId: "ses_archive", archived: false },
+    }, { sessionID: "ses_origin" });
+    const unarchived = affordanceResultSchema("session.archive", z.object({
+      ok: z.literal(true),
+      sessionId: z.string(),
+      workspaceId: z.string(),
+      archived: z.boolean(),
+    }).passthrough()).parse(JSON.parse(unarchiveOutput));
+
+    expect(unarchived.result.archived).toBe(false);
+
+    const patchRequests = fake.requests.filter((request) => request.pathname === "/workspace/ws_2/sessions/ses_archive" && request.method === "PATCH");
+    expect(patchRequests.map((request) => request.body)).toEqual([
+      { archived: true },
+      { archived: false },
+    ]);
   });
 });
 

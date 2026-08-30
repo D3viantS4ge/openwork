@@ -334,6 +334,15 @@ export function registerSessionRoutes(options: RegisterSessionRoutesOptions): vo
     return value.trim();
   }
 
+  function optionalBooleanField(body: Record<string, unknown>, field: string): boolean | undefined {
+    const value = body[field];
+    if (value === undefined) return undefined;
+    if (typeof value !== "boolean") {
+      throw new ApiError(400, "invalid_payload", `${field} must be a boolean`);
+    }
+    return value;
+  }
+
   addRoute(routes, "POST", "/workspace/:id/sessions", "client", async (ctx) => {
     ensureWritable(config);
     requireClientScope(ctx, "collaborator");
@@ -360,6 +369,35 @@ export function registerSessionRoutes(options: RegisterSessionRoutesOptions): vo
       ...(variant ? { variant } : {}),
     });
     return jsonResponse(result, 201);
+  });
+
+  addRoute(routes, "PATCH", "/workspace/:id/sessions/:sessionId", "client", async (ctx) => {
+    ensureWritable(config);
+    requireClientScope(ctx, "collaborator");
+    const workspace = await resolveWorkspace(config, ctx.params.id);
+    const sessionId = (ctx.params.sessionId ?? "").trim();
+    if (!sessionId) throw new ApiError(400, "invalid_payload", "sessionId is required");
+    const body = await readJsonBody(ctx.request);
+    const title = optionalStringField(body, "title");
+    const archived = optionalBooleanField(body, "archived");
+    if (title === undefined && archived === undefined) {
+      throw new ApiError(400, "invalid_payload", "title or archived is required");
+    }
+    if (title !== undefined && title.length > 120) {
+      throw new ApiError(400, "invalid_payload", "title must be 120 characters or fewer");
+    }
+    const opencode = createWorkspaceOpencodeClient(config, workspace);
+    const session = buildSession(
+      unwrapOpencodeResult(
+        await opencode.session.update({
+          sessionID: sessionId,
+          ...(title !== undefined ? { title } : {}),
+          ...(archived !== undefined ? { time: { archived: archived ? Date.now() : 0 } } : {}),
+        }),
+        `/session/${encodeURIComponent(sessionId)}`,
+      ),
+    );
+    return jsonResponse({ item: session });
   });
 
   addRoute(routes, "POST", "/workspace/:id/sessions/:sessionId/abort", "client", async (ctx) => {

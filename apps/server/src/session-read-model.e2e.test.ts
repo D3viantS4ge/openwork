@@ -48,7 +48,7 @@ function startMockOpencode(input?: { invalidList?: boolean; holdCommand?: Promis
         directory: request.headers.get("x-opencode-directory"),
         method: request.method,
       };
-      if (request.method === "POST") record.body = await request.json();
+      if (request.method === "POST" || request.method === "PATCH") record.body = await request.json();
       requests.push(record);
 
       if (url.pathname === "/session") {
@@ -91,6 +91,23 @@ function startMockOpencode(input?: { invalidList?: boolean; holdCommand?: Promis
 
       if (url.pathname === "/session/status") {
         return Response.json({ ses_1: { type: "busy" } });
+      }
+
+      if (url.pathname === "/session/ses_1" && request.method === "PATCH") {
+        const title = typeof record.body === "object" && record.body !== null ? Reflect.get(record.body, "title") : undefined;
+        const time = typeof record.body === "object" && record.body !== null ? Reflect.get(record.body, "time") : undefined;
+        const archived = typeof time === "object" && time !== null ? Reflect.get(time, "archived") : undefined;
+        return Response.json({
+          id: "ses_1",
+          title: typeof title === "string" ? title : "Hostname Check",
+          slug: "hostname-check",
+          directory: request.headers.get("x-opencode-directory"),
+          time: {
+            created: 100,
+            updated: 200,
+            ...(typeof archived === "number" ? { archived } : {}),
+          },
+        });
       }
 
       if (url.pathname === "/session/ses_1") {
@@ -278,6 +295,61 @@ describe("workspace session read APIs", () => {
     const promptRequest = mock.requests.find((request) => request.pathname === "/session/ses_created/prompt_async");
     expect(promptRequest?.body).toEqual({ parts: [{ type: "text", text: "Research dolphins." }] });
     expect(promptRequest?.directory).toBe(workspaceRoot);
+  });
+
+  test("renames and archives a session through the update route", async () => {
+    const workspaceRoot = await createWorkspaceRoot();
+    const mock = startMockOpencode();
+    const openwork = await startOpenworkServer({
+      workspaceRoot,
+      opencodeBaseUrl: `http://127.0.0.1:${mock.server.port}`,
+      readOnly: false,
+    });
+
+    const base = `http://127.0.0.1:${openwork.server.port}`;
+
+    const renameResponse = await fetch(`${base}/workspace/ws_1/sessions/ses_1`, {
+      method: "PATCH",
+      headers: { ...auth(openwork.token), "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Renamed" }),
+    });
+    expect(renameResponse.status).toBe(200);
+    await expect(renameResponse.json()).resolves.toMatchObject({
+      item: { id: "ses_1", title: "Renamed" },
+    });
+
+    const archiveResponse = await fetch(`${base}/workspace/ws_1/sessions/ses_1`, {
+      method: "PATCH",
+      headers: { ...auth(openwork.token), "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: true }),
+    });
+    expect(archiveResponse.status).toBe(200);
+    await expect(archiveResponse.json()).resolves.toMatchObject({
+      item: { id: "ses_1", time: { archived: expect.any(Number) } },
+    });
+
+    const patchRequests = mock.requests.filter((request) => request.pathname === "/session/ses_1" && request.method === "PATCH");
+    expect(patchRequests).toHaveLength(2);
+    expect(patchRequests[0]?.body).toEqual({ title: "Renamed" });
+    expect(patchRequests[1]?.body).toMatchObject({ time: { archived: expect.any(Number) } });
+  });
+
+  test("rejects an update route with neither title nor archived", async () => {
+    const workspaceRoot = await createWorkspaceRoot();
+    const mock = startMockOpencode();
+    const openwork = await startOpenworkServer({
+      workspaceRoot,
+      opencodeBaseUrl: `http://127.0.0.1:${mock.server.port}`,
+      readOnly: false,
+    });
+
+    const response = await fetch(`http://127.0.0.1:${openwork.server.port}/workspace/ws_1/sessions/ses_1`, {
+      method: "PATCH",
+      headers: { ...auth(openwork.token), "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(response.status).toBe(400);
+    expect(mock.requests.filter((request) => request.method === "PATCH")).toHaveLength(0);
   });
 
   test("lists sessions and returns session details, messages, and snapshot", async () => {

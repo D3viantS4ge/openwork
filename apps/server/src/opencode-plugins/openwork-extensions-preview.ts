@@ -81,6 +81,18 @@ const sessionCreateArgsSchema = z.object({
   workspaceId: z.string().trim().optional().describe("Optional OpenWork workspace id/name. Defaults to the workspace containing the current session."),
 });
 
+const sessionRenameArgsSchema = z.object({
+  sessionId: z.string().trim().min(1).describe("OpenWork/OpenCode session ID returned by session.search."),
+  title: z.string().trim().min(1).max(120).describe("New session title."),
+  workspaceId: z.string().trim().optional().describe("Optional OpenWork workspace id/name. Omit to resolve the session across all workspaces."),
+});
+
+const sessionArchiveArgsSchema = z.object({
+  sessionId: z.string().trim().min(1).describe("OpenWork/OpenCode session ID returned by session.search."),
+  archived: z.boolean().describe("true to archive, false to unarchive."),
+  workspaceId: z.string().trim().optional().describe("Optional OpenWork workspace id/name. Omit to resolve the session across all workspaces."),
+});
+
 const workspaceSchema = z.object({
   id: z.string(),
   name: z.string().optional(),
@@ -140,7 +152,7 @@ const OPENWORK_AGENT_SURFACE_INSTRUCTION =
   `## OpenWork app context
 Use openwork_context when the request depends on the current OpenWork screen, open tabs, split view, focused pane, sidebar, side panel, settings panel, or available app actions.
 Each affordance declares its effects and executor. Use openwork_query only for side-effect-free affordances whose executor is OpenWork. Use openwork_execute for OpenWork commands without activating the desktop window. If executor names another tool, call that exact tool instead.
-Reading another session does not require opening it. Prefer session.search then session.read for transcript questions; use session.create for new chats and a UI command only when the user asks to navigate.
+Reading another session does not require opening it. Prefer session.search then session.read for transcript questions; use session.create for new chats and a UI command only when the user asks to navigate. Rename or archive a session with session.rename and session.archive when asked.
 To open settings or navigate the app, use openwork_execute with ids from openwork_context such as settings.panel.open — never browser_* tools for the OpenWork app itself.`;
 
 const OPENWORK_BROWSER_INSTRUCTION =
@@ -480,6 +492,20 @@ async function executeOpenworkAffordance(
     return affordanceResult(
       request.id,
       await createOpenWorkSessions(request.args ?? {}, context),
+      affordanceWriteEffects,
+    );
+  }
+  if (request.id === "session.rename") {
+    return affordanceResult(
+      request.id,
+      await renameOpenWorkSession(request.args ?? {}),
+      affordanceWriteEffects,
+    );
+  }
+  if (request.id === "session.archive") {
+    return affordanceResult(
+      request.id,
+      await archiveOpenWorkSession(request.args ?? {}),
       affordanceWriteEffects,
     );
   }
@@ -834,6 +860,22 @@ async function resolveContextWorkspace(workspaceId: string | undefined, context:
   throw new Error(`Multiple OpenWork workspaces match; pass workspaceId. Available: ${workspaces.map((workspace) => workspaceLabel(workspace)).join(", ")}`);
 }
 
+async function resolveSessionWorkspace(sessionId: string, workspaceId?: string): Promise<OpenWorkWorkspace> {
+  const workspaces = filterWorkspaces(await listOpenWorkWorkspaces(), workspaceId);
+  if (!workspaces.length) {
+    throw new Error(workspaceId ? `No workspace matched ${workspaceId}` : "No OpenWork workspaces are available");
+  }
+  for (const workspace of workspaces) {
+    try {
+      await readWorkspaceSession(workspace, sessionId);
+      return workspace;
+    } catch {
+      if (workspaceId) break;
+    }
+  }
+  throw new Error(`Session ${sessionId} was not found in matching OpenWork workspaces`);
+}
+
 async function createOpenWorkSessions(rawArgs: unknown, context: OpenCodeContext): Promise<object> {
   const args = sessionCreateArgsSchema.parse(rawArgs);
   const workspace = await resolveContextWorkspace(args.workspaceId, context);
@@ -869,6 +911,36 @@ async function createOpenWorkSessions(rawArgs: unknown, context: OpenCodeContext
   };
 }
 
+async function renameOpenWorkSession(rawArgs: unknown): Promise<object> {
+  const args = sessionRenameArgsSchema.parse(rawArgs);
+  const workspace = await resolveSessionWorkspace(args.sessionId, args.workspaceId);
+  const payload = sessionEnvelopeSchema.parse(await patchJson(
+    `/workspace/${encodeURIComponent(workspace.id)}/sessions/${encodeURIComponent(args.sessionId)}`,
+    { title: args.title },
+  ));
+  return {
+    ok: true,
+    sessionId: payload.item.id,
+    workspaceId: workspace.id,
+    title: payload.item.title?.trim() || args.title,
+  };
+}
+
+async function archiveOpenWorkSession(rawArgs: unknown): Promise<object> {
+  const args = sessionArchiveArgsSchema.parse(rawArgs);
+  const workspace = await resolveSessionWorkspace(args.sessionId, args.workspaceId);
+  const payload = sessionEnvelopeSchema.parse(await patchJson(
+    `/workspace/${encodeURIComponent(workspace.id)}/sessions/${encodeURIComponent(args.sessionId)}`,
+    { archived: args.archived },
+  ));
+  return {
+    ok: true,
+    sessionId: payload.item.id,
+    workspaceId: workspace.id,
+    archived: args.archived,
+  };
+}
+
 /**
  * Validates a proposed Automation and hands it back for the renderer to show.
  *
@@ -891,6 +963,23 @@ async function postJson(path: string, body: ExtensionActionPayload | Record<stri
   const { url, token } = requireOpenWorkServer();
   const response = await fetch(url + path, {
     method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const payload = await parseResponse(response);
+  if (!response.ok) {
+    throw new Error(errorMessage(payload, "OpenWork extension call failed"));
+  }
+  return payload;
+}
+
+async function patchJson(path: string, body: Record<string, unknown>): Promise<unknown> {
+  const { url, token } = requireOpenWorkServer();
+  const response = await fetch(url + path, {
+    method: "PATCH",
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",

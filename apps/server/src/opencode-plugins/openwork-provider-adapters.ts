@@ -112,6 +112,32 @@ function sessionContribution(): OpenworkFeatureContribution {
         arguments: [argument("sessions", "array", true, "Session titles and self-contained prompts.")],
         effects: writeEffects,
       }),
+      affordance({
+        id: "session.rename",
+        kind: "command",
+        title: "Rename a session",
+        description: "Update a session's title by ID without navigating away.",
+        provider,
+        arguments: [
+          argument("sessionId", "string", true, "Session id returned by session.search."),
+          argument("title", "string", true, "New session title."),
+          argument("workspaceId", "string", false, "Optional workspace id or name."),
+        ],
+        effects: writeEffects,
+      }),
+      affordance({
+        id: "session.archive",
+        kind: "command",
+        title: "Archive or unarchive a session",
+        description: "Archive a session (non-destructive, preserves context) or restore it.",
+        provider,
+        arguments: [
+          argument("sessionId", "string", true, "Session id returned by session.search."),
+          argument("archived", "boolean", true, "true to archive, false to unarchive."),
+          argument("workspaceId", "string", false, "Optional workspace id or name."),
+        ],
+        effects: writeEffects,
+      }),
     ],
     guidance: [],
   };

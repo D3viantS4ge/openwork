@@ -25,6 +25,30 @@ describe("OpenWork provider adapters", () => {
     }
   });
 
+  test("exposes rename and archive session management primitives", () => {
+    const affordances = buildOpenworkProviderContributions([])
+      .flatMap((contribution) => contribution.affordances);
+
+    const rename = affordances.find((affordance) => affordance.id === "session.rename");
+    expect(rename).toMatchObject({
+      kind: "command",
+      effects: { data: "write", ui: "none", external: false },
+      executor: { kind: "openwork" },
+    });
+    expect(rename?.arguments.map((argument) => argument.name)).toEqual(["sessionId", "title", "workspaceId"]);
+    expect(rename?.arguments.map((argument) => argument.required)).toEqual([true, true, false]);
+
+    const archive = affordances.find((affordance) => affordance.id === "session.archive");
+    expect(archive).toMatchObject({
+      kind: "command",
+      effects: { data: "write", ui: "none", external: false },
+      executor: { kind: "openwork" },
+    });
+    expect(archive?.arguments.map((argument) => argument.name)).toEqual(["sessionId", "archived", "workspaceId"]);
+    expect(archive?.arguments.find((argument) => argument.name === "archived")?.type).toBe("boolean");
+    expect(archive?.arguments.find((argument) => argument.name === "archived")?.required).toBe(true);
+  });
+
   test("keeps known Connect skills direct and search available for unknown capabilities", () => {
     const contributions = buildOpenworkProviderContributions([{
       name: "customer-briefing",
