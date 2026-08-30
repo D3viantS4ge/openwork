@@ -114,7 +114,7 @@ import { useModelBehavior } from "@/react-app/domains/session/surface/use-model-
 import { useSessionFindStore } from "@/react-app/domains/session/surface/find-store";
 import { useModelPicker } from "@/react-app/domains/session/modals/use-model-picker";
 import { getSessionModelSelection, useSessionModelStore } from "@/react-app/domains/session/surface/session-model-store";
-import { getSessionAgent } from "@/react-app/domains/session/surface/session-agent-store";
+import { getSessionAgent, useSessionAgentStore } from "@/react-app/domains/session/surface/session-agent-store";
 import { collectSessionDescendants } from "@/react-app/domains/session/sidebar/utils";
 import { openModelPickerEvent, openProviderAuthEvent } from "@/react-app/shell/new-providers-listener";
 import { appMentionInstruction } from "@/react-app/domains/session/surface/composer/app-mentions";
@@ -221,6 +221,7 @@ import {
   workspaceSettingsRoute,
 } from "./workspace-routes";
 import { WorkspaceProvider } from "./workspace-provider";
+import { parseRunPromptRequest, type RunPromptOverrides } from "./run-prompt-params";
 import type { OpenTarget } from "@/react-app/domains/session/artifacts/open-target";
 import { SettingsSurface } from "./settings-route";
 import { writeStoredDefaultModel } from "@/react-app/kernel/model-config";
@@ -250,6 +251,17 @@ function serializeSDKError(error: unknown): string {
     }
   }
   return String(error);
+}
+
+function applyRunPromptOverrides(sessionId: string, overrides: RunPromptOverrides): void {
+  if (overrides.model) {
+    useSessionModelStore.getState().setModel(sessionId, overrides.model, overrides.variant ?? null);
+  } else if (overrides.variant) {
+    useSessionModelStore.getState().setVariant(sessionId, overrides.variant);
+  }
+  if (overrides.agent) {
+    useSessionAgentStore.getState().setAgent(sessionId, overrides.agent);
+  }
 }
 
 function describeTaskCreateError(error: unknown) {
@@ -1918,6 +1930,119 @@ export function SessionRoute() {
     }
   }, [applyLastUsedModelToSession, endpointForWorkspace, loading, navigateToWorkspaceSession, refreshCloudProviderSync, refreshRouteState, rememberPendingCreatedSession, retryingWorkspaceIds, selectedWorkspaceId, workspaces]);
 
+  const createTaskWithPrompt = useCallback(
+    async (
+      workspaceId: string,
+      prompt: string,
+      attachments?: ComposerAttachment[],
+      overrides?: RunPromptOverrides,
+    ): Promise<string | null> => {
+      const workspace = workspaces.find((item) => item.id === workspaceId);
+      if (!workspace) return null;
+      const endpoint = endpointForWorkspace(workspace);
+      if (!endpoint?.token) return null;
+      const workspaceClient = createClient(
+        endpoint.opencodeBaseUrl,
+        workspace.path?.trim() || undefined,
+        { token: endpoint.token, mode: "openwork" },
+      );
+      try {
+        const session = unwrap(
+          await workspaceClient.session.create({ directory: workspace.path?.trim() || undefined }),
+        );
+        if (workspaceId === selectedWorkspaceId) {
+          void refreshCloudProviderSync("new_chat");
+        }
+        const firstTaskPrompt = prompt.trim();
+        if (firstTaskPrompt) {
+          const firstTaskAttachments = attachments ?? [];
+          // Attachment chips only survive in-memory (File objects), so the
+          // persisted fallback draft drops their tokens.
+          saveSessionDraft(workspaceId, session.id, { text: firstTaskPrompt.replace(/\[attachment [^\]]+\]/g, "").trim(), mode: "prompt" });
+          // The composer reads its draft from the composer state store,
+          // not the persisted draft store — seed both.
+          useComposerStateStore.getState().setDraft(session.id, firstTaskPrompt);
+          if (firstTaskAttachments.length) {
+            useComposerStateStore.getState().setAttachments(session.id, firstTaskAttachments);
+          }
+          // One-step run: the session surface sends the seeded draft itself.
+          markComposerAutoSend(session.id);
+        }
+        writeActiveWorkspaceId(workspaceId || null);
+        writeLastSessionFor(workspaceId, session.id);
+        rememberPendingCreatedSession(workspaceId, session.id);
+        applyLastUsedModelToSession(session.id);
+        if (overrides) applyRunPromptOverrides(session.id, overrides);
+        setSessionsByWorkspaceId((current) => ({
+          ...current,
+          [workspaceId]: [session, ...(current[workspaceId] ?? [])],
+        }));
+        navigateToWorkspaceSession(workspaceId, session.id);
+        focusPromptSoon();
+        return session.id;
+      } catch {
+        // Fall back to normal task creation without prompt
+        return await handleCreateTaskInWorkspace(workspaceId);
+      }
+    },
+    [
+      applyLastUsedModelToSession,
+      endpointForWorkspace,
+      handleCreateTaskInWorkspace,
+      navigateToWorkspaceSession,
+      refreshCloudProviderSync,
+      rememberPendingCreatedSession,
+      selectedWorkspaceId,
+      workspaces,
+    ],
+  );
+
+  // Deep link: /workspace/:workspaceId/run?message=… (new session) and
+  // /workspace/:workspaceId/session/:sessionId/run?message=… (existing session).
+  // The `/run` verb is the only trigger; it is consumed and the URL normalized
+  // back to the plain session route after handling.
+  const runPromptHandledUrlRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!location.pathname.endsWith("/run")) {
+      runPromptHandledUrlRef.current = null;
+      return;
+    }
+    const handledKey = `${location.pathname}${location.search}`;
+    if (runPromptHandledUrlRef.current === handledKey) return;
+    if (loading || !selectedWorkspaceId) return;
+    const request = parseRunPromptRequest(location.search);
+    if (!request) return;
+    runPromptHandledUrlRef.current = handledKey;
+
+    const { message, overrides } = request;
+    const hasOverrides = Boolean(overrides.model || overrides.variant || overrides.agent);
+
+    if (selectedSessionId) {
+      // Existing session: apply overrides, then queue the message so it runs
+      // immediately when idle and queues (like Enter) when the agent is busy.
+      if (hasOverrides) applyRunPromptOverrides(selectedSessionId, overrides);
+      const draft: ComposerDraft = {
+        mode: "prompt",
+        parts: [{ type: "text", text: message }],
+        attachments: [],
+        text: message,
+        resolvedText: message,
+      };
+      useComposerStateStore.getState().appendQueuedDraft(selectedSessionId, draft);
+      navigateToWorkspaceSession(selectedWorkspaceId, selectedSessionId, { replace: true });
+    } else {
+      void createTaskWithPrompt(selectedWorkspaceId, message, undefined, hasOverrides ? overrides : undefined);
+    }
+  }, [
+    createTaskWithPrompt,
+    loading,
+    location,
+    navigateToWorkspaceSession,
+    selectedSessionId,
+    selectedWorkspaceId,
+  ]);
+
   // Latest session-list state for prev/next session tab navigation. The
   // `options` field is updated by `onSessionTabsChange` from SessionPage so we
   // only cycle through tabs the user actually opened (not artifact sessions).
@@ -2797,53 +2922,7 @@ export function SessionRoute() {
           });
         },
         onCreateTaskWithPrompt: (workspaceId, prompt, attachments) => {
-          void (async () => {
-            const workspace = workspaces.find((item) => item.id === workspaceId);
-            if (!workspace) return;
-            const endpoint = endpointForWorkspace(workspace);
-            if (!endpoint?.token) return;
-            const workspaceClient = createClient(
-              endpoint.opencodeBaseUrl,
-              workspace.path?.trim() || undefined,
-              { token: endpoint.token, mode: "openwork" },
-            );
-            try {
-              const session = unwrap(
-                await workspaceClient.session.create({ directory: workspace.path?.trim() || undefined }),
-              );
-              if (workspaceId === selectedWorkspaceId) {
-                void refreshCloudProviderSync("new_chat");
-              }
-              const firstTaskPrompt = prompt.trim();
-              if (firstTaskPrompt) {
-                const firstTaskAttachments = attachments ?? [];
-                // Attachment chips only survive in-memory (File objects), so the
-                // persisted fallback draft drops their tokens.
-                saveSessionDraft(workspaceId, session.id, { text: firstTaskPrompt.replace(/\[attachment [^\]]+\]/g, "").trim(), mode: "prompt" });
-                // The composer reads its draft from the composer state store,
-                // not the persisted draft store — seed both.
-                useComposerStateStore.getState().setDraft(session.id, firstTaskPrompt);
-                if (firstTaskAttachments.length) {
-                  useComposerStateStore.getState().setAttachments(session.id, firstTaskAttachments);
-                }
-                // One-step run: the session surface sends the seeded draft itself.
-                markComposerAutoSend(session.id);
-              }
-              writeActiveWorkspaceId(workspaceId || null);
-              writeLastSessionFor(workspaceId, session.id);
-              rememberPendingCreatedSession(workspaceId, session.id);
-              applyLastUsedModelToSession(session.id);
-              setSessionsByWorkspaceId((current) => ({
-                ...current,
-                [workspaceId]: [session, ...(current[workspaceId] ?? [])],
-              }));
-              navigateToWorkspaceSession(workspaceId, session.id);
-              focusPromptSoon();
-            } catch {
-              // Fall back to normal task creation without prompt
-              void handleCreateTaskInWorkspace(workspaceId);
-            }
-          })();
+          void createTaskWithPrompt(workspaceId, prompt, attachments);
         },
         onOpenRenameWorkspace: handleOpenRenameWorkspace,
         onShareWorkspace: handleShareWorkspace,
