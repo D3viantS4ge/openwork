@@ -82,13 +82,13 @@ const sessionCreateArgsSchema = z.object({
 });
 
 const sessionRenameArgsSchema = z.object({
-  sessionId: z.string().trim().min(1).describe("OpenWork/OpenCode session ID returned by session.search."),
+  sessionId: z.string().trim().min(1).optional().describe("OpenWork/OpenCode session ID returned by session.search. Defaults to the current session when omitted."),
   title: z.string().trim().min(1).max(120).describe("New session title."),
   workspaceId: z.string().trim().optional().describe("Optional OpenWork workspace id/name. Omit to resolve the session across all workspaces."),
 });
 
 const sessionArchiveArgsSchema = z.object({
-  sessionId: z.string().trim().min(1).describe("OpenWork/OpenCode session ID returned by session.search."),
+  sessionId: z.string().trim().min(1).optional().describe("OpenWork/OpenCode session ID returned by session.search. Defaults to the current session when omitted."),
   archived: z.boolean().describe("true to archive, false to unarchive."),
   workspaceId: z.string().trim().optional().describe("Optional OpenWork workspace id/name. Omit to resolve the session across all workspaces."),
 });
@@ -412,11 +412,13 @@ async function readEngineMcpDescriptors(
 async function readOpenworkAgentContext(
   engineMcpStatusClient: OpenWorkEngineMcpStatusClient | undefined,
   engineMcpStatusDirectory: string | undefined,
+  context: OpenCodeContext,
 ): Promise<Record<string, unknown>> {
-  const [uiResult, skills, mcps] = await Promise.all([
+  const [uiResult, skills, mcps, workspaceId] = await Promise.all([
     uiBridgeRequest("/context"),
     readConnectSkillDescriptors(),
     readEngineMcpDescriptors(engineMcpStatusClient, engineMcpStatusDirectory),
+    resolveContextWorkspaceId(context),
   ]);
   const contributions = buildOpenworkProviderContributions(skills, mcps);
   const providerAffordances = contributions.flatMap((contribution) => contribution.affordances);
@@ -424,6 +426,8 @@ async function readOpenworkAgentContext(
   if (!uiContext) {
     return {
       ok: true,
+      sessionId: context.sessionID ?? null,
+      workspaceId,
       context: null,
       ui: uiResult,
       availableAffordances: providerAffordances,
@@ -435,6 +439,8 @@ async function readOpenworkAgentContext(
     : [];
   return {
     ok: true,
+    sessionId: context.sessionID ?? null,
+    workspaceId,
     context: {
       ...uiContext,
       availableAffordances: [...uiAffordances, ...providerAffordances],
@@ -498,14 +504,14 @@ async function executeOpenworkAffordance(
   if (request.id === "session.rename") {
     return affordanceResult(
       request.id,
-      await renameOpenWorkSession(request.args ?? {}),
+      await renameOpenWorkSession(request.args ?? {}, context),
       affordanceWriteEffects,
     );
   }
   if (request.id === "session.archive") {
     return affordanceResult(
       request.id,
-      await archiveOpenWorkSession(request.args ?? {}),
+      await archiveOpenWorkSession(request.args ?? {}, context),
       affordanceWriteEffects,
     );
   }
@@ -860,6 +866,15 @@ async function resolveContextWorkspace(workspaceId: string | undefined, context:
   throw new Error(`Multiple OpenWork workspaces match; pass workspaceId. Available: ${workspaces.map((workspace) => workspaceLabel(workspace)).join(", ")}`);
 }
 
+async function resolveContextWorkspaceId(context: OpenCodeContext): Promise<string | null> {
+  try {
+    const workspace = await resolveContextWorkspace(undefined, context);
+    return workspace.id;
+  } catch {
+    return null;
+  }
+}
+
 async function resolveSessionWorkspace(sessionId: string, workspaceId?: string): Promise<OpenWorkWorkspace> {
   const workspaces = filterWorkspaces(await listOpenWorkWorkspaces(), workspaceId);
   if (!workspaces.length) {
@@ -911,11 +926,15 @@ async function createOpenWorkSessions(rawArgs: unknown, context: OpenCodeContext
   };
 }
 
-async function renameOpenWorkSession(rawArgs: unknown): Promise<object> {
+async function renameOpenWorkSession(rawArgs: unknown, context: OpenCodeContext): Promise<object> {
   const args = sessionRenameArgsSchema.parse(rawArgs);
-  const workspace = await resolveSessionWorkspace(args.sessionId, args.workspaceId);
+  const sessionId = args.sessionId ?? context.sessionID;
+  if (!sessionId) {
+    return { ok: false, error: "sessionId is required when there is no current session context" };
+  }
+  const workspace = await resolveSessionWorkspace(sessionId, args.workspaceId);
   const payload = sessionEnvelopeSchema.parse(await patchJson(
-    `/workspace/${encodeURIComponent(workspace.id)}/sessions/${encodeURIComponent(args.sessionId)}`,
+    `/workspace/${encodeURIComponent(workspace.id)}/sessions/${encodeURIComponent(sessionId)}`,
     { title: args.title },
   ));
   return {
@@ -926,11 +945,15 @@ async function renameOpenWorkSession(rawArgs: unknown): Promise<object> {
   };
 }
 
-async function archiveOpenWorkSession(rawArgs: unknown): Promise<object> {
+async function archiveOpenWorkSession(rawArgs: unknown, context: OpenCodeContext): Promise<object> {
   const args = sessionArchiveArgsSchema.parse(rawArgs);
-  const workspace = await resolveSessionWorkspace(args.sessionId, args.workspaceId);
+  const sessionId = args.sessionId ?? context.sessionID;
+  if (!sessionId) {
+    return { ok: false, error: "sessionId is required when there is no current session context" };
+  }
+  const workspace = await resolveSessionWorkspace(sessionId, args.workspaceId);
   const payload = sessionEnvelopeSchema.parse(await patchJson(
-    `/workspace/${encodeURIComponent(workspace.id)}/sessions/${encodeURIComponent(args.sessionId)}`,
+    `/workspace/${encodeURIComponent(workspace.id)}/sessions/${encodeURIComponent(sessionId)}`,
     { archived: args.archived },
   ));
   return {
@@ -1060,11 +1083,12 @@ export const OpenWorkExtensionsPreview = async (factoryInput?: unknown) => {
   },
   tool: {
     openwork_context: {
-      description: "Read one semantic snapshot of OpenWork: current screen, retained conversation tabs, split view and focused pane, sidebar and side panel state, settings panel, provider contributions, remote skill guidance, and available affordances with explicit effects and executors.",
+      description: "Read one semantic snapshot of OpenWork: current session and workspace ids, current screen, retained conversation tabs, split view and focused pane, sidebar and side panel state, settings panel, provider contributions, remote skill guidance, and available affordances with explicit effects and executors.",
       args: {},
-      async execute() {
+      async execute(_rawArgs?: unknown, context?: OpenCodeContext) {
+        const mergedContext = { ...factoryContext, ...normalizeOpenCodeContext(context) };
         return JSON.stringify(
-          await readOpenworkAgentContext(engineMcpStatusClient, engineMcpStatusDirectory),
+          await readOpenworkAgentContext(engineMcpStatusClient, engineMcpStatusDirectory, mergedContext),
           null,
           2,
         );

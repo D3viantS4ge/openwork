@@ -119,7 +119,7 @@ function sessionContribution(): OpenworkFeatureContribution {
         description: "Update a session's title by ID without navigating away.",
         provider,
         arguments: [
-          argument("sessionId", "string", true, "Session id returned by session.search."),
+          argument("sessionId", "string", false, "Session id returned by session.search. Defaults to the current session when omitted."),
           argument("title", "string", true, "New session title."),
           argument("workspaceId", "string", false, "Optional workspace id or name."),
         ],
@@ -132,7 +132,7 @@ function sessionContribution(): OpenworkFeatureContribution {
         description: "Archive a session (non-destructive, preserves context) or restore it.",
         provider,
         arguments: [
-          argument("sessionId", "string", true, "Session id returned by session.search."),
+          argument("sessionId", "string", false, "Session id returned by session.search. Defaults to the current session when omitted."),
           argument("archived", "boolean", true, "true to archive, false to unarchive."),
           argument("workspaceId", "string", false, "Optional workspace id or name."),
         ],

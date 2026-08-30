@@ -36,7 +36,7 @@ describe("OpenWork provider adapters", () => {
       executor: { kind: "openwork" },
     });
     expect(rename?.arguments.map((argument) => argument.name)).toEqual(["sessionId", "title", "workspaceId"]);
-    expect(rename?.arguments.map((argument) => argument.required)).toEqual([true, true, false]);
+    expect(rename?.arguments.map((argument) => argument.required)).toEqual([false, true, false]);
 
     const archive = affordances.find((affordance) => affordance.id === "session.archive");
     expect(archive).toMatchObject({
@@ -45,6 +45,7 @@ describe("OpenWork provider adapters", () => {
       executor: { kind: "openwork" },
     });
     expect(archive?.arguments.map((argument) => argument.name)).toEqual(["sessionId", "archived", "workspaceId"]);
+    expect(archive?.arguments.find((argument) => argument.name === "sessionId")?.required).toBe(false);
     expect(archive?.arguments.find((argument) => argument.name === "archived")?.type).toBe("boolean");
     expect(archive?.arguments.find((argument) => argument.name === "archived")?.required).toBe(true);
   });

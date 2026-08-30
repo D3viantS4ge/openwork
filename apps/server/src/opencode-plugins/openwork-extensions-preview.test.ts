@@ -634,6 +634,60 @@ describe("OpenWorkExtensionsPreview session tools", () => {
       { archived: false },
     ]);
   });
+
+  test("renames the current session when sessionId is omitted", async () => {
+    const fake = startFakeOpenWorkServer();
+    const plugin = await OpenWorkExtensionsPreview();
+
+    const output = await plugin.tool.openwork_execute.execute({
+      id: "session.rename",
+      args: { title: "Renamed via context" },
+    }, { sessionID: "ses_alpha" });
+    const parsed = affordanceResultSchema("session.rename", z.object({
+      ok: z.literal(true),
+      sessionId: z.string(),
+      workspaceId: z.string(),
+      title: z.string(),
+    }).passthrough()).parse(JSON.parse(output));
+
+    expect(parsed.result).toMatchObject({ sessionId: "ses_alpha", workspaceId: "ws_1", title: "Renamed via context" });
+    const patchRequest = fake.requests.find((request) => request.pathname === "/workspace/ws_1/sessions/ses_alpha" && request.method === "PATCH");
+    expect(patchRequest?.body).toEqual({ title: "Renamed via context" });
+  });
+
+  test("archives the current session when sessionId is omitted", async () => {
+    const fake = startFakeOpenWorkServer();
+    const plugin = await OpenWorkExtensionsPreview();
+
+    const output = await plugin.tool.openwork_execute.execute({
+      id: "session.archive",
+      args: { archived: true },
+    }, { sessionID: "ses_archive" });
+    const parsed = affordanceResultSchema("session.archive", z.object({
+      ok: z.literal(true),
+      sessionId: z.string(),
+      workspaceId: z.string(),
+      archived: z.boolean(),
+    }).passthrough()).parse(JSON.parse(output));
+
+    expect(parsed.result).toMatchObject({ sessionId: "ses_archive", workspaceId: "ws_2", archived: true });
+  });
+
+  test("reports the current session and workspace ids in openwork_context", async () => {
+    startFakeOpenWorkServer();
+    const plugin = await OpenWorkExtensionsPreview();
+
+    const output = await plugin.tool.openwork_context.execute({}, { sessionID: "ses_current", directory: "/tmp/archive" });
+    const parsed = z.object({
+      ok: z.literal(true),
+      sessionId: z.string(),
+      workspaceId: z.string(),
+      availableAffordances: z.array(z.object({ id: z.string() }).passthrough()),
+    }).passthrough().parse(JSON.parse(output));
+
+    expect(parsed.sessionId).toBe("ses_current");
+    expect(parsed.workspaceId).toBe("ws_2");
+  });
 });
 
 describe("OpenWorkExtensionsPreview semantic tool surface", () => {
