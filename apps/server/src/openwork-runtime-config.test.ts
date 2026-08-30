@@ -100,6 +100,19 @@ describe("openwork runtime config file", () => {
     expect(agent.plain?.options).toEqual({ openwork: false });
     expect(agent.plain?.prompt).toBe("You are a helpful assistant.");
     expect(agent.opencode?.prompt).toBeUndefined();
+
+    // The openwork extension tools are denied at the agent level (not on the
+    // session) so flipping agents never leaks the previous agent's denials.
+    const toolDenials = {
+      openwork_context: "deny",
+      openwork_query: "deny",
+      openwork_execute: "deny",
+      openwork_docs_search: "deny",
+      openwork_docs_read: "deny",
+    };
+    expect(agent.opencode?.permission).toMatchObject(toolDenials);
+    expect(agent.plain?.permission).toMatchObject(toolDenials);
+    expect(agent.openwork?.permission).not.toMatchObject(toolDenials);
   });
 
   test("openwork prompt has a static search-first Memory Bank section, distinct from ## Memory", async () => {

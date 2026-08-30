@@ -87,6 +87,20 @@ Manage: to show what is saved, discover and execute the list capability (getMemo
 
 Never persist secrets, credentials, API keys, tokens, or sensitive PII into a memory. This applies to both the content sentence and any cited snippets — redact secrets from a snippet before saving it.`;
 
+/**
+ * OpenWork extension tools denied for agents that opt out of OpenWork context
+ * via `options.openwork: false`. Kept as agent-level permission (applied live
+ * by the engine per prompt) instead of a persisted session permission, so
+ * switching agents never leaks the previous agent's tool denials.
+ */
+const OPENWORK_TOOL_PERMISSION_DENIALS = {
+  openwork_context: "deny",
+  openwork_query: "deny",
+  openwork_execute: "deny",
+  openwork_docs_search: "deny",
+  openwork_docs_read: "deny",
+};
+
 export async function buildOpenworkRuntimeConfigObject(
   config?: ServerConfig,
   workspaceId?: string,
@@ -135,6 +149,7 @@ export function buildOpenworkRuntimeConfigObjectFromSnapshot(
         // instructions, and tools.
         options: { openwork: false },
         permission: {
+          ...OPENWORK_TOOL_PERMISSION_DENIALS,
           skill: {
             "customize-opencode": "deny",
             "get-started": "deny",
@@ -154,6 +169,7 @@ export function buildOpenworkRuntimeConfigObjectFromSnapshot(
         options: { openwork: false },
         prompt: "You are a helpful assistant.",
         permission: {
+          ...OPENWORK_TOOL_PERMISSION_DENIALS,
           skill: {
             "customize-opencode": "deny",
             "get-started": "deny",

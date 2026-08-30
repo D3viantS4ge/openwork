@@ -469,15 +469,6 @@ function singlePickedDirectory(selection: string | string[] | null) {
       : null;
 }
 
-/** OpenWork extension tools denied when an agent opts out of OpenWork context. */
-const OPENWORK_TOOL_DENIALS = {
-  openwork_context: false,
-  openwork_query: false,
-  openwork_execute: false,
-  openwork_docs_search: false,
-  openwork_docs_read: false,
-};
-
 export function SessionRoute() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -1430,7 +1421,6 @@ export function SessionRoute() {
                   model: sendModel ?? undefined,
                   agent: sendAgent ?? undefined,
                   ...(sendVariant ? { variant: sendVariant } : {}),
-                  ...(openworkEnabled ? {} : { tools: OPENWORK_TOOL_DENIALS }),
                   ...(envSystemContext ? { system: envSystemContext } : {}),
                 });
                 if (result.error) {
