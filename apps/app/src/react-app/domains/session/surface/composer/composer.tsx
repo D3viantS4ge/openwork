@@ -120,6 +120,8 @@ type ComposerProps = {
   contextTokens?: number | null;
   /** Estimated cost of the current context, or null when free/unavailable. */
   contextCost?: number | null;
+  /** The model's context window limit in tokens, or null when unavailable. */
+  contextLimit?: number | null;
 };
 
 const FLUSH_PROMPT_EVENT = "openwork:flushPromptDraft";
@@ -1821,7 +1823,7 @@ export function ReactSessionComposer(props: ComposerProps) {
             </div>
           </div>
         </div>
-        <SessionStats session={props.stats} contextTokens={props.contextTokens} contextCost={props.contextCost} className="mt-1" />
+        <SessionStats session={props.stats} contextTokens={props.contextTokens} contextCost={props.contextCost} contextLimit={props.contextLimit} className="mt-1" />
       </div>
     </div>
   );

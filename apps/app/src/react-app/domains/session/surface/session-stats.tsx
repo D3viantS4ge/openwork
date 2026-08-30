@@ -10,6 +10,8 @@ export type SessionStatsProps = {
   contextTokens?: number | null
   /** Estimated cost of the current context, or null when free/unavailable. */
   contextCost?: number | null
+  /** The model's context window limit in tokens, or null when unavailable. */
+  contextLimit?: number | null
   className?: string
 }
 
@@ -44,7 +46,7 @@ function formatCostOrNA(value: number | null): string {
  * read/write), including 0 and N/A values. Hidden while the engine has not
  * reported any usage for the session.
  */
-export function SessionStats({ session, contextTokens, contextCost, className }: SessionStatsProps) {
+export function SessionStats({ session, contextTokens, contextCost, contextLimit, className }: SessionStatsProps) {
   const cost = typeof session?.cost === "number" ? session.cost : null
   const tokens = session?.tokens
   const input = typeof tokens?.input === "number" ? tokens.input : null
@@ -66,7 +68,7 @@ export function SessionStats({ session, contextTokens, contextCost, className }:
   const cacheHitRate = cacheRead !== null && totalInput > 0 ? (cacheRead / totalInput) * 100 : null
 
   const detail = [
-    `${formatTokensOrNA(contextTokens ?? null)} context (${formatCostOrNA(contextCost ?? null)})`,
+    `${formatTokensOrNA(contextTokens ?? null)} / ${contextLimit ? formatTokens(contextLimit) : "N/A"} (${formatCostOrNA(contextCost ?? null)})`,
     `cost ${formatCostOrNA(cost)}`,
     `${formatTokensOrNA(hasTokens ? totalInput : null)} in`,
     `${formatTokensOrNA(hasTokens ? totalOutput : null)} out`,
@@ -87,7 +89,7 @@ export function SessionStats({ session, contextTokens, contextCost, className }:
     >
       {contextTokens != null && contextTokens > 0 ? (
         <span>
-          {formatTokens(contextTokens)} context{contextCost != null ? ` (${formatCost(contextCost)})` : ""}
+          {formatTokens(contextTokens)} / {contextLimit ? formatTokens(contextLimit) : "N/A"}{contextCost != null ? ` (${formatCost(contextCost)})` : ""}
         </span>
       ) : null}
       {cost !== null ? <span>{formatCost(cost)}</span> : null}

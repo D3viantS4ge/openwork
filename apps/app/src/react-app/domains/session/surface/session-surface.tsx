@@ -826,6 +826,15 @@ export function SessionSurface(props: SessionSurfaceProps) {
       props.providerCatalog?.[sessionModel.selectedModel.providerID]?.[sessionModel.selectedModel.modelID];
     return estimateContextCost(model?.cost, contextTokens);
   }, [contextTokens, props.providerCatalog, sessionModel.selectedModel]);
+
+  // The selected model's context window limit in tokens, or null when the
+  // model definition doesn't expose one. Drives the "used / limit" stat.
+  const contextLimit = useMemo(() => {
+    const model =
+      props.providerCatalog?.[sessionModel.selectedModel.providerID]?.[sessionModel.selectedModel.modelID];
+    const limit = model?.limit?.context;
+    return typeof limit === "number" && limit > 0 ? limit : null;
+  }, [props.providerCatalog, sessionModel.selectedModel]);
   const transcriptState = useSharedQueryState<UIMessage[]>(transcriptQueryKey, EMPTY_TRANSCRIPT);
   const statusState = useSharedQueryState(statusQueryKey, currentSnapshot?.status ?? IDLE_STATUS);
 
@@ -2229,6 +2238,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
           stats={currentSnapshot?.session}
           contextTokens={contextTokens}
           contextCost={contextCost}
+          contextLimit={contextLimit}
           onDraftChange={handleComposerDraftChange}
         onSend={handleSend}
         onSteer={handleSteer}
