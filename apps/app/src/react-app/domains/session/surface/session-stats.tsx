@@ -29,11 +29,20 @@ function formatTokens(value: number): string {
   }).format(value)
 }
 
+function formatTokensOrNA(value: number | null): string {
+  return value === null ? "N/A" : formatTokens(value)
+}
+
+function formatCostOrNA(value: number | null): string {
+  return value === null ? "$N/A" : formatCost(value)
+}
+
 /**
- * Slim stats bar above the composer: total cost, input/output tokens and
- * the cache hit rate (cached input vs total input). Hover shows the full
- * breakdown (reasoning tokens, cache read/write). Hidden while the engine
- * has not reported any usage for the session.
+ * Slim stats bar above the composer: current context size and cost, total
+ * session cost, input/output tokens and the cache hit rate (cached input vs
+ * total input). Hover shows the full breakdown (reasoning tokens, cache
+ * read/write), including 0 and N/A values. Hidden while the engine has not
+ * reported any usage for the session.
  */
 export function SessionStats({ session, contextTokens, contextCost, className }: SessionStatsProps) {
   const cost = typeof session?.cost === "number" ? session.cost : null
@@ -57,19 +66,15 @@ export function SessionStats({ session, contextTokens, contextCost, className }:
   const cacheHitRate = cacheRead !== null && totalInput > 0 ? (cacheRead / totalInput) * 100 : null
 
   const detail = [
-    cost !== null ? `cost ${formatCost(cost)}` : null,
-    contextTokens != null
-      ? `${formatTokens(contextTokens)} context${contextCost != null ? ` (${formatCost(contextCost)})` : ""}`
-      : null,
-    hasTokens ? `${formatTokens(totalInput)} in` : null,
-    hasTokens ? `${formatTokens(totalOutput)} out` : null,
-    reasoning !== null ? `${formatTokens(reasoning)} reasoning` : null,
-    cacheRead !== null ? `${formatTokens(cacheRead)} cache read` : null,
-    cacheWrite !== null ? `${formatTokens(cacheWrite)} cache write` : null,
-    cacheHitRate !== null ? `${cacheHitRate.toFixed(1)}% cache hit` : null,
-  ]
-    .filter((value): value is string => value !== null)
-    .join(" · ")
+    `${formatTokensOrNA(contextTokens ?? null)} context (${formatCostOrNA(contextCost ?? null)})`,
+    `cost ${formatCostOrNA(cost)}`,
+    `${formatTokensOrNA(hasTokens ? totalInput : null)} in`,
+    `${formatTokensOrNA(hasTokens ? totalOutput : null)} out`,
+    `${formatTokensOrNA(reasoning)} reasoning`,
+    `${formatTokensOrNA(cacheRead)} cache read`,
+    `${formatTokensOrNA(cacheWrite)} cache write`,
+    cacheHitRate !== null ? `${cacheHitRate.toFixed(1)}% cache hit` : "N/A cache hit",
+  ].join(" · ")
 
   return (
     <div
@@ -80,12 +85,12 @@ export function SessionStats({ session, contextTokens, contextCost, className }:
       data-testid="session-stats"
       title={detail}
     >
-      {cost !== null ? <span>{formatCost(cost)}</span> : null}
       {contextTokens != null && contextTokens > 0 ? (
         <span>
           {formatTokens(contextTokens)} context{contextCost != null ? ` (${formatCost(contextCost)})` : ""}
         </span>
       ) : null}
+      {cost !== null ? <span>{formatCost(cost)}</span> : null}
       {hasTokens ? (
         <span>
           {formatTokens(totalInput)} in · {formatTokens(totalOutput)} out
