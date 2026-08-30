@@ -249,7 +249,7 @@ export const OpenWorkCapabilitiesKnowledge = async (factoryInput?: unknown) => {
   return {
     "experimental.chat.system.transform": async (input: unknown, output: { system: string[] }) => {
       // Skip the OpenWork capabilities knowledge when the session's agent opts
-      // out via its `openwork: false` option (e.g. the `plain` agent).
+      // out via its `openwork: false` option.
       if (engineAgentContext) {
         const sessionID = readSessionID(input);
         if (sessionID) {

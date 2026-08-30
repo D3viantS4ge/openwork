@@ -2,8 +2,8 @@
  * Reads the engine-provided OpenCode client (from a plugin's factory input) to
  * resolve whether the current session's agent opts out of OpenWork context via
  * its `openwork` agent option. Shared by the OpenWork system-prompt plugins so
- * they can skip the OpenWork instructions when the agent declares `openwork:
- * false` (e.g. the `plain` agent).
+ * they can skip the OpenWork instructions when the agent declares
+ * `openwork: false`.
  */
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -126,14 +126,33 @@ export function buildOpenworkRuntimeConfigObjectFromSnapshot(
           },
         },
       },
-      plain: {
-        description: "OpenWork without the OpenWork system prompt and tools",
+      opencode: {
+        description: "OpenCode's default behavior without the OpenWork system prompt and tools",
         mode: "primary",
         temperature: 0.2,
-        // Declarative opt-out: the `openwork` option (normalized into the
-        // agent's `options`) is what the send path and system-prompt plugins
-        // key on to skip the OpenWork prompt, instructions, and tools.
-        openwork: false,
+        // Declarative opt-out: the `openwork` option is what the send path and
+        // system-prompt plugins key on to skip the OpenWork prompt,
+        // instructions, and tools.
+        options: { openwork: false },
+        permission: {
+          skill: {
+            "customize-opencode": "deny",
+            "get-started": "deny",
+            "command-creator": "deny",
+            "agent-creator": "deny",
+            "plugin-creator": "deny",
+          },
+        },
+      },
+      plain: {
+        description: "A minimal agent with no OpenWork or OpenCode system prompt",
+        mode: "primary",
+        temperature: 0.2,
+        // The non-empty prompt suppresses the OpenCode base system-prompt
+        // fallback; `openwork: false` opts out of the OpenWork prompt,
+        // instructions, and tools.
+        options: { openwork: false },
+        prompt: "You are a helpful assistant.",
         permission: {
           skill: {
             "customize-opencode": "deny",

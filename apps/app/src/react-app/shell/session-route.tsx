@@ -1342,8 +1342,8 @@ export function SessionRoute() {
         // sends with it instead of the global default.
         const rememberedAgent = getSessionAgent(targetSessionId);
         const sendAgent = rememberedAgent === undefined ? selectedAgent : rememberedAgent;
-        // The agent's `openwork` option (false on the `plain` agent) opts a
-        // session out of the OpenWork system prompt and extension tools.
+        // The agent's `openwork` option opts a session out of the OpenWork
+        // system prompt and extension tools.
         const agentName = sendAgent ?? "openwork";
         const agents = await listAgents();
         const openworkEnabled = (agents.find((agent) => agent.name === agentName)?.options?.openwork) !== false;

@@ -930,7 +930,7 @@ export const OpenWorkExtensionsPreview = async (factoryInput?: unknown) => {
   },
   "experimental.chat.system.transform": async (input: unknown, output: { system: string[] }) => {
     // Skip the OpenWork instructions when the session's agent opts out via its
-    // `openwork: false` option (e.g. the `plain` agent).
+    // `openwork: false` option.
     if (engineAgentContext && isRecord(input)) {
       const sessionID = optionalStringProperty(input, "sessionID");
       if (sessionID) {

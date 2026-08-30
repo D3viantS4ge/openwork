@@ -90,6 +90,18 @@ describe("openwork runtime config file", () => {
     });
   });
 
+  test("opencode and plain agents opt out of OpenWork and plain has a minimal prompt", async () => {
+    const { config } = await setup();
+    await writeOpenworkRuntimeConfigFile(config, "ws_1");
+
+    const parsed = await readConfigFile(config);
+    const agent = parsed.agent as Record<string, Record<string, unknown>>;
+    expect(agent.opencode?.options).toEqual({ openwork: false });
+    expect(agent.plain?.options).toEqual({ openwork: false });
+    expect(agent.plain?.prompt).toBe("You are a helpful assistant.");
+    expect(agent.opencode?.prompt).toBeUndefined();
+  });
+
   test("openwork prompt has a static search-first Memory Bank section, distinct from ## Memory", async () => {
     const { config } = await setup();
     await writeOpenworkRuntimeConfigFile(config, "ws_1");
