@@ -27,11 +27,19 @@ describe("composer model controls", () => {
     const modelSelectSource = readFileSync(modelSelectPath, "utf8");
     const modelSelectStart = composerSource.indexOf("<ModelSelect");
     const modelSelect = composerSource.slice(modelSelectStart, composerSource.indexOf("/>", modelSelectStart) + 2);
+    const behaviorSelectStart = composerSource.indexOf("<ModelBehaviorSelect");
+    const behaviorSelect = composerSource.slice(
+      behaviorSelectStart,
+      composerSource.indexOf("/>", behaviorSelectStart) + 2,
+    );
+    const modelControls = [modelSelect, behaviorSelect].join("\n");
 
-    expect(composerSource).not.toContain("ModelBehaviorSelect");
-    expect(modelSelect).toContain("disabled={props.steering}");
-    expect(modelSelect).not.toContain("disabled={props.busy}");
+    expect(composerSource).toContain("ModelBehaviorSelect");
+    expect(modelControls.match(/disabled=\{props\.steering\}/g)).toHaveLength(2);
+    expect(modelControls).not.toContain("disabled={props.busy}");
     expect(modelSelect).toContain("behaviorOptions={props.modelBehaviorOptions}");
+    expect(behaviorSelect).toContain("options={props.modelBehaviorOptions}");
+    expect(behaviorSelect).toContain("onChange={(value) => {");
     expect(modelSelectSource).toContain("setThinkingFor(option)");
     expect(modelSelectSource).not.toContain("setThinkingOpen(true)");
     expect(modelSelectSource).toContain('data-slot="model-thinking-submenu"');

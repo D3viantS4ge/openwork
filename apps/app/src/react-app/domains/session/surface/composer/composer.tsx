@@ -14,6 +14,7 @@ import {
   slugifyLibraryItemName,
   type ComposerSettingsSection,
 } from "@/react-app/domains/settings/library";
+import { ModelBehaviorSelect } from "@/components/model-behavior-select";
 import { ModelSelect } from "@/components/model-select";
 import { LexicalPromptEditor, syncAttachmentChipStatus, type LexicalPromptEditorHandle } from "./editor";
 import { listRunningAppsForMention } from "./app-mentions";
@@ -1732,6 +1733,15 @@ export function ReactSessionComposer(props: ComposerProps) {
                   onBehaviorChange={(value) => {
                     if (!props.steering) props.onModelVariantChange(value);
                   }}
+                />
+                <ModelBehaviorSelect
+                  value={props.modelVariant}
+                  label={props.modelVariantLabel}
+                  options={props.modelBehaviorOptions}
+                  onChange={(value) => {
+                    if (!props.steering) props.onModelVariantChange(value);
+                  }}
+                  disabled={props.steering}
                 />
                 {props.modelUnavailable ? props.onRefreshOrganizationModels ? (
                   <button
