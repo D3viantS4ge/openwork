@@ -129,6 +129,22 @@ describe("session run status ordering", () => {
     cleanup();
   });
 
+  test("invalidates the durable snapshot when an untracked run becomes idle", () => {
+    const input = createSyncInput();
+    const cleanup = __createWorkspaceSessionSyncForTest(input);
+    const queryClient = getReactQueryClient();
+    queryClient.setQueryData(snapshotKey(workspaceId, sessionId), createSnapshot({ type: "busy" }));
+
+    __applySessionSyncEventForTest(input, {
+      type: "session.idle",
+      properties: { sessionID: sessionId },
+    });
+
+    expect(queryClient.getQueryState(snapshotKey(workspaceId, sessionId))?.isInvalidated).toBe(true);
+
+    cleanup();
+  });
+
   test("does not resurrect a finished run from a stale busy snapshot", () => {
     const { input, cleanup, releaseSession } = createTestSync();
     const snapshot = createSnapshot({ type: "busy" });

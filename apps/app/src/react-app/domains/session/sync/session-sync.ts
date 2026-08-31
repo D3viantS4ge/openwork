@@ -784,8 +784,10 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
     const tracked = isTrackedSession(entry, props.sessionID);
     if (tracked) queryClient.setQueryData(statusKey(workspaceId, props.sessionID), props.status);
     for (const listener of entry.sessionStatusListeners) listener({ sessionId: props.sessionID, status: props.status });
-    if (input && tracked && !isLiveStatus(props.status)) {
+    if (input && tracked) {
       releaseRetainedSessionSoon(input, entry, props.sessionID);
+    }
+    if (!isLiveStatus(props.status)) {
       // The run just ended (completed or stopped). The SSE stream can end
       // before the final part events reach the renderer, leaving tool parts
       // stuck in-flight ("Running") with no further events to correct them —
@@ -1045,15 +1047,15 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
     const tracked = isTrackedSession(entry, props.sessionID);
     if (tracked) {
       queryClient.setQueryData(statusKey(workspaceId, props.sessionID), idleStatus);
-      // A fast tool can complete and persist before its final part.updated SSE
-      // reaches the renderer. Reconcile successful turns from the durable
-      // snapshot just as failed turns do, so standard MCP App results mount
-      // without requiring an artificial provider delay or a page reload.
-      void queryClient.invalidateQueries({
-        queryKey: snapshotKey(workspaceId, props.sessionID),
-        exact: true,
-      });
     }
+    // A fast tool can complete and persist before its final part.updated SSE
+    // reaches the renderer. Reconcile successful turns from the durable
+    // snapshot just as failed turns do, so standard MCP App results mount
+    // without requiring an artificial provider delay or a page reload.
+    void queryClient.invalidateQueries({
+      queryKey: snapshotKey(workspaceId, props.sessionID),
+      exact: true,
+    });
     for (const listener of entry.sessionStatusListeners) listener({ sessionId: props.sessionID, status: idleStatus });
     if (input && tracked) releaseRetainedSessionSoon(input, entry, props.sessionID);
   }
