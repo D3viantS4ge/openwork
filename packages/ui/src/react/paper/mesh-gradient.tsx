@@ -44,6 +44,11 @@ export function PaperMeshGradient({
     frame,
   })
 
+  const reduceMotion =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+
   return (
     <MeshGradient
       {...props}
@@ -54,7 +59,7 @@ export function PaperMeshGradient({
       swirl={resolved.swirl}
       grainMixer={resolved.grainMixer}
       grainOverlay={resolved.grainOverlay}
-      speed={resolved.speed}
+      speed={reduceMotion ? 0 : resolved.speed}
       frame={resolved.frame}
     />
   )

@@ -62,6 +62,10 @@ export function PaperGrainGradient({
   })
 
   const sizingDefaults = getSizingDefaults(resolved.shape)
+  const reduceMotion =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
 
   return (
     <GrainGradient
@@ -83,7 +87,7 @@ export function PaperGrainGradient({
       intensity={resolved.intensity}
       noise={resolved.noise}
       shape={resolved.shape}
-      speed={resolved.speed}
+      speed={reduceMotion ? 0 : resolved.speed}
       frame={resolved.frame}
     />
   )
