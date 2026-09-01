@@ -23,6 +23,7 @@ import {
 } from "./parse-tool-parts";
 import type { OpenworkSessionSnapshot } from "@/app/lib/openwork-server";
 import { applyRevertCursor, reconcileTranscriptMessages } from "./transcript-reconcile";
+import { eventSourceStream } from "./event-source-stream";
 import {
   useSessionActivityStore,
 } from "../status/session-activity-store";
@@ -95,6 +96,14 @@ type SessionStatusFetcher = (
 ) => Promise<Record<string, SessionStatus>>;
 
 const defaultSyncSubscriptionFactory: SyncSubscriptionFactory = async (baseUrl, openworkToken, signal) => {
+  // Firefox stalls a second concurrent streaming `fetch` to the same origin, so
+  // prefer native `EventSource` (a separate connection path). `EventSource`
+  // can't send an `Authorization` header, so the token rides the query string;
+  // the server accepts it there on the `/event` route.
+  if (typeof EventSource !== "undefined") {
+    const url = `${baseUrl}/event?token=${encodeURIComponent(openworkToken)}`;
+    return eventSourceStream(url, signal);
+  }
   const client = createClient(baseUrl, undefined, { token: openworkToken, mode: "openwork" });
   const subscription = await client.event.subscribe(undefined, { signal });
   return subscription.stream;

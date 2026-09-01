@@ -1713,7 +1713,7 @@ function withCors(response: Response, request: Request, config: ServerConfig) {
 async function requireClient(request: Request, config: ServerConfig, tokens: TokenService): Promise<Actor> {
   const header = request.headers.get("authorization") ?? "";
   const match = header.match(/^Bearer\s+(.+)$/i);
-  const token = match?.[1];
+  const token = match?.[1] ?? new URL(request.url).searchParams.get("token");
   if (!token) {
     throw new ApiError(401, "unauthorized", "Invalid bearer token");
   }
