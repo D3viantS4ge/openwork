@@ -1663,7 +1663,7 @@ function WorkspaceSidebarGroup({
             onOpenChange={() => ctx.toggleWorkspaceExpanded(workspace.id)}
             className="group/collapsible"
           >
-            <div className="group/workspace-header relative max-md:hidden">
+            <div className="group/workspace-header relative">
               <WorkspaceHeader
                 workspace={workspace}
                 statusLabel={statusLabel}
