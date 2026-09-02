@@ -395,6 +395,53 @@ describe("OpenWorkExtensionsPreview session tools", () => {
     expect(parsed.result.messages.at(-1)?.text).toContain("archive importer");
   });
 
+  test("asks the openwork_query permission before a session read when the engine provides ask", async () => {
+    startFakeOpenWorkServer();
+    const plugin = await OpenWorkExtensionsPreview();
+
+    const asks: Array<{ permission: string; patterns: string[]; always: string[]; metadata: Record<string, unknown> }> = [];
+    const output = await plugin.tool.openwork_query.execute(
+      { id: "session.read", args: { sessionId: "ses_archive", count: 2 } },
+      { ask: async (input: { permission: string; patterns: string[]; always: string[]; metadata: Record<string, unknown> }) => { asks.push(input); } },
+    );
+
+    const parsed = affordanceResultSchema("session.read", readResultSchema).parse(JSON.parse(output));
+    expect(parsed.result.sessionId).toBe("ses_archive");
+    expect(asks).toEqual([{
+      permission: "openwork_query",
+      patterns: ["session.read"],
+      always: ["*"],
+      metadata: { id: "session.read" },
+    }]);
+  });
+
+  test("blocks a session read when the openwork_query permission ask rejects", async () => {
+    const fake = startFakeOpenWorkServer();
+    const plugin = await OpenWorkExtensionsPreview();
+
+    const before = fake.requests.length;
+    await expect(
+      plugin.tool.openwork_query.execute(
+        { id: "session.read", args: { sessionId: "ses_archive", count: 2 } },
+        { ask: async () => { throw new Error("denied by permission"); } },
+      ),
+    ).rejects.toThrow("denied by permission");
+    expect(fake.requests.length).toBe(before);
+  });
+
+  test("derives the permission pattern from the affordance id", async () => {
+    startFakeOpenWorkServer();
+    const plugin = await OpenWorkExtensionsPreview();
+
+    const patterns: string[][] = [];
+    await plugin.tool.openwork_query.execute(
+      { id: "session.search", args: { query: "raven launch" } },
+      { ask: async (input: { patterns: string[] }) => { patterns.push(input.patterns); } },
+    );
+
+    expect(patterns).toEqual([["session.search"]]);
+  });
+
   test("searches past chat transcript text and prefers the user's matching message", async () => {
     const fake = startFakeOpenWorkServer();
     const plugin = await OpenWorkExtensionsPreview();
@@ -547,6 +594,53 @@ describe("OpenWorkExtensionsPreview session tools", () => {
       { title: "Look into bananas", prompt: "Research bananas." },
       { title: "Look into apple pies", prompt: "Research apple pies." },
     ]));
+  });
+
+  test("asks the openwork_execute permission before a command when the engine provides ask", async () => {
+    startFakeOpenWorkServer();
+    const plugin = await OpenWorkExtensionsPreview({ directory: "/tmp/archive" });
+
+    const asks: Array<{ permission: string; patterns: string[]; always: string[]; metadata: Record<string, unknown> }> = [];
+    const output = await plugin.tool.openwork_execute.execute(
+      { id: "session.create", args: { sessions: [{ title: "Gate me", prompt: "Run me." }] } },
+      { sessionID: "ses_origin", ask: async (input: { permission: string; patterns: string[]; always: string[]; metadata: Record<string, unknown> }) => { asks.push(input); } },
+    );
+
+    const parsed = affordanceResultSchema("session.create", createResultSchema).parse(JSON.parse(output));
+    expect(parsed.result.ok).toBe(true);
+    expect(asks).toEqual([{
+      permission: "openwork_execute",
+      patterns: ["session.create"],
+      always: ["*"],
+      metadata: { id: "session.create" },
+    }]);
+  });
+
+  test("blocks a command when the openwork_execute permission ask rejects", async () => {
+    const fake = startFakeOpenWorkServer();
+    const plugin = await OpenWorkExtensionsPreview({ directory: "/tmp/archive" });
+
+    const before = fake.requests.length;
+    await expect(
+      plugin.tool.openwork_execute.execute(
+        { id: "session.create", args: { sessions: [{ title: "Blocked", prompt: "Run me." }] } },
+        { sessionID: "ses_origin", ask: async () => { throw new Error("denied by permission"); } },
+      ),
+    ).rejects.toThrow("denied by permission");
+    expect(fake.requests.length).toBe(before);
+  });
+
+  test("derives the openwork_execute permission pattern from the command id", async () => {
+    startFakeOpenWorkServer();
+    const plugin = await OpenWorkExtensionsPreview();
+
+    const patterns: string[][] = [];
+    await plugin.tool.openwork_execute.execute(
+      { id: "session.rename", args: { sessionId: "ses_alpha", title: "Renamed" } },
+      { sessionID: "ses_origin", ask: async (input: { patterns: string[] }) => { patterns.push(input.patterns); } },
+    );
+
+    expect(patterns).toEqual([["session.rename"]]);
   });
 
   test("creates more than twenty sessions in one tool call", async () => {

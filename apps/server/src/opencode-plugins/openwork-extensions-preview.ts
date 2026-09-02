@@ -294,6 +294,34 @@ function normalizeOpenCodeContext(value: unknown): OpenCodeContext {
   };
 }
 
+type AffordancePermissionAsk = (input: {
+  permission: string;
+  patterns: string[];
+  always: string[];
+  metadata: Record<string, unknown>;
+}) => Promise<void>;
+
+function isPermissionAsk(value: unknown): value is AffordancePermissionAsk {
+  return typeof value === "function";
+}
+
+function readAsk(context: unknown): AffordancePermissionAsk | undefined {
+  const nested = isRecord(context) && isRecord(context.context) ? context.context : context;
+  if (!isRecord(nested)) return undefined;
+  return isPermissionAsk(nested.ask) ? nested.ask : undefined;
+}
+
+async function askAffordancePermission(
+  context: unknown,
+  permission: string,
+  rawArgs: unknown,
+): Promise<void> {
+  const ask = readAsk(context);
+  if (!ask) return;
+  const id = isRecord(rawArgs) && typeof rawArgs.id === "string" ? rawArgs.id : "*";
+  await ask({ permission, patterns: [id], always: ["*"], metadata: { id } });
+}
+
 function mergeTransformInputWithFactoryContext(input: unknown, factoryContext: OpenCodeContext): unknown {
   if (Object.keys(factoryContext).length === 0) return input;
   const inputRecord = isRecord(input) ? input : {};
@@ -1097,14 +1125,16 @@ export const OpenWorkExtensionsPreview = async (factoryInput?: unknown) => {
     openwork_query: {
       description: "Run a side-effect-free OpenWork affordance whose executor is OpenWork. Use the exact id and arguments from openwork_context. This reads backend or app state without navigation or window focus.",
       args: openworkAffordanceRequestSchema.shape,
-      async execute(rawArgs: unknown) {
+      async execute(rawArgs: unknown, context?: unknown) {
+        await askAffordancePermission(context, "openwork_query", rawArgs);
         return JSON.stringify(await queryOpenworkAffordance(rawArgs), null, 2);
       },
     },
     openwork_execute: {
       description: "Execute an OpenWork command whose executor is OpenWork without activating the desktop window. Use the exact id and arguments from openwork_context, and pass expectedRevision for UI commands to prevent stale writes. If the descriptor names another executor tool, call that tool instead.",
       args: openworkAffordanceRequestSchema.shape,
-      async execute(rawArgs: unknown, context: OpenCodeContext) {
+      async execute(rawArgs: unknown, context?: unknown) {
+        await askAffordancePermission(context, "openwork_execute", rawArgs);
         const mergedContext = { ...factoryContext, ...normalizeOpenCodeContext(context) };
         return JSON.stringify(await executeOpenworkAffordance(rawArgs, mergedContext), null, 2);
       },
