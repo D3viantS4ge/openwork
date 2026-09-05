@@ -800,11 +800,13 @@ export function SessionSurface(props: SessionSurfaceProps) {
 
   const currentSnapshot = snapshotQuery.data?.session.id === props.sessionId ? snapshotQuery.data : null;
 
-  // Current conversation context size in tokens: the latest assistant turn's
-  // total input (fresh + cache read/write) plus its total output (visible +
-  // reasoning). Walks newest-first because the tail is often a token-less
-  // user message or an empty assistant step.
-  const contextTokens = useMemo(() => {
+  // Current conversation context size in tokens, committed by the server: the
+  // latest assistant turn's total input (fresh + cache read/write) plus its
+  // total output (visible + reasoning). Walks newest-first because the tail is
+  // often a token-less user message or an empty assistant step. This value only
+  // advances once the server commits usage, so during an active run it is
+  // extended by the live output delta below.
+  const committedContextTokens = useMemo(() => {
     const messages = currentSnapshot?.messages ?? [];
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const info = messages[index].info;
@@ -817,16 +819,6 @@ export function SessionSurface(props: SessionSurfaceProps) {
     return null;
   }, [currentSnapshot?.messages]);
 
-  // Estimated cost of the current context using the selected model's pricing
-  // (cache-write rate, or uncached input fallback), accounting for context
-  // tiers/over-200K. Recomputes when the model selection changes.
-  const contextCost = useMemo(() => {
-    if (contextTokens == null) return null;
-    const model =
-      props.providerCatalog?.[sessionModel.selectedModel.providerID]?.[sessionModel.selectedModel.modelID];
-    return estimateContextCost(model?.cost, contextTokens);
-  }, [contextTokens, props.providerCatalog, sessionModel.selectedModel]);
-
   // The selected model's context window limit in tokens, or null when the
   // model definition doesn't expose one. Drives the "used / limit" stat.
   const contextLimit = useMemo(() => {
@@ -837,6 +829,53 @@ export function SessionSurface(props: SessionSurfaceProps) {
   }, [props.providerCatalog, sessionModel.selectedModel]);
   const transcriptState = useSharedQueryState<UIMessage[]>(transcriptQueryKey, EMPTY_TRANSCRIPT);
   const statusState = useSharedQueryState(statusQueryKey, currentSnapshot?.status ?? IDLE_STATUS);
+
+  // A run is active while the server reports busy (or retrying). Mirrors the
+  // sync layer's `isLiveStatus` so a provider-error retry doesn't look like
+  // the run ended and reset the baseline.
+  const runActive = statusState?.type === "busy" || statusState?.type === "retry";
+  const wasRunActiveRef = useRef(false);
+  // Captured on the run's leading edge so the committed context size and live
+  // output total can be recombined into a live context estimate as output
+  // streams. Reset when the run ends.
+  const runBaselineRef = useRef<{ contextTokens: number; outputTokens: number } | null>(null);
+
+  useEffect(() => {
+    const started = runActive && !wasRunActiveRef.current;
+    wasRunActiveRef.current = runActive;
+    if (!started) {
+      if (!runActive) runBaselineRef.current = null;
+      return;
+    }
+    const tokens = currentSnapshot?.session.tokens;
+    runBaselineRef.current = {
+      contextTokens: committedContextTokens ?? 0,
+      outputTokens: (tokens?.output ?? 0) + (tokens?.reasoning ?? 0),
+    };
+  }, [runActive, committedContextTokens, currentSnapshot?.session.tokens]);
+
+  // Live context size. While a run is active, the committed value from the
+  // snapshot lags the stream, so extend it by the run's accumulated output
+  // growth (from the live session token totals that move with total cost).
+  const contextTokens = useMemo(() => {
+    if (committedContextTokens == null) return null;
+    if (!runActive) return committedContextTokens;
+    const baseline = runBaselineRef.current;
+    const tokens = currentSnapshot?.session.tokens;
+    if (!baseline || !tokens) return committedContextTokens;
+    const liveOutput = (tokens.output ?? 0) + (tokens.reasoning ?? 0);
+    return baseline.contextTokens + Math.max(0, liveOutput - baseline.outputTokens);
+  }, [runActive, committedContextTokens, currentSnapshot?.session.tokens]);
+
+  // Estimated cost of the current context using the selected model's pricing
+  // (cache-write rate, or uncached input fallback), accounting for context
+  // tiers/over-200K. Recomputes when the model selection changes.
+  const contextCost = useMemo(() => {
+    if (contextTokens == null) return null;
+    const model =
+      props.providerCatalog?.[sessionModel.selectedModel.providerID]?.[sessionModel.selectedModel.modelID];
+    return estimateContextCost(model?.cost, contextTokens);
+  }, [contextTokens, props.providerCatalog, sessionModel.selectedModel]);
 
   useEffect(() => {
     if (!currentSnapshot) return;
