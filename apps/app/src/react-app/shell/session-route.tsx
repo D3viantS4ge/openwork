@@ -1530,6 +1530,18 @@ export function SessionRoute() {
           if (!targetSessionId) return;
           try {
             const forked = await forkSession(opencodeClient, targetSessionId, messageId ?? undefined);
+            // Carry the source session's agent, model, and variant into the
+            // fork's composer state. The fork is a new session id, so without
+            // this it would fall back to the global default instead of
+            // matching the session it branched from.
+            const sourceModel = useSessionModelStore.getState().bySessionId[targetSessionId];
+            if (sourceModel) {
+              useSessionModelStore.getState().setModel(forked.id, sourceModel.model, sourceModel.variant);
+            }
+            const sourceAgent = useSessionAgentStore.getState().bySessionId[targetSessionId];
+            if (sourceAgent !== undefined) {
+              useSessionAgentStore.getState().setAgent(forked.id, sourceAgent);
+            }
             writeLastSessionFor(selectedWorkspaceId, forked.id);
             rememberPendingCreatedSession(selectedWorkspaceId, forked.id);
             setSessionsByWorkspaceId((current) => ({
