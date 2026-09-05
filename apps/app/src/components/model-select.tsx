@@ -337,7 +337,7 @@ export function ModelSelect({
           ) : (
             <span className="flex min-w-0 flex-col items-start leading-tight">
               <span className="max-w-48 truncate">{selectedOption?.title ?? value.modelID}</span>
-              <span className="max-w-48 truncate text-[11px] text-gray-9">
+              <span className="max-w-48 truncate text-[10px] text-gray-9">
                 {selectedOption?.description ?? getProviderDisplayName(value.providerID)}
               </span>
             </span>
