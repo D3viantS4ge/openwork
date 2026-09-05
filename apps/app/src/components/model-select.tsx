@@ -332,11 +332,16 @@ export function ModelSelect({
             />
           }
         >
-          <span className="max-w-48 truncate">
-            {hideValue || (!denAuth.isSignedIn && isCloudManagedProviderKey(value.providerID))
-              ? "Select model"
-              : (selectedOption?.title ?? value.modelID ?? "Select model")}
-          </span>
+          {hideValue || (!denAuth.isSignedIn && isCloudManagedProviderKey(value.providerID)) ? (
+            <span className="max-w-48 truncate">Select model</span>
+          ) : (
+            <span className="flex min-w-0 flex-col items-start leading-tight">
+              <span className="max-w-48 truncate">{selectedOption?.title ?? value.modelID}</span>
+              <span className="max-w-48 truncate text-[11px] text-gray-9">
+                {selectedOption?.description ?? getProviderDisplayName(value.providerID)}
+              </span>
+            </span>
+          )}
           <ChevronDown className="h-3 w-3" />
         </TooltipTrigger>
         <TooltipContent>
