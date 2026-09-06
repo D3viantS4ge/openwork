@@ -50,7 +50,7 @@ export function readEngineAgentContext(value: unknown): OpenWorkEngineAgentConte
         if (!Array.isArray(list)) return true;
         const agent = list.find((item) => isRecord(item) && item.name === agentName);
         const options = isRecord(agent) ? agent.options : undefined;
-        return !(isRecord(options) && (options.disable_openwork === true || options.openwork === false));
+        return !(isRecord(options) && options.disable_openwork === true);
       } catch {
         return true;
       }
