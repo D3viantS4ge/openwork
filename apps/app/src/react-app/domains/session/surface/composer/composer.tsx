@@ -969,8 +969,12 @@ export function ReactSessionComposer(props: ComposerProps) {
   // Listen for cross-app focus + draft flush events. The Solid shell uses
   // these from deep-link handlers, the command palette, and the browser
   // pagehide/beforeunload cycle so no in-flight draft is lost.
+  // The focus event can carry an optional sessionId in its detail so that
+  // split-view composers only react to their own session's prompts.
   useEffect(() => {
-    const handleFocus = () => {
+    const handleFocus = (e: Event) => {
+      const ce = e as CustomEvent<{ sessionId?: string } | undefined>;
+      if (ce.detail?.sessionId && ce.detail.sessionId !== props.sessionId) return;
       const root = rootRef.current;
       if (!root) return;
       const editable = root.querySelector<HTMLElement>("[contenteditable='true']");

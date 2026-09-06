@@ -767,6 +767,14 @@ export function SessionSurface(props: SessionSurfaceProps) {
   const drainingQueueRef = useRef(false);
   const awaitingQueueBusyRef = useRef(false);
   const composerShellRef = useRef<HTMLDivElement>(null);
+  // Tracks whether the composer's contenteditable has focus, updated
+  // synchronously via capture-phase focusin/focusout on document. Used
+  // by the turn-completion effect to restore focus only when it was
+  // already in the composer.
+  const composerFocusedRef = useRef(false);
+  // Holds pending setTimeout handles from the multi-shot focus restoration
+  // so they can be cancelled on unmount or session switch.
+  const focusTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const hydratedKeyRef = useRef<string | null>(null);
   const autoOpenedTargetRef = useRef<string | null>(null);
   const initializedAutoOpenSessionRef = useRef<string | null>(null);
@@ -985,6 +993,71 @@ export function SessionSurface(props: SessionSurfaceProps) {
   useEffect(() => {
     if (!chatStreaming) setSteering(false);
   }, [chatStreaming]);
+
+  // Track whether the composer's contenteditable has focus so we can
+  // restore it when a turn completes without forcing focus on a user
+  // who deliberately clicked elsewhere (stop button, model picker, etc).
+  useEffect(() => {
+    const shell = composerShellRef.current;
+    if (!shell) return;
+
+    const handleFocusIn = (e: FocusEvent) => {
+      const target = e.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (target.matches('[contenteditable="true"]') && shell.contains(target)) {
+        composerFocusedRef.current = true;
+      }
+    };
+    const handleFocusOut = (e: FocusEvent) => {
+      const target = e.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (target.matches('[contenteditable="true"]') && shell.contains(target)) {
+        composerFocusedRef.current = false;
+      }
+    };
+
+    document.addEventListener("focusin", handleFocusIn, true);
+    document.addEventListener("focusout", handleFocusOut, true);
+    return () => {
+      document.removeEventListener("focusin", handleFocusIn, true);
+      document.removeEventListener("focusout", handleFocusOut, true);
+    };
+  }, [props.sessionId]);
+
+  // When a run transitions from busy/retry to idle, restore composer
+  // focus if it was focused before the transition completed. Uses the
+  // same multi-shot pattern as focusPromptSoon() to handle cases where
+  // Lexical's async reconciliation temporarily shifts focus after the
+  // status update.
+  const prevStatusRef = useRef(liveStatus.type);
+  useEffect(() => {
+    const prevStatus = prevStatusRef.current;
+    prevStatusRef.current = liveStatus.type;
+
+    if ((prevStatus === "busy" || prevStatus === "retry") && liveStatus.type === "idle") {
+      if (composerFocusedRef.current) {
+        // Cancel any pending timers from a previous transition so that
+        // rapid busy→idle cycles don't stack stale focus attempts.
+        focusTimersRef.current.forEach(clearTimeout);
+        focusTimersRef.current = [];
+        const fire = () =>
+          window.dispatchEvent(
+            new CustomEvent("openwork:focusPrompt", { detail: { sessionId: props.sessionId } }),
+          );
+        [0, 80, 240, 600].forEach((delay) => {
+          focusTimersRef.current.push(setTimeout(fire, delay));
+        });
+      }
+    }
+
+    return () => {
+      // Clear any pending focus timers on unmount or session switch so
+      // stale setTimeout callbacks can't focus a detached composer.
+      focusTimersRef.current.forEach(clearTimeout);
+      focusTimersRef.current = [];
+    };
+  }, [liveStatus.type, props.sessionId]);
+
   const status = useMemo((): ThreadStatus => {
     if (sending) {
       return "submitted";
