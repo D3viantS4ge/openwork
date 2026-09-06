@@ -2625,13 +2625,16 @@ function createRoutes(
     const body = await readJsonBody(ctx.request);
     const enabled = body.enabled === true;
 
+    const echoBaseUrl = `http://127.0.0.1:${config.port}/api/echo/v1`;
+
     const providerPatch: Record<string, unknown> = enabled
       ? {
           echo: {
             name: "Debug",
             npm: "@ai-sdk/openai-compatible",
+            api: echoBaseUrl,
             options: {
-              baseURL: `http://127.0.0.1:${config.port}/api/echo/v1`,
+              baseURL: echoBaseUrl,
               apiKey: "sk-echo",
             },
             models: {
@@ -2659,6 +2662,7 @@ function createRoutes(
     }));
 
     if (result.changed) {
+      await writeOpenworkRuntimeConfigFile(config, workspace.id);
       emitReloadEvent(ctx.reloadEvents, workspace, "config", buildConfigTrigger(openworkRuntimeConfigFilePath(config)));
     }
 

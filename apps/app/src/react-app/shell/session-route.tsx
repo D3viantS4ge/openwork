@@ -2372,7 +2372,9 @@ export function SessionRoute() {
         const next = !current;
         try { window.localStorage.setItem("openwork.developerMode", next ? "1" : "0"); } catch {}
         if (client) {
-          client.setEchoProviderEnabled(next).catch(() => undefined);
+          client.setEchoProviderEnabled(next).catch((error) => {
+            console.warn("[echo-provider] Failed to toggle echo provider:", error);
+          });
         }
         return next;
       });

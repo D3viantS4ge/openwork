@@ -2496,7 +2496,9 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
               try { window.localStorage.setItem("openwork.developerMode", next ? "1" : "0"); } catch {}
               setDeveloperMode(next);
               if (openworkClient) {
-                openworkClient.setEchoProviderEnabled(next).catch(() => undefined);
+                openworkClient.setEchoProviderEnabled(next).catch((error) => {
+                  console.warn("[echo-provider] Failed to toggle echo provider:", error);
+                });
               }
             }}
             opencodeDevModeEnabled={false}

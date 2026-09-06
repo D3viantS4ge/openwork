@@ -82,6 +82,9 @@ describe("runtime-config echo-provider route", () => {
     if (isRecord(echoProvider)) {
       expect(echoProvider.name).toBe("Debug");
       expect(echoProvider.npm).toBe("@ai-sdk/openai-compatible");
+      expect(typeof echoProvider.api).toBe("string");
+      expect((echoProvider.api as string)).toContain("127.0.0.1");
+      expect((echoProvider.api as string)).toContain("/api/echo/v1");
       const models = isRecord(echoProvider.models) ? echoProvider.models : {};
       expect(isRecord(models.echo)).toBe(true);
       if (isRecord(models.echo)) {
