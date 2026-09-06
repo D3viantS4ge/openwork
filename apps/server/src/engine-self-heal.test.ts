@@ -25,6 +25,7 @@ function managedHandle(port: number) {
       closeCalls += 1;
       alive = false;
     },
+    captureLogs: () => ({ stdout: "", stderr: "", capturedAt: new Date().toISOString() }),
   };
   return { handle, closeCalls: () => closeCalls };
 }

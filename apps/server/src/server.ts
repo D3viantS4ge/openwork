@@ -771,6 +771,34 @@ function isBrokenLogPipeError(error: unknown): boolean {
 let stdoutLogWritesDisabled = false;
 let stdoutErrorHandlerInstalled = false;
 
+// Ring buffer for the server's own log output (last 500 lines).
+// Written by createServerLogger, read via readServerLogBuffer().
+const SERVER_LOG_BUFFER_MAX = 500;
+const serverLogBuffer: string[] = [];
+
+function pushServerLogLine(line: string): void {
+  serverLogBuffer.push(line);
+  if (serverLogBuffer.length > SERVER_LOG_BUFFER_MAX) {
+    serverLogBuffer.splice(0, serverLogBuffer.length - SERVER_LOG_BUFFER_MAX);
+  }
+}
+
+/** Read the server's recent log output as a single text block. */
+export function readServerLogBuffer(): string {
+  return serverLogBuffer.join("\n");
+}
+
+// Late-bound accessor for managed OpenCode engine logs. Set by cli.ts / embedded.ts
+// after the engine spawns (which happens after startServer returns).
+let captureManagedOpencodeLogsImpl: (() => { stdout: string; stderr: string; capturedAt: string } | null) | undefined;
+
+/** Register the managed opencode log accessor (called by cli.ts / embedded.ts after spawn). */
+export function setCaptureManagedOpencodeLogs(
+  fn: () => { stdout: string; stderr: string; capturedAt: string } | null,
+): void {
+  captureManagedOpencodeLogsImpl = fn;
+}
+
 function ensureStdoutErrorHandler() {
   if (stdoutErrorHandlerInstalled) return;
   stdoutErrorHandlerInstalled = true;
@@ -810,6 +838,7 @@ export function createServerLogger(config: ServerConfig, writeLine: ServerLogWri
 
   const writeLogLine = (line: string) => {
     if (logWritesDisabled) return;
+    pushServerLogLine(line);
     try {
       writeLine(line);
     } catch (error) {
@@ -2041,6 +2070,8 @@ function createRoutes(
     serializeWorkspace,
     resolveDevLogPath,
     createOpenAiRealtimeVoiceSession,
+    captureManagedOpencodeLogs: () => captureManagedOpencodeLogsImpl?.() ?? null,
+    captureServerLogs: () => readServerLogBuffer(),
   });
 
   registerEchoRoutes(routes);

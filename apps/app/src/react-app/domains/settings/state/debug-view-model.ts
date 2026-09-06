@@ -378,6 +378,8 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
   );
   const [developerLog, setDeveloperLog] = useState<string[]>([]);
   const [developerLogStatus, setDeveloperLogStatus] = useState<string | null>(null);
+  const [opencodeLogs, setOpencodeLogs] = useState<{ stdout: string; stderr: string; capturedAt: string } | null>(null);
+  const [serverLogs, setServerLogs] = useState<{ stdout: string; capturedAt: string } | null>(null);
   const [electronMigrationUrl, setElectronMigrationUrl] = useState("");
   const [electronMigrationSha256, setElectronMigrationSha256] = useState("");
   const [electronMigrationSha512, setElectronMigrationSha512] = useState("");
@@ -483,6 +485,42 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
     };
   }, [developerMode]);
 
+  // In web/server mode, poll the opencode engine and server logs from the
+  // openwork-server API so the debug cards show live stdout/stderr.
+  useEffect(() => {
+    if (!developerMode || isDesktopRuntime()) return;
+    const client = openworkServerSnapshot.openworkServerClient;
+    const workspaceId = runtimeWorkspaceId?.trim();
+    let cancelled = false;
+
+    const fetchLogs = async () => {
+      if (client && workspaceId) {
+        try {
+          const engineLogs = await client.getOpencodeLogs(workspaceId);
+          if (!cancelled && engineLogs.ok) setOpencodeLogs(engineLogs);
+        } catch {
+          // Silently ignore — the endpoint may not exist yet or the server
+          // may not manage opencode.
+        }
+      }
+      if (client) {
+        try {
+          const srvLogs = await client.getServerLogs();
+          if (!cancelled && srvLogs.ok) setServerLogs(srvLogs);
+        } catch {
+          // Silently ignore.
+        }
+      }
+    };
+
+    void fetchLogs();
+    const interval = window.setInterval(fetchLogs, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [developerMode, openworkServerSnapshot.openworkServerClient, runtimeWorkspaceId]);
+
   const pushDeveloperLog = useCallback((message: string) => {
     const timestamp = new Date().toISOString();
     setDeveloperLog((current) => {
@@ -564,22 +602,33 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
   const connectFallbackBaseUrl = !isDesktopRuntime() ? opencodeBaseUrl : "";
   const connectFallbackProjectDir = !isDesktopRuntime() ? selectedWorkspaceRoot : "";
 
-  const engineCard = useMemo(
-    () => describeEngine(engineInfoState, engineFallbackBaseUrl),
-    [engineInfoState, engineFallbackBaseUrl],
-  );
-  const openworkCard = useMemo(
-    () =>
-      describeOpenworkServer(openworkServerSnapshot.openworkServerHostInfo, {
-        url: openworkServerSnapshot.openworkServerUrl,
-        diagnostics: openworkServerSnapshot.openworkServerDiagnostics,
-      }),
-    [
-      openworkServerSnapshot.openworkServerDiagnostics,
-      openworkServerSnapshot.openworkServerHostInfo,
-      openworkServerSnapshot.openworkServerUrl,
-    ],
-  );
+  const engineCard = useMemo(() => {
+    const card = describeEngine(engineInfoState, engineFallbackBaseUrl);
+    // In web/server mode, override stdout/stderr with logs fetched from the
+    // server API so the ServiceCard shows live output instead of "No logs".
+    if (!isDesktopRuntime() && opencodeLogs) {
+      card.stdout = opencodeLogs.stdout;
+      card.stderr = opencodeLogs.stderr;
+    }
+    return card;
+  }, [engineInfoState, engineFallbackBaseUrl, opencodeLogs]);
+
+  const openworkCard = useMemo(() => {
+    const card = describeOpenworkServer(openworkServerSnapshot.openworkServerHostInfo, {
+      url: openworkServerSnapshot.openworkServerUrl,
+      diagnostics: openworkServerSnapshot.openworkServerDiagnostics,
+    });
+    // In web/server mode, override stdout with the server's own log buffer.
+    if (!isDesktopRuntime() && serverLogs) {
+      card.stdout = serverLogs.stdout;
+    }
+    return card;
+  }, [
+    openworkServerSnapshot.openworkServerDiagnostics,
+    openworkServerSnapshot.openworkServerHostInfo,
+    openworkServerSnapshot.openworkServerUrl,
+    serverLogs,
+  ]);
   const opencodeConnectCard = useMemo(
     () =>
       describeOpencodeConnect(
@@ -885,7 +934,41 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
   }, [openworkServerStore, refreshEngineInfo]);
 
   const onRestartOpencode = useCallback(async () => {
-    if (!isDesktopRuntime()) return;
+    // Web/server mode: use the server API to reload the engine in-place.
+    if (!isDesktopRuntime()) {
+      const client = optionsRef.current.openworkServerSnapshot.openworkServerClient;
+      const workspaceId = optionsRef.current.runtimeWorkspaceId;
+      if (!client || !workspaceId) {
+        setOpencodeServiceStatus({
+          tone: "error",
+          message: t("settings.restart_failed_template", { service: "OpenCode" }) + " No server connection.",
+        });
+        return;
+      }
+      setOpencodeRestarting(true);
+      setOpencodeServiceStatus(null);
+      setServiceRestartError(null);
+      try {
+        await client.reloadEngine(workspaceId);
+        await openworkServerStore.reconnectOpenworkServer();
+        setOpencodeServiceStatus({
+          tone: "success",
+          message: t("settings.restart_succeeded_template", { service: "OpenCode" }),
+        });
+        pushDeveloperLog("Reloaded OpenCode engine via server API");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : safeStringify(error);
+        setOpencodeServiceStatus({
+          tone: "error",
+          message: `${t("settings.restart_failed_template", { service: "OpenCode" })} ${message}`,
+        });
+        setServiceRestartError(message);
+      } finally {
+        setOpencodeRestarting(false);
+      }
+      return;
+    }
+    // Desktop mode: full engine stack restart via desktop bridge.
     setOpencodeRestarting(true);
     setOpencodeServiceStatus(null);
     setServiceRestartError(null);
@@ -906,7 +989,7 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
     } finally {
       setOpencodeRestarting(false);
     }
-  }, [bootFullEngineStack, pushDeveloperLog]);
+  }, [bootFullEngineStack, openworkServerStore, pushDeveloperLog]);
 
   const onRestartOpenworkServer = useCallback(async () => {
     if (!isDesktopRuntime()) return;
@@ -952,7 +1035,9 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
   );
 
   const onCopyOpencodeLogs = useCallback(async () => {
-    const text = formatServiceLogs(engineInfoState?.lastStdout, engineInfoState?.lastStderr);
+    const stdout = engineInfoState?.lastStdout ?? opencodeLogs?.stdout ?? null;
+    const stderr = engineInfoState?.lastStderr ?? opencodeLogs?.stderr ?? null;
+    const text = formatServiceLogs(stdout, stderr);
     if (!text) {
       setOpencodeLogStatus(t("settings.no_logs_captured"));
       return;
@@ -963,10 +1048,12 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
     } catch (error) {
       setOpencodeLogStatus(error instanceof Error ? error.message : safeStringify(error));
     }
-  }, [engineInfoState?.lastStderr, engineInfoState?.lastStdout, formatServiceLogs]);
+  }, [engineInfoState?.lastStderr, engineInfoState?.lastStdout, opencodeLogs, formatServiceLogs]);
 
   const onExportOpencodeLogs = useCallback(async () => {
-    const text = formatServiceLogs(engineInfoState?.lastStdout, engineInfoState?.lastStderr);
+    const stdout = engineInfoState?.lastStdout ?? opencodeLogs?.stdout ?? null;
+    const stderr = engineInfoState?.lastStderr ?? opencodeLogs?.stderr ?? null;
+    const text = formatServiceLogs(stdout, stderr);
     if (!text) {
       setOpencodeLogStatus(t("settings.no_logs_captured"));
       return;
@@ -981,11 +1068,13 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
     } catch (error) {
       setOpencodeLogStatus(error instanceof Error ? error.message : safeStringify(error));
     }
-  }, [engineInfoState?.lastStderr, engineInfoState?.lastStdout, formatServiceLogs]);
+  }, [engineInfoState?.lastStderr, engineInfoState?.lastStdout, opencodeLogs, formatServiceLogs]);
 
   const onCopyOpenworkLogs = useCallback(async () => {
     const info = openworkServerSnapshot.openworkServerHostInfo;
-    const text = formatServiceLogs(info?.lastStdout, info?.lastStderr);
+    const stdout = info?.lastStdout ?? serverLogs?.stdout ?? null;
+    const stderr = info?.lastStderr ?? null;
+    const text = formatServiceLogs(stdout, stderr);
     if (!text) {
       setOpenworkLogStatus(t("settings.no_logs_captured"));
       return;
@@ -996,11 +1085,13 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
     } catch (error) {
       setOpenworkLogStatus(error instanceof Error ? error.message : safeStringify(error));
     }
-  }, [formatServiceLogs, openworkServerSnapshot.openworkServerHostInfo]);
+  }, [formatServiceLogs, openworkServerSnapshot.openworkServerHostInfo, serverLogs]);
 
   const onExportOpenworkLogs = useCallback(async () => {
     const info = openworkServerSnapshot.openworkServerHostInfo;
-    const text = formatServiceLogs(info?.lastStdout, info?.lastStderr);
+    const stdout = info?.lastStdout ?? serverLogs?.stdout ?? null;
+    const stderr = info?.lastStderr ?? null;
+    const text = formatServiceLogs(stdout, stderr);
     if (!text) {
       setOpenworkLogStatus(t("settings.no_logs_captured"));
       return;
@@ -1015,7 +1106,7 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
     } catch (error) {
       setOpenworkLogStatus(error instanceof Error ? error.message : safeStringify(error));
     }
-  }, [formatServiceLogs, openworkServerSnapshot.openworkServerHostInfo]);
+  }, [formatServiceLogs, openworkServerSnapshot.openworkServerHostInfo, serverLogs]);
 
   const [resetStatus, setResetStatus] = useState<string | null>(null);
 

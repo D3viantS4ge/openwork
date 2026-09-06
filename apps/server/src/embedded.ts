@@ -27,6 +27,7 @@ import {
   createEnginePoolForConfig,
   createServerLogger,
   registerTrustedOpencodeProcess,
+  setCaptureManagedOpencodeLogs,
   startServer,
   syncAllWorkspacesRuntimeMcpToEngine,
 } from "./server.js";
@@ -232,6 +233,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
         excludedPorts: [config.port],
         env: engineEnv,
       }));
+      setCaptureManagedOpencodeLogs(() => managedOpencode?.captureLogs?.() ?? null);
 
       config.opencodeBaseUrl = managedOpencode.url;
       config.opencodeUsername = managedOpencode.username;

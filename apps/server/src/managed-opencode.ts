@@ -15,6 +15,12 @@ export type ManagedProcessCloseOptions = {
   killTimeoutMs?: number;
 };
 
+export type ManagedOpencodeLogSnapshot = {
+  stdout: string;
+  stderr: string;
+  capturedAt: string;
+};
+
 export type ManagedOpencodeServer = {
   url: string;
   username: string;
@@ -23,6 +29,7 @@ export type ManagedOpencodeServer = {
   execution: OpencodeExecutionSnapshot;
   isAlive: () => boolean;
   close: () => Promise<void>;
+  captureLogs: () => ManagedOpencodeLogSnapshot;
 };
 
 export type OpencodeExecutionEnvEntry = {
@@ -182,11 +189,23 @@ async function startManagedOpencodeServer(
 
   const processLifecycle = createManagedProcessClose(child);
 
+  // Ring buffers for stdout/stderr capture (max ~1 MB each)
+  const MAX_LOG_BYTES = 1_000_000;
+  let stdoutBuffer = "";
+  let stderrBuffer = "";
+
+  const appendToBuffer = (buffer: string, chunk: string): string => {
+    const next = buffer + chunk;
+    if (next.length <= MAX_LOG_BYTES) return next;
+    // Drop oldest half when over cap
+    return next.slice(next.length - MAX_LOG_BYTES / 2);
+  };
+
   let url: string;
   try {
     url = await new Promise<string>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error(`Timeout waiting for OpenCode server after ${options.timeoutMs ?? 15000}ms`)), options.timeoutMs ?? 15000);
-      let output = "";
+      let startupOutput = "";
       const done = (value: string) => {
         clearTimeout(timeout);
         resolve(value);
@@ -196,8 +215,10 @@ async function startManagedOpencodeServer(
         reject(error);
       };
       child.stdout?.on("data", (chunk) => {
-        output += chunk.toString();
-        for (const line of output.split("\n")) {
+        const text = chunk.toString();
+        stdoutBuffer = appendToBuffer(stdoutBuffer, text);
+        startupOutput += text;
+        for (const line of startupOutput.split("\n")) {
           if (!line.startsWith("opencode server listening")) continue;
           const match = line.match(/on\s+(https?:\/\/[^\s]+)/);
           if (!match?.[1]) return fail(new Error(`Failed to parse OpenCode server URL from: ${line}`));
@@ -205,17 +226,22 @@ async function startManagedOpencodeServer(
         }
       });
       child.stderr?.on("data", (chunk) => {
-        output += chunk.toString();
+        const text = chunk.toString();
+        stderrBuffer = appendToBuffer(stderrBuffer, text);
+        startupOutput += text;
       });
       child.once("error", fail);
       // ChildProcess can emit "exit" before its stdio pipes have drained. Wait
       // for "close" so retry classification includes every diagnostic line.
-      child.once("close", (code) => fail(new ManagedOpencodeExitError(code, output)));
+      child.once("close", (code) => fail(new ManagedOpencodeExitError(code, startupOutput)));
     });
   } catch (error) {
     await processLifecycle.close();
     throw error;
   }
+
+  // After URL detection, continue capturing stdout/stderr into the buffers.
+  // The listeners above are already accumulating; no additional setup needed.
 
   return {
     url,
@@ -230,6 +256,11 @@ async function startManagedOpencodeServer(
     },
     isAlive: processLifecycle.isAlive,
     close: processLifecycle.close,
+    captureLogs: () => ({
+      stdout: stdoutBuffer,
+      stderr: stderrBuffer,
+      capturedAt: new Date().toISOString(),
+    }),
   };
 }
 

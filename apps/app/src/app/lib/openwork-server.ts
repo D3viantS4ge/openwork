@@ -1923,6 +1923,21 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
         method: "POST",
         timeoutMs: ENGINE_RELOAD_TIMEOUT_MS,
       }),
+
+    getOpencodeLogs: (workspaceId: string) =>
+      requestJson<{ ok: boolean; stdout: string; stderr: string; capturedAt: string }>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/opencode/logs`,
+        { token, hostToken, timeoutMs: 5000 },
+      ),
+
+    getServerLogs: () =>
+      requestJson<{ ok: boolean; stdout: string; capturedAt: string }>(
+        baseUrl,
+        "/dev/server/logs",
+        { token, hostToken, timeoutMs: 5000 },
+      ),
+
     listPlugins: (workspaceId: string, options?: { includeGlobal?: boolean }) => {
       const query = options?.includeGlobal ? "?includeGlobal=true" : "";
       return requestJson<{ items: OpenworkPluginItem[]; loadOrder: string[] }>(

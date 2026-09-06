@@ -57,6 +57,8 @@ interface RegisterCoreRoutesOptions {
     warn: (message: string, attributes?: Record<string, unknown>) => void;
     error: (message: string, attributes?: Record<string, unknown>) => void;
   };
+  captureManagedOpencodeLogs?: () => { stdout: string; stderr: string; capturedAt: string } | null;
+  captureServerLogs?: () => string | null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -115,6 +117,8 @@ export function registerCoreRoutes(options: RegisterCoreRoutesOptions): void {
     resolveDevLogPath,
     createOpenAiRealtimeVoiceSession,
     managedProviderAuthLogger,
+    captureManagedOpencodeLogs,
+    captureServerLogs,
   } = options;
   const googleWorkspaceConnectFlows = createGoogleWorkspaceConnectFlowManager(config);
   const envPendingChangesByRuntime = new Map<string, boolean>();
@@ -182,6 +186,25 @@ export function registerCoreRoutes(options: RegisterCoreRoutesOptions): void {
       return jsonResponse({ ok: false, reason: "dev_log_disabled" });
     }
     return jsonResponse({ ok: true, path: target });
+  });
+
+  // Managed OpenCode engine logs: returns captured stdout/stderr from the
+  // engine child process when the server manages it (OPENWORK_MANAGE_OPENCODE).
+  addRoute(routes, "GET", "/w/:id/opencode/logs", "client", async () => {
+    const logs = captureManagedOpencodeLogs?.();
+    if (!logs) {
+      return jsonResponse({ ok: false, reason: "no_managed_opencode" });
+    }
+    return jsonResponse({ ok: true, stdout: logs.stdout, stderr: logs.stderr, capturedAt: logs.capturedAt });
+  });
+
+  // Server's own log output: returns recent log lines from the server's ring buffer.
+  addRoute(routes, "GET", "/dev/server/logs", "client", async () => {
+    const text = captureServerLogs?.();
+    if (!text) {
+      return jsonResponse({ ok: false, reason: "log_buffer_unavailable" });
+    }
+    return jsonResponse({ ok: true, stdout: text, capturedAt: new Date().toISOString() });
   });
 
   addRoute(routes, "GET", "/w/:id/status", "client", async (ctx) => {

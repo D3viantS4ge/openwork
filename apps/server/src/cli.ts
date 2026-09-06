@@ -19,6 +19,7 @@ import {
   createEnginePoolForConfig,
   createServerLogger,
   registerTrustedOpencodeProcess,
+  setCaptureManagedOpencodeLogs,
   startServer,
   syncAllWorkspacesRuntimeMcpToEngine,
 } from "./server.js";
@@ -122,6 +123,7 @@ if (!config.opencodeBaseUrl && process.env.OPENWORK_MANAGE_OPENCODE === "1") {
       excludedPorts: [config.port],
       env: engineEnv,
     });
+    setCaptureManagedOpencodeLogs(() => managedOpencode?.captureLogs?.() ?? null);
     config.opencodeBaseUrl = managedOpencode.url;
     config.opencodeUsername = managedOpencode.username;
     config.opencodePassword = managedOpencode.password;
