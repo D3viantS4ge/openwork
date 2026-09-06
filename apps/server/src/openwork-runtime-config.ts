@@ -88,10 +88,10 @@ Manage: to show what is saved, discover and execute the list capability (getMemo
 Never persist secrets, credentials, API keys, tokens, or sensitive PII into a memory. This applies to both the content sentence and any cited snippets — redact secrets from a snippet before saving it.`;
 
 /**
- * OpenWork extension tools denied for agents that opt out of OpenWork context
- * via `options.openwork: false`. Kept as agent-level permission (applied live
- * by the engine per prompt) instead of a persisted session permission, so
- * switching agents never leaks the previous agent's tool denials.
+ * OpenWork extension tools denied for agents that opt out of OpenWork context.
+ * Kept as agent-level permission (applied live by the engine per prompt)
+ * instead of a persisted session permission, so switching agents never leaks
+ * the previous agent's tool denials.
  */
 const OPENWORK_TOOL_PERMISSION_DENIALS = {
   openwork_context: "deny",
@@ -144,10 +144,6 @@ export function buildOpenworkRuntimeConfigObjectFromSnapshot(
         description: "OpenCode's default behavior without the OpenWork system prompt and tools",
         mode: "primary",
         temperature: 0.2,
-        // Declarative opt-out: the `openwork` option is what the send path and
-        // system-prompt plugins key on to skip the OpenWork prompt,
-        // instructions, and tools.
-        options: { openwork: false },
         permission: {
           ...OPENWORK_TOOL_PERMISSION_DENIALS,
           skill: {
@@ -163,10 +159,6 @@ export function buildOpenworkRuntimeConfigObjectFromSnapshot(
         description: "A minimal agent with no OpenWork or OpenCode system prompt",
         mode: "primary",
         temperature: 0.2,
-        // The non-empty prompt suppresses the OpenCode base system-prompt
-        // fallback; `openwork: false` opts out of the OpenWork prompt,
-        // instructions, and tools.
-        options: { openwork: false },
         prompt: "You are a helpful assistant.",
         permission: {
           ...OPENWORK_TOOL_PERMISSION_DENIALS,

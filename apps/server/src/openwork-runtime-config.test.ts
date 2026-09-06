@@ -96,8 +96,10 @@ describe("openwork runtime config file", () => {
 
     const parsed = await readConfigFile(config);
     const agent = parsed.agent as Record<string, Record<string, unknown>>;
-    expect(agent.opencode?.options).toEqual({ openwork: false });
-    expect(agent.plain?.options).toEqual({ openwork: false });
+    // The opencode and plain agents opt out via agent-name check in
+    // isOpenworkEnabled, not via options, so they have no openwork option.
+    expect(agent.opencode?.options).toBeUndefined();
+    expect(agent.plain?.options).toBeUndefined();
     expect(agent.plain?.prompt).toBe("You are a helpful assistant.");
     expect(agent.opencode?.prompt).toBeUndefined();
 

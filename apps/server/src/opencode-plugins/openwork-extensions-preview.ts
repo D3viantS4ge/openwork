@@ -1069,8 +1069,7 @@ export const OpenWorkExtensionsPreview = async (factoryInput?: unknown) => {
     preserveMcpResult(output);
   },
   "experimental.chat.system.transform": async (input: unknown, output: { system: string[] }) => {
-    // Skip the OpenWork instructions when the session's agent opts out via its
-    // `openwork: false` option.
+    // Skip the OpenWork instructions when the session's agent opts out.
     if (engineAgentContext && isRecord(input)) {
       const sessionID = optionalStringProperty(input, "sessionID");
       if (sessionID) {

@@ -1,9 +1,9 @@
 /**
  * Reads the engine-provided OpenCode client (from a plugin's factory input) to
- * resolve whether the current session's agent opts out of OpenWork context via
- * its `openwork` agent option. Shared by the OpenWork system-prompt plugins so
- * they can skip the OpenWork instructions when the agent declares
- * `openwork: false`.
+ * resolve whether the current session's agent opts out of OpenWork context.
+ * Shared by the OpenWork system-prompt plugins so they can skip the OpenWork
+ * instructions for agents that declare `disable_openwork: true` in their
+ * options, or for the built-in opencode and plain agents.
  */
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -43,12 +43,14 @@ export function readEngineAgentContext(value: unknown): OpenWorkEngineAgentConte
       }
     },
     isOpenworkEnabled: async (agentName) => {
+      // Built-in agents that opt out of OpenWork context.
+      if (agentName === "opencode" || agentName === "plain") return false;
       try {
         const list = await appAgents.call(app);
         if (!Array.isArray(list)) return true;
         const agent = list.find((item) => isRecord(item) && item.name === agentName);
         const options = isRecord(agent) ? agent.options : undefined;
-        return !(isRecord(options) && options.openwork === false);
+        return !(isRecord(options) && (options.disable_openwork === true || options.openwork === false));
       } catch {
         return true;
       }
