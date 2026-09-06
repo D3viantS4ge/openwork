@@ -89,6 +89,7 @@ import { serve, type ServeResult } from "./serve-node.js";
 import { serveStaticUi } from "./static-ui.js";
 import { externalFetch, loopbackFetch } from "./server-fetch.js";
 import { registerCoreRoutes } from "./routes/core.js";
+import { registerEchoRoutes } from "./routes/echo.js";
 import { registerFileRoutes } from "./routes/files.js";
 import { registerOperationRoutes } from "./routes/operations.js";
 import { addRoute, matchRoute, type AuthMode, type RequestContext, type Route } from "./routes/registry.js";
@@ -2042,6 +2043,8 @@ function createRoutes(
     createOpenAiRealtimeVoiceSession,
   });
 
+  registerEchoRoutes(routes);
+
   registerWorkspaceRoutes({
     routes,
     config,
@@ -2612,6 +2615,57 @@ function createRoutes(
       provider: runtimeProviderMap(result.config),
       runtimeConfigPath: openworkRuntimeConfigFilePath(config),
       reload: shouldReload ? (reloadDeferred ? "deferred" : "reloaded") : "skipped",
+    });
+  });
+
+  addRoute(routes, "POST", "/runtime-config/echo-provider", "client", async (ctx) => {
+    ensureWritable(config);
+    requireClientScope(ctx, "collaborator");
+    const workspace = resolveEngineRuntimeWorkspace(config);
+    const body = await readJsonBody(ctx.request);
+    const enabled = body.enabled === true;
+
+    const providerPatch: Record<string, unknown> = enabled
+      ? {
+          echo: {
+            name: "Debug",
+            npm: "@ai-sdk/openai-compatible",
+            options: {
+              baseURL: `http://127.0.0.1:${config.port}/api/echo/v1`,
+              apiKey: "sk-echo",
+            },
+            models: {
+              echo: {
+                id: "echo",
+                name: "Echo",
+                limit: { context: 128000, output: 4096 },
+                capabilities: {
+                  temperature: true,
+                  reasoning: false,
+                  toolcall: true,
+                  structured_output: true,
+                  input: { text: true, audio: false, image: false, video: false, pdf: false },
+                  output: { text: true, audio: false, image: false, video: false, pdf: false },
+                },
+              },
+            },
+          },
+        }
+      : { echo: null };
+
+    const result = await writeGlobalRuntimeOpencodeConfig(config, (current) => ({
+      ...current,
+      provider: mergeRuntimeProviderUpdate(current.provider, providerPatch),
+    }));
+
+    if (result.changed) {
+      emitReloadEvent(ctx.reloadEvents, workspace, "config", buildConfigTrigger(openworkRuntimeConfigFilePath(config)));
+    }
+
+    return jsonResponse({
+      ok: true,
+      enabled,
+      changed: result.changed,
     });
   });
 

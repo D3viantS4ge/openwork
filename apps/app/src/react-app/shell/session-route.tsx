@@ -2371,6 +2371,9 @@ export function SessionRoute() {
       setDeveloperMode((current) => {
         const next = !current;
         try { window.localStorage.setItem("openwork.developerMode", next ? "1" : "0"); } catch {}
+        if (client) {
+          client.setEchoProviderEnabled(next).catch(() => undefined);
+        }
         return next;
       });
     },

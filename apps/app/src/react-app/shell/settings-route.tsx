@@ -2491,11 +2491,14 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
             opencodeConnectStatus={null}
             openworkServerStatus={openworkServerSnapshot.openworkServerStatus}
             developerMode={developerMode}
-            toggleDeveloperMode={() => setDeveloperMode((current) => {
-              const next = !current;
+            toggleDeveloperMode={async () => {
+              const next = !developerMode;
               try { window.localStorage.setItem("openwork.developerMode", next ? "1" : "0"); } catch {}
-              return next;
-            })}
+              setDeveloperMode(next);
+              if (openworkClient) {
+                openworkClient.setEchoProviderEnabled(next).catch(() => undefined);
+              }
+            }}
             opencodeDevModeEnabled={false}
             openDebugDeepLink={async () => ({ ok: false, message: "Debug deep links are not wired into the React settings route yet." })}
             cloudMcpUrl={openworkCloudMcpUrl}
