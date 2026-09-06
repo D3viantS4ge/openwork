@@ -173,20 +173,29 @@ describe("runtime-config echo-provider route", () => {
 });
 
 describe("echo API endpoint", () => {
-  test("echoes the last user message as JSON", async () => {
+  test("echoes all messages and request fields as JSON", async () => {
     const root = await createTempRoot();
     const { base } = await startOpenworkServer(root);
+
+    const requestBody = {
+      model: "echo",
+      messages: [
+        { role: "system", content: "You are a debug bot." },
+        { role: "user", content: "Hello, echo!" },
+        { role: "assistant", content: "I'm an echo." },
+        { role: "user", content: "Echo this back" },
+      ],
+      temperature: 0.5,
+      max_tokens: 100,
+      tools: [
+        { type: "function", function: { name: "get_weather", description: "Get weather" } },
+      ],
+    };
 
     const response = await fetch(`${base}/api/echo/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "echo",
-        messages: [
-          { role: "user", content: "Hello, echo!" },
-          { role: "user", content: "Echo this back" },
-        ],
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     expect(response.status).toBe(200);
@@ -199,22 +208,33 @@ describe("echo API endpoint", () => {
       expect(choices.length).toBe(1);
       if (choices[0]) {
         const message = isRecord(choices[0].message) ? choices[0].message : {};
-        expect(message.content).toBe("Echo this back");
+        const content = typeof message.content === "string" ? message.content : "";
+        // The content should be a JSON string containing the echoed request
+        const echoed: unknown = JSON.parse(content);
+        expect(isRecord(echoed)).toBe(true);
+        if (isRecord(echoed)) {
+          const echo = isRecord(echoed.echo) ? echoed.echo : {};
+          expect(echo.model).toBe("echo");
+          expect(Array.isArray(echo.messages)).toBe(true);
+          expect(echo.messages).toEqual(requestBody.messages);
+          expect(echo.temperature).toBe(0.5);
+          expect(echo.max_tokens).toBe(100);
+          expect(echo.tools).toEqual(requestBody.tools);
+          // stream should be stripped from the echo
+          expect((echo as Record<string, unknown>).stream).toBeUndefined();
+        }
       }
     }
   });
 
-  test("echoes with empty messages", async () => {
+  test("echoes with empty messages array", async () => {
     const root = await createTempRoot();
     const { base } = await startOpenworkServer(root);
 
     const response = await fetch(`${base}/api/echo/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "echo",
-        messages: [],
-      }),
+      body: JSON.stringify({ model: "echo", messages: [] }),
     });
 
     expect(response.status).toBe(200);
@@ -223,23 +243,33 @@ describe("echo API endpoint", () => {
       const choices = Array.isArray(body.choices) ? body.choices : [];
       if (choices[0]) {
         const message = isRecord(choices[0].message) ? choices[0].message : {};
-        expect(message.content).toBe("");
+        const content = typeof message.content === "string" ? message.content : "";
+        const echoed: unknown = JSON.parse(content);
+        if (isRecord(echoed)) {
+          const echo = isRecord(echoed.echo) ? echoed.echo : {};
+          expect(echo.model).toBe("echo");
+          expect(echo.messages).toEqual([]);
+        }
       }
     }
   });
 
-  test("streams the echoed message as SSE", async () => {
+  test("streams the full echoed request as SSE", async () => {
     const root = await createTempRoot();
     const { base } = await startOpenworkServer(root);
+
+    const requestBody = {
+      model: "echo",
+      messages: [
+        { role: "system", content: "You are a debug bot." },
+        { role: "user", content: "Stream this back" },
+      ],
+    };
 
     const response = await fetch(`${base}/api/echo/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "echo",
-        messages: [{ role: "user", content: "Stream this back" }],
-        stream: true,
-      }),
+      body: JSON.stringify({ ...requestBody, stream: true }),
     });
 
     expect(response.status).toBe(200);
@@ -248,7 +278,11 @@ describe("echo API endpoint", () => {
     const text = await response.text();
     expect(text).toContain("data: ");
     expect(text).toContain("[DONE]");
+    // The SSE content should include the system message and user message
+    expect(text).toContain("You are a debug bot.");
     expect(text).toContain("Stream this back");
+    // stream field should NOT be in the echoed payload
+    expect(text).not.toMatch(/"stream"/);
   });
 
   test("rejects invalid JSON body", async () => {

@@ -1,33 +1,27 @@
 import { addRoute, type Route } from "./registry.js";
 
-/**
- * OpenAI Chat Completions request body (subset relevant to echo).
- */
-interface EchoChatRequest {
-  model?: string;
-  messages?: Array<{ role: string; content: string }>;
-  stream?: boolean;
-}
-
-function lastMessageContent(body: EchoChatRequest): string {
-  if (!body.messages || body.messages.length === 0) return "";
-  const last = body.messages[body.messages.length - 1];
-  return last?.content ?? "";
-}
-
 function jsonResponse(data: unknown): Response {
   return new Response(JSON.stringify(data), {
     headers: { "content-type": "application/json" },
   });
 }
 
-function echoChatCompletion(body: EchoChatRequest): unknown {
-  const content = lastMessageContent(body);
+/**
+ * Strip transport-level fields that aren't useful to debug.
+ */
+function echoPayload(body: Record<string, unknown>): unknown {
+  const { stream: _, ...rest } = body;
+  return { echo: rest };
+}
+
+function echoChatCompletion(body: Record<string, unknown>): unknown {
+  const payload = echoPayload(body);
+  const content = JSON.stringify(payload, null, 2);
   return {
     id: "echo-0",
     object: "chat.completion",
     created: Math.floor(Date.now() / 1000),
-    model: body.model ?? "echo",
+    model: (body.model as string) ?? "echo",
     choices: [{
       index: 0,
       message: { role: "assistant", content },
@@ -37,10 +31,10 @@ function echoChatCompletion(body: EchoChatRequest): unknown {
   };
 }
 
-function echoStreamChunks(body: EchoChatRequest): ReadableStream<Uint8Array> {
-  const content = lastMessageContent(body);
+function echoStreamChunks(body: Record<string, unknown>): ReadableStream<Uint8Array> {
+  const payload = echoPayload(body);
+  const content = JSON.stringify(payload, null, 2);
   const encoder = new TextEncoder();
-  let sentContent = false;
 
   return new ReadableStream({
     start(controller) {
@@ -55,18 +49,16 @@ function echoStreamChunks(body: EchoChatRequest): ReadableStream<Uint8Array> {
         })}\n\n`,
       ));
 
-      // Content delta chunk
-      if (content) {
-        controller.enqueue(encoder.encode(
-          `data: ${JSON.stringify({
-            choices: [{ index: 0, delta: { content }, finish_reason: null }],
-            id: "echo-0",
-            object: "chat.completion.chunk",
-            created: Math.floor(Date.now() / 1000),
-            model: body.model ?? "echo",
-          })}\n\n`,
-        ));
-      }
+      // Full content in one delta chunk
+      controller.enqueue(encoder.encode(
+        `data: ${JSON.stringify({
+          choices: [{ index: 0, delta: { content }, finish_reason: null }],
+          id: "echo-0",
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model: body.model ?? "echo",
+        })}\n\n`,
+      ));
 
       // Final usage chunk
       controller.enqueue(encoder.encode(
@@ -88,14 +80,14 @@ function echoStreamChunks(body: EchoChatRequest): ReadableStream<Uint8Array> {
 
 export function registerEchoRoutes(routes: Route[]): void {
   addRoute(routes, "POST", "/api/echo/v1/chat/completions", "none", async (ctx) => {
-    let body: EchoChatRequest;
+    let body: Record<string, unknown>;
     try {
-      body = await ctx.request.json() as EchoChatRequest;
+      body = await ctx.request.json() as Record<string, unknown>;
     } catch {
       return jsonResponse({ error: { message: "Invalid JSON", type: "invalid_request_error" } });
     }
 
-    if (body.stream) {
+    if (body.stream === true) {
       return new Response(echoStreamChunks(body), {
         headers: {
           "content-type": "text/event-stream",
