@@ -166,7 +166,8 @@ export const getModelBehaviorOptions = (
 ): ModelBehaviorOption[] => {
   const variantKeys = sortVariantKeys(getVariantKeys(model));
   if (!variantKeys.length) return [];
-  return variantKeys.map((key) => {
+  const keys = variantKeys.includes("none") ? variantKeys : ["none", ...variantKeys];
+  return keys.map((key) => {
     const label = getVariantLabel(key);
     return {
       value: key,
