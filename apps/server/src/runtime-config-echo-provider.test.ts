@@ -209,8 +209,12 @@ describe("echo API endpoint", () => {
       if (choices[0]) {
         const message = isRecord(choices[0].message) ? choices[0].message : {};
         const content = typeof message.content === "string" ? message.content : "";
-        // The content should be a JSON string containing the echoed request
-        const echoed: unknown = JSON.parse(content);
+        // The content should be wrapped in a ```json code block
+        expect(content.startsWith("```json\n")).toBe(true);
+        expect(content.endsWith("\n```")).toBe(true);
+        // Extract and parse the JSON payload from inside the code block
+        const jsonPart = content.slice(8, -4);
+        const echoed: unknown = JSON.parse(jsonPart);
         expect(isRecord(echoed)).toBe(true);
         if (isRecord(echoed)) {
           const echo = isRecord(echoed.echo) ? echoed.echo : {};
@@ -244,7 +248,10 @@ describe("echo API endpoint", () => {
       if (choices[0]) {
         const message = isRecord(choices[0].message) ? choices[0].message : {};
         const content = typeof message.content === "string" ? message.content : "";
-        const echoed: unknown = JSON.parse(content);
+        expect(content.startsWith("```json\n")).toBe(true);
+        expect(content.endsWith("\n```")).toBe(true);
+        const jsonPart = content.slice(8, -4);
+        const echoed: unknown = JSON.parse(jsonPart);
         if (isRecord(echoed)) {
           const echo = isRecord(echoed.echo) ? echoed.echo : {};
           expect(echo.model).toBe("echo");
@@ -283,6 +290,8 @@ describe("echo API endpoint", () => {
     expect(text).toContain("Stream this back");
     // stream field should NOT be in the echoed payload
     expect(text).not.toMatch(/"stream"/);
+    // Should be wrapped in a code block
+    expect(text).toContain("```json");
   });
 
   test("rejects invalid JSON body", async () => {

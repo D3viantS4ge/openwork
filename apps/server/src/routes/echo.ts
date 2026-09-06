@@ -7,16 +7,17 @@ function jsonResponse(data: unknown): Response {
 }
 
 /**
- * Strip transport-level fields that aren't useful to debug.
+ * Strip transport-level fields that aren't useful to debug and wrap
+ * the result in a markdown code block so it renders nicely in chat.
  */
-function echoPayload(body: Record<string, unknown>): unknown {
+function echoContent(body: Record<string, unknown>): string {
   const { stream: _, ...rest } = body;
-  return { echo: rest };
+  const payload = JSON.stringify({ echo: rest }, null, 2);
+  return "```json\n" + payload + "\n```";
 }
 
 function echoChatCompletion(body: Record<string, unknown>): unknown {
-  const payload = echoPayload(body);
-  const content = JSON.stringify(payload, null, 2);
+  const content = echoContent(body);
   return {
     id: "echo-0",
     object: "chat.completion",
@@ -32,8 +33,7 @@ function echoChatCompletion(body: Record<string, unknown>): unknown {
 }
 
 function echoStreamChunks(body: Record<string, unknown>): ReadableStream<Uint8Array> {
-  const payload = echoPayload(body);
-  const content = JSON.stringify(payload, null, 2);
+  const content = echoContent(body);
   const encoder = new TextEncoder();
 
   return new ReadableStream({
