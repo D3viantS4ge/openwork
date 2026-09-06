@@ -2446,35 +2446,35 @@ function SessionMenuItem({
         data-sidebar-nest-depth={visualDepth}
       >
         <SessionContextMenu sessionId={session.id} workspaceId={workspaceId} isPinned={isPinned} isArchived={isArchived}>
-          <CollapsibleTrigger
-            render={
-              <SidebarMenuSubButton
-                className={rowButtonClass}
-                style={rowButtonStyle}
-                isActive={isSelected}
-                data-session-tab-id={session.id}
-                data-session-tab-active={isSelected ? "true" : undefined}
-                onClick={openSession}
-                onPointerEnter={handlePointerEnter}
-                onPointerLeave={() => setIsTitleHovered(false)}
-                onFocus={() => {
-                  prefetchSession();
-                  setIsTitleFocused(true);
-                }}
-                onBlur={() => setIsTitleFocused(false)}
-                aria-label={accessibleState}
-                aria-description={shortcutDigit === undefined ? undefined : sessionNumberShortcutDescription(ctx.sessionNumberShortcutOs, shortcutDigit)}
-                aria-keyshortcuts={ariaKeyShortcuts}
-              >
-                {leading}
-                <SessionTitle intent={titleIntent} title={displayTitle} tooltip={itemTitle} />
-                <SessionNumberShortcutSlot digit={shortcutDigit} />
-                <span className="flex size-6 shrink-0 items-center justify-center">
-                  <ChevronRight className="size-4 text-muted-foreground transition-transform duration-200 group-data-open/session-collapsible:rotate-90 hover:text-foreground" />
-                </span>
-              </SidebarMenuSubButton>
-            }
-          />
+          <SidebarMenuSubButton
+            className={rowButtonClass}
+            style={rowButtonStyle}
+            isActive={isSelected}
+            data-session-tab-id={session.id}
+            data-session-tab-active={isSelected ? "true" : undefined}
+            onClick={openSession}
+            onPointerEnter={handlePointerEnter}
+            onPointerLeave={() => setIsTitleHovered(false)}
+            onFocus={() => {
+              prefetchSession();
+              setIsTitleFocused(true);
+            }}
+            onBlur={() => setIsTitleFocused(false)}
+            aria-label={accessibleState}
+            aria-description={shortcutDigit === undefined ? undefined : sessionNumberShortcutDescription(ctx.sessionNumberShortcutOs, shortcutDigit)}
+            aria-keyshortcuts={ariaKeyShortcuts}
+          >
+            {leading}
+            <SessionTitle intent={titleIntent} title={displayTitle} tooltip={itemTitle} />
+            <SessionNumberShortcutSlot digit={shortcutDigit} />
+            <CollapsibleTrigger
+              className="flex size-6 shrink-0 items-center justify-center"
+              aria-label={isExpanded ? t("sidebar.collapse") : t("sidebar.expand")}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <ChevronRight className="size-4 text-muted-foreground transition-transform duration-200 group-data-open/session-collapsible:rotate-90 hover:text-foreground" />
+            </CollapsibleTrigger>
+          </SidebarMenuSubButton>
         </SessionContextMenu>
         {trailing}
       </SidebarMenuSubItem>
