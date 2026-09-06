@@ -35,8 +35,9 @@ export function readEngineAgentContext(value: unknown): OpenWorkEngineAgentConte
   return {
     sessionAgent: async (sessionID) => {
       try {
-        const result = await sessionGet.call(session, { sessionID });
-        const agent = isRecord(result) ? result.agent : undefined;
+        const result = await sessionGet.call(session, { path: { id: sessionID } });
+        const data = isRecord(result) ? result.data : undefined;
+        const agent = isRecord(data) ? data.agent : undefined;
         return typeof agent === "string" && agent ? agent : undefined;
       } catch {
         return undefined;
