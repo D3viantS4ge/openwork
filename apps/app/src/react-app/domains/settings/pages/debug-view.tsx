@@ -380,6 +380,9 @@ type ServiceCardProps = {
   restarting: boolean;
   restartLabel: string;
   onRestart: () => void | Promise<void>;
+  /** When false the restart button is hidden entirely. The model handles
+   *  disabling restart for services that don't support it in web/server mode. */
+  restartEnabled?: boolean;
   serviceStatus: ServiceStatus;
   logStatus: string | null;
   onCopyLogs: () => void | Promise<void>;
@@ -388,7 +391,7 @@ type ServiceCardProps = {
 };
 
 function ServiceCard(props: ServiceCardProps) {
-  const restartDisabled = props.restarting || !props.isDesktop;
+  const restartDisabled = props.restarting || props.restartEnabled === false;
   return (
     <div className={subCardClass}>
       <div className="flex items-start justify-between gap-3">
@@ -562,6 +565,7 @@ export function DebugView(props: DebugViewProps) {
             restarting={props.openworkServerRestarting}
             restartLabel={t("settings.restart_openwork_server")}
             onRestart={props.onRestartOpenworkServer}
+            restartEnabled={isDesktop}
             serviceStatus={props.openworkServiceStatus}
             logStatus={props.openworkLogStatus}
             onCopyLogs={props.onCopyOpenworkLogs}
@@ -581,6 +585,7 @@ export function DebugView(props: DebugViewProps) {
             restarting={props.opencodeRestarting}
             restartLabel={t("settings.restart_opencode")}
             onRestart={props.onRestartOpencode}
+            restartEnabled={true}
             serviceStatus={props.opencodeServiceStatus}
             logStatus={props.opencodeLogStatus}
             onCopyLogs={props.onCopyOpencodeLogs}

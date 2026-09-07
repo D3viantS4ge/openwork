@@ -214,7 +214,7 @@ async function startManagedOpencodeServer(
         clearTimeout(timeout);
         reject(error);
       };
-      child.stdout?.on("data", (chunk) => {
+      const onStdout = (chunk: Buffer) => {
         const text = chunk.toString();
         stdoutBuffer = appendToBuffer(stdoutBuffer, text);
         startupOutput += text;
@@ -224,12 +224,14 @@ async function startManagedOpencodeServer(
           if (!match?.[1]) return fail(new Error(`Failed to parse OpenCode server URL from: ${line}`));
           done(match[1]);
         }
-      });
-      child.stderr?.on("data", (chunk) => {
+      };
+      const onStderr = (chunk: Buffer) => {
         const text = chunk.toString();
         stderrBuffer = appendToBuffer(stderrBuffer, text);
         startupOutput += text;
-      });
+      };
+      child.stdout?.on("data", onStdout);
+      child.stderr?.on("data", onStderr);
       child.once("error", fail);
       // ChildProcess can emit "exit" before its stdio pipes have drained. Wait
       // for "close" so retry classification includes every diagnostic line.
@@ -240,8 +242,20 @@ async function startManagedOpencodeServer(
     throw error;
   }
 
-  // After URL detection, continue capturing stdout/stderr into the buffers.
-  // The listeners above are already accumulating; no additional setup needed.
+  // URL detected — replace the scanning listeners with simple accumulators
+  // so we don't keep splitting startupOutput (which grows unboundedly) on
+  // every chunk. The old listeners are removed to avoid the O(n²) scan loop.
+  // The new listeners only write to the ring buffers.
+  const onStdoutCapture = (chunk: Buffer) => {
+    stdoutBuffer = appendToBuffer(stdoutBuffer, chunk.toString());
+  };
+  const onStderrCapture = (chunk: Buffer) => {
+    stderrBuffer = appendToBuffer(stderrBuffer, chunk.toString());
+  };
+  child.stdout?.removeAllListeners("data");
+  child.stderr?.removeAllListeners("data");
+  child.stdout?.on("data", onStdoutCapture);
+  child.stderr?.on("data", onStderrCapture);
 
   return {
     url,
