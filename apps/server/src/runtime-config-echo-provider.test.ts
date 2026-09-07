@@ -77,7 +77,7 @@ describe("runtime-config echo-provider route", () => {
     expect(isRecord(body) ? body.enabled : null).toBe(true);
 
     const globalRuntime = await readGlobalRuntimeOpencodeConfig(config);
-    const echoProvider = isRecord(globalRuntime.provider) ? globalRuntime.provider.echo : undefined;
+    const echoProvider = isRecord(globalRuntime.provider) ? globalRuntime.provider.debug : undefined;
     expect(isRecord(echoProvider)).toBe(true);
     if (isRecord(echoProvider)) {
       expect(echoProvider.name).toBe("Debug");
@@ -117,7 +117,7 @@ describe("runtime-config echo-provider route", () => {
     expect(isRecord(body) ? body.enabled : null).toBe(false);
 
     const globalRuntime = await readGlobalRuntimeOpencodeConfig(config);
-    const echoProvider = isRecord(globalRuntime.provider) ? globalRuntime.provider.echo : undefined;
+    const echoProvider = isRecord(globalRuntime.provider) ? globalRuntime.provider.debug : undefined;
     expect(echoProvider).toBeUndefined();
   });
 

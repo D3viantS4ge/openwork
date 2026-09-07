@@ -2660,7 +2660,7 @@ function createRoutes(
 
     const providerPatch: Record<string, unknown> = enabled
       ? {
-          echo: {
+          debug: {
             name: "Debug",
             npm: "@ai-sdk/openai-compatible",
             api: echoBaseUrl,
@@ -2685,7 +2685,7 @@ function createRoutes(
             },
           },
         }
-      : { echo: null };
+      : { debug: null };
 
     const result = await writeGlobalRuntimeOpencodeConfig(config, (current) => ({
       ...current,
