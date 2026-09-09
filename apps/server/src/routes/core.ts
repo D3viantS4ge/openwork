@@ -97,17 +97,17 @@ function connectSnapshotOptionsFromBody(body: Record<string, unknown>): ConnectS
 
 /** Resolve the opencode engine's operational log file path.
  *
- *  The engine uses XDG data home (or platform equivalent) + "opencode/log/opencode.log".
- *  This mirrors the logic in vendor/opencode/packages/core/src/global.ts.
+ *  The engine uses the `xdg-basedir` package which resolves `xdgData` as
+ *  `$XDG_DATA_HOME` or `~/.local/share` on **all** platforms (Linux, macOS,
+ *  Windows).  There is no platform-specific fallback — no `~/Library/...` on
+ *  macOS, no `%APPDATA%` on Windows.
+ *
+ *  vendor/opencode/packages/core/src/global.ts:
+ *    const data = path.join(xdgData!, "opencode")
+ *    const log  = path.join(data, "log")
+ *    // → ~/.local/share/opencode/log/opencode.log
  */
 function resolveOpencodeLogFilePath(): string {
-  if (process.platform === "darwin") {
-    return join(os.homedir(), "Library", "Application Support", "opencode", "log", "opencode.log");
-  }
-  if (process.platform === "win32") {
-    return join(process.env.APPDATA || join(os.homedir(), "AppData", "Roaming"), "opencode", "log", "opencode.log");
-  }
-  // Linux / BSD / others — XDG convention
   const xdgData = process.env.XDG_DATA_HOME || join(os.homedir(), ".local", "share");
   return join(xdgData, "opencode", "log", "opencode.log");
 }
