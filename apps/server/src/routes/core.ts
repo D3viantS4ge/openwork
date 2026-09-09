@@ -1,5 +1,6 @@
-import { appendFile, mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { appendFile, mkdir, readFile, stat } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import os from "node:os";
 import type { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 import {
   type ConnectSnapshotOptions,
@@ -93,6 +94,25 @@ function connectSnapshotOptionsFromBody(body: Record<string, unknown>): ConnectS
     providerModel: providerModelFromValues(context.provider, context.model) ?? providerModelFromValues(body.provider, body.model),
   };
 }
+
+/** Resolve the opencode engine's operational log file path.
+ *
+ *  The engine uses XDG data home (or platform equivalent) + "opencode/log/opencode.log".
+ *  This mirrors the logic in vendor/opencode/packages/core/src/global.ts.
+ */
+function resolveOpencodeLogFilePath(): string {
+  if (process.platform === "darwin") {
+    return join(os.homedir(), "Library", "Application Support", "opencode", "log", "opencode.log");
+  }
+  if (process.platform === "win32") {
+    return join(process.env.APPDATA || join(os.homedir(), "AppData", "Roaming"), "opencode", "log", "opencode.log");
+  }
+  // Linux / BSD / others — XDG convention
+  const xdgData = process.env.XDG_DATA_HOME || join(os.homedir(), ".local", "share");
+  return join(xdgData, "opencode", "log", "opencode.log");
+}
+
+const OPENCODE_LOG_MAX_BYTES = 1_000_000; // 1 MB
 
 export function registerCoreRoutes(options: RegisterCoreRoutesOptions): void {
   const {
@@ -188,18 +208,41 @@ export function registerCoreRoutes(options: RegisterCoreRoutesOptions): void {
     return jsonResponse({ ok: true, path: target });
   });
 
-  // Managed OpenCode engine logs: returns captured stdout/stderr from the
-  // engine child process when the server manages it (OPENWORK_MANAGE_OPENCODE).
+  // OpenCode engine operational log: reads the engine's Effect-framework log file
+  // (~/.local/share/opencode/log/opencode.log on Linux). This contains session
+  // activity, tool calls, model responses, etc. — far more useful than the raw
+  // process stdout/stderr for understanding agent behaviour.
   // Note: must NOT use /workspace/:id/opencode/... because the opencode proxy
   // middleware in server.ts intercepts any path where the rest after workspace
   // ID starts with /opencode/. Using /workspace/:id/engine/... is consistent
   // with the existing engine/reload endpoint.
   addRoute(routes, "GET", "/workspace/:id/engine/logs", "client", async () => {
-    const logs = captureManagedOpencodeLogs?.();
-    if (!logs) {
-      return jsonResponse({ ok: false, reason: "no_managed_opencode" });
+    const logPath = resolveOpencodeLogFilePath();
+    try {
+      const fileStat = await stat(logPath);
+      const readSize = Math.min(fileStat.size, OPENCODE_LOG_MAX_BYTES);
+      const fd = await readFile(logPath, { encoding: "utf8" });
+      // Read only the last OPENCODE_LOG_MAX_BYTES if the file is larger
+      const content = fd.length > OPENCODE_LOG_MAX_BYTES
+        ? fd.slice(fd.length - OPENCODE_LOG_MAX_BYTES)
+        : fd;
+      return jsonResponse({
+        ok: true,
+        content,
+        path: logPath,
+        size: fileStat.size,
+        capturedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      const nodeError = error as NodeJS.ErrnoException;
+      if (nodeError.code === "ENOENT") {
+        return jsonResponse({ ok: false, reason: "log_file_not_found", path: logPath });
+      }
+      return jsonResponse({
+        ok: false,
+        reason: error instanceof Error ? error.message : String(error),
+      });
     }
-    return jsonResponse({ ok: true, stdout: logs.stdout, stderr: logs.stderr, capturedAt: logs.capturedAt });
   });
 
   // Server's own log output: returns recent log lines from the server's ring buffer.

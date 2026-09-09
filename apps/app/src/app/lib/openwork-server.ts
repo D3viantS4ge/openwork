@@ -1925,7 +1925,7 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
       }),
 
     getOpencodeLogs: (workspaceId: string) =>
-      requestJson<{ ok: boolean; stdout: string; stderr: string; capturedAt: string }>(
+      requestJson<{ ok: boolean; content: string; path: string; size: number; capturedAt: string }>(
         baseUrl,
         `/workspace/${encodeURIComponent(workspaceId)}/engine/logs`,
         { token, hostToken, timeoutMs: 5000 },

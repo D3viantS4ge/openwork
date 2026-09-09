@@ -378,7 +378,7 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
   );
   const [developerLog, setDeveloperLog] = useState<string[]>([]);
   const [developerLogStatus, setDeveloperLogStatus] = useState<string | null>(null);
-  const [opencodeLogs, setOpencodeLogs] = useState<{ stdout: string; stderr: string; capturedAt: string } | null>(null);
+  const [opencodeLogs, setOpencodeLogs] = useState<{ content: string; path: string; size: number; capturedAt: string } | null>(null);
   const [serverLogs, setServerLogs] = useState<{ stdout: string; capturedAt: string } | null>(null);
   const [electronMigrationUrl, setElectronMigrationUrl] = useState("");
   const [electronMigrationSha256, setElectronMigrationSha256] = useState("");
@@ -604,11 +604,11 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
 
   const engineCard = useMemo(() => {
     const card = describeEngine(engineInfoState, engineFallbackBaseUrl);
-    // In web/server mode, override stdout/stderr with logs fetched from the
-    // server API so the ServiceCard shows live output instead of "No logs".
+    // In web/server mode, override stdout with the engine's operational log
+    // file content (session activity, tool calls, model responses, etc.).
     if (!isDesktopRuntime() && opencodeLogs) {
-      card.stdout = opencodeLogs.stdout;
-      card.stderr = opencodeLogs.stderr;
+      card.stdout = opencodeLogs.content;
+      card.stderr = "";
     }
     return card;
   }, [engineInfoState, engineFallbackBaseUrl, opencodeLogs]);
@@ -1035,40 +1035,36 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
   );
 
   const onCopyOpencodeLogs = useCallback(async () => {
-    const stdout = engineInfoState?.lastStdout ?? opencodeLogs?.stdout ?? null;
-    const stderr = engineInfoState?.lastStderr ?? opencodeLogs?.stderr ?? null;
-    const text = formatServiceLogs(stdout, stderr);
-    if (!text) {
+    const content = engineInfoState?.lastStdout ?? opencodeLogs?.content ?? null;
+    if (!content) {
       setOpencodeLogStatus(t("settings.no_logs_captured"));
       return;
     }
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(content);
       setOpencodeLogStatus(t("settings.copied_service_logs", { service: "OpenCode" }));
     } catch (error) {
       setOpencodeLogStatus(error instanceof Error ? error.message : safeStringify(error));
     }
-  }, [engineInfoState?.lastStderr, engineInfoState?.lastStdout, opencodeLogs, formatServiceLogs]);
+  }, [engineInfoState?.lastStdout, opencodeLogs]);
 
   const onExportOpencodeLogs = useCallback(async () => {
-    const stdout = engineInfoState?.lastStdout ?? opencodeLogs?.stdout ?? null;
-    const stderr = engineInfoState?.lastStderr ?? opencodeLogs?.stderr ?? null;
-    const text = formatServiceLogs(stdout, stderr);
-    if (!text) {
+    const content = engineInfoState?.lastStdout ?? opencodeLogs?.content ?? null;
+    if (!content) {
       setOpencodeLogStatus(t("settings.no_logs_captured"));
       return;
     }
     try {
       downloadTextAsFile(
         `openwork-opencode-${new Date().toISOString().replace(/[:.]/g, "-")}.log`,
-        text,
+        content,
         "text/plain",
       );
       setOpencodeLogStatus(t("settings.exported_developer_log"));
     } catch (error) {
       setOpencodeLogStatus(error instanceof Error ? error.message : safeStringify(error));
     }
-  }, [engineInfoState?.lastStderr, engineInfoState?.lastStdout, opencodeLogs, formatServiceLogs]);
+  }, [engineInfoState?.lastStdout, opencodeLogs]);
 
   const onCopyOpenworkLogs = useCallback(async () => {
     const info = openworkServerSnapshot.openworkServerHostInfo;
