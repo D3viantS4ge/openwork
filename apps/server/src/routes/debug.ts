@@ -10,19 +10,19 @@ function jsonResponse(data: unknown): Response {
  * Strip transport-level fields that aren't useful to debug and wrap
  * the result in a markdown code block so it renders nicely in chat.
  */
-function echoContent(body: Record<string, unknown>): string {
+function debugContent(body: Record<string, unknown>): string {
   const { stream: _, ...rest } = body;
-  const payload = JSON.stringify({ echo: rest }, null, 2);
+  const payload = JSON.stringify({ debug: rest }, null, 2);
   return "```json\n" + payload + "\n```";
 }
 
-function echoChatCompletion(body: Record<string, unknown>): unknown {
-  const content = echoContent(body);
+function debugChatCompletion(body: Record<string, unknown>): unknown {
+  const content = debugContent(body);
   return {
-    id: "echo-0",
+    id: "debug-0",
     object: "chat.completion",
     created: Math.floor(Date.now() / 1000),
-    model: (body.model as string) ?? "echo",
+    model: (body.model as string) ?? "debug/echo",
     choices: [{
       index: 0,
       message: { role: "assistant", content },
@@ -32,8 +32,8 @@ function echoChatCompletion(body: Record<string, unknown>): unknown {
   };
 }
 
-function echoStreamChunks(body: Record<string, unknown>): ReadableStream<Uint8Array> {
-  const content = echoContent(body);
+function debugStreamChunks(body: Record<string, unknown>): ReadableStream<Uint8Array> {
+  const content = debugContent(body);
   const encoder = new TextEncoder();
 
   return new ReadableStream({
@@ -42,10 +42,10 @@ function echoStreamChunks(body: Record<string, unknown>): ReadableStream<Uint8Ar
       controller.enqueue(encoder.encode(
         `data: ${JSON.stringify({
           choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }],
-          id: "echo-0",
+          id: "debug-0",
           object: "chat.completion.chunk",
           created: Math.floor(Date.now() / 1000),
-          model: body.model ?? "echo",
+          model: body.model ?? "debug/echo",
         })}\n\n`,
       ));
 
@@ -53,10 +53,10 @@ function echoStreamChunks(body: Record<string, unknown>): ReadableStream<Uint8Ar
       controller.enqueue(encoder.encode(
         `data: ${JSON.stringify({
           choices: [{ index: 0, delta: { content }, finish_reason: null }],
-          id: "echo-0",
+          id: "debug-0",
           object: "chat.completion.chunk",
           created: Math.floor(Date.now() / 1000),
-          model: body.model ?? "echo",
+          model: body.model ?? "debug/echo",
         })}\n\n`,
       ));
 
@@ -64,10 +64,10 @@ function echoStreamChunks(body: Record<string, unknown>): ReadableStream<Uint8Ar
       controller.enqueue(encoder.encode(
         `data: ${JSON.stringify({
           choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-          id: "echo-0",
+          id: "debug-0",
           object: "chat.completion.chunk",
           created: Math.floor(Date.now() / 1000),
-          model: body.model ?? "echo",
+          model: body.model ?? "debug/echo",
           usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
         })}\n\n`,
       ));
@@ -78,8 +78,8 @@ function echoStreamChunks(body: Record<string, unknown>): ReadableStream<Uint8Ar
   });
 }
 
-export function registerEchoRoutes(routes: Route[]): void {
-  addRoute(routes, "POST", "/api/echo/v1/chat/completions", "none", async (ctx) => {
+export function registerDebugRoutes(routes: Route[]): void {
+  addRoute(routes, "POST", "/api/debug/v1/chat/completions", "none", async (ctx) => {
     let body: Record<string, unknown>;
     try {
       body = await ctx.request.json() as Record<string, unknown>;
@@ -88,7 +88,7 @@ export function registerEchoRoutes(routes: Route[]): void {
     }
 
     if (body.stream === true) {
-      return new Response(echoStreamChunks(body), {
+      return new Response(debugStreamChunks(body), {
         headers: {
           "content-type": "text/event-stream",
           "cache-control": "no-cache",
@@ -97,6 +97,6 @@ export function registerEchoRoutes(routes: Route[]): void {
       });
     }
 
-    return jsonResponse(echoChatCompletion(body));
+    return jsonResponse(debugChatCompletion(body));
   });
 }

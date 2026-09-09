@@ -1818,10 +1818,10 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
           timeoutMs: timeouts.config,
         },
       ),
-    setEchoProviderEnabled: (enabled: boolean) =>
+    setDebugProviderEnabled: (enabled: boolean) =>
       requestJson<{ ok: boolean; enabled: boolean }>(
         baseUrl,
-        "/runtime-config/echo-provider",
+        "/runtime-config/debug-provider",
         {
           token,
           hostToken,

@@ -11,8 +11,8 @@ import {
 } from "./runtime-opencode-config-store.js";
 import type { ServerConfig } from "./types.js";
 
-const CLIENT_TOKEN = "owt_runtime_echo_client";
-const HOST_TOKEN = "owt_runtime_echo_host";
+const CLIENT_TOKEN = "owt_runtime_debug_client";
+const HOST_TOKEN = "owt_runtime_debug_host";
 const roots: string[] = [];
 const stops: Array<() => void | Promise<void>> = [];
 
@@ -25,7 +25,7 @@ function clientAuth() {
 }
 
 async function createTempRoot() {
-  const root = await mkdtemp(join(tmpdir(), "openwork-runtime-echo-"));
+  const root = await mkdtemp(join(tmpdir(), "openwork-runtime-debug-"));
   roots.push(root);
   return root;
 }
@@ -61,12 +61,12 @@ afterEach(async () => {
   }
 });
 
-describe("runtime-config echo-provider route", () => {
-  test("enables the echo provider in the global runtime store", async () => {
+describe("runtime-config debug-provider route", () => {
+  test("enables the debug provider in the global runtime store", async () => {
     const root = await createTempRoot();
     const { base, config } = await startOpenworkServer(root);
 
-    const response = await fetch(`${base}/runtime-config/echo-provider`, {
+    const response = await fetch(`${base}/runtime-config/debug-provider`, {
       method: "POST",
       headers: clientAuth(),
       body: JSON.stringify({ enabled: true }),
@@ -77,36 +77,36 @@ describe("runtime-config echo-provider route", () => {
     expect(isRecord(body) ? body.enabled : null).toBe(true);
 
     const globalRuntime = await readGlobalRuntimeOpencodeConfig(config);
-    const echoProvider = isRecord(globalRuntime.provider) ? globalRuntime.provider.debug : undefined;
-    expect(isRecord(echoProvider)).toBe(true);
-    if (isRecord(echoProvider)) {
-      expect(echoProvider.name).toBe("Debug");
-      expect(echoProvider.npm).toBe("@ai-sdk/openai-compatible");
-      expect(typeof echoProvider.api).toBe("string");
-      expect((echoProvider.api as string)).toContain("127.0.0.1");
-      expect((echoProvider.api as string)).toContain("/api/echo/v1");
-      const models = isRecord(echoProvider.models) ? echoProvider.models : {};
+    const debugProvider = isRecord(globalRuntime.provider) ? globalRuntime.provider.debug : undefined;
+    expect(isRecord(debugProvider)).toBe(true);
+    if (isRecord(debugProvider)) {
+      expect(debugProvider.name).toBe("Debug");
+      expect(debugProvider.npm).toBe("@ai-sdk/openai-compatible");
+      expect(typeof debugProvider.api).toBe("string");
+      expect((debugProvider.api as string)).toContain("127.0.0.1");
+      expect((debugProvider.api as string)).toContain("/api/debug/v1");
+      const models = isRecord(debugProvider.models) ? debugProvider.models : {};
       expect(isRecord(models.echo)).toBe(true);
       if (isRecord(models.echo)) {
-        expect(models.echo.id).toBe("echo");
-        expect(models.echo.name).toBe("Echo");
+        expect(models.echo.id).toBe("debug/echo");
+        expect(models.echo.name).toBe("Debug Echo");
       }
     }
   });
 
-  test("disables the echo provider by removing it from the global runtime store", async () => {
+  test("disables the debug provider by removing it from the global runtime store", async () => {
     const root = await createTempRoot();
     const { base, config } = await startOpenworkServer(root);
 
     // First enable
-    await fetch(`${base}/runtime-config/echo-provider`, {
+    await fetch(`${base}/runtime-config/debug-provider`, {
       method: "POST",
       headers: clientAuth(),
       body: JSON.stringify({ enabled: true }),
     });
 
     // Then disable
-    const response = await fetch(`${base}/runtime-config/echo-provider`, {
+    const response = await fetch(`${base}/runtime-config/debug-provider`, {
       method: "POST",
       headers: clientAuth(),
       body: JSON.stringify({ enabled: false }),
@@ -117,11 +117,11 @@ describe("runtime-config echo-provider route", () => {
     expect(isRecord(body) ? body.enabled : null).toBe(false);
 
     const globalRuntime = await readGlobalRuntimeOpencodeConfig(config);
-    const echoProvider = isRecord(globalRuntime.provider) ? globalRuntime.provider.debug : undefined;
-    expect(echoProvider).toBeUndefined();
+    const debugProvider = isRecord(globalRuntime.provider) ? globalRuntime.provider.debug : undefined;
+    expect(debugProvider).toBeUndefined();
   });
 
-  test("preserves other runtime keys while enabling echo provider", async () => {
+  test("preserves other runtime keys while enabling debug provider", async () => {
     const root = await createTempRoot();
     const { base, config } = await startOpenworkServer(root);
 
@@ -131,7 +131,7 @@ describe("runtime-config echo-provider route", () => {
       mcp: { notion: { type: "remote", url: "https://notion.example/mcp" } },
     }));
 
-    const response = await fetch(`${base}/runtime-config/echo-provider`, {
+    const response = await fetch(`${base}/runtime-config/debug-provider`, {
       method: "POST",
       headers: clientAuth(),
       body: JSON.stringify({ enabled: true }),
@@ -149,7 +149,7 @@ describe("runtime-config echo-provider route", () => {
     const root = await createTempRoot();
     const { base } = await startOpenworkServer(root);
 
-    const response = await fetch(`${base}/runtime-config/echo-provider`, {
+    const response = await fetch(`${base}/runtime-config/debug-provider`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ enabled: true }),
@@ -162,7 +162,7 @@ describe("runtime-config echo-provider route", () => {
     const root = await createTempRoot();
     const { base } = await startOpenworkServer(root);
 
-    const response = await fetch(`${base}/runtime-config/echo-provider`, {
+    const response = await fetch(`${base}/runtime-config/debug-provider`, {
       method: "POST",
       headers: clientAuth(),
       body: "not-json",
@@ -172,18 +172,18 @@ describe("runtime-config echo-provider route", () => {
   });
 });
 
-describe("echo API endpoint", () => {
+describe("debug API endpoint", () => {
   test("echoes all messages and request fields as JSON", async () => {
     const root = await createTempRoot();
     const { base } = await startOpenworkServer(root);
 
     const requestBody = {
-      model: "echo",
+      model: "debug/echo",
       messages: [
         { role: "system", content: "You are a debug bot." },
-        { role: "user", content: "Hello, echo!" },
-        { role: "assistant", content: "I'm an echo." },
-        { role: "user", content: "Echo this back" },
+        { role: "user", content: "Hello, debug!" },
+        { role: "assistant", content: "I'm a debug echo." },
+        { role: "user", content: "Debug this back" },
       ],
       temperature: 0.5,
       max_tokens: 100,
@@ -192,7 +192,7 @@ describe("echo API endpoint", () => {
       ],
     };
 
-    const response = await fetch(`${base}/api/echo/v1/chat/completions`, {
+    const response = await fetch(`${base}/api/debug/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(requestBody),
@@ -203,7 +203,7 @@ describe("echo API endpoint", () => {
     expect(isRecord(body)).toBe(true);
     if (isRecord(body)) {
       expect(body.object).toBe("chat.completion");
-      expect(body.model).toBe("echo");
+      expect(body.model).toBe("debug/echo");
       const choices = Array.isArray(body.choices) ? body.choices : [];
       expect(choices.length).toBe(1);
       if (choices[0]) {
@@ -217,15 +217,15 @@ describe("echo API endpoint", () => {
         const echoed: unknown = JSON.parse(jsonPart);
         expect(isRecord(echoed)).toBe(true);
         if (isRecord(echoed)) {
-          const echo = isRecord(echoed.echo) ? echoed.echo : {};
-          expect(echo.model).toBe("echo");
-          expect(Array.isArray(echo.messages)).toBe(true);
-          expect(echo.messages).toEqual(requestBody.messages);
-          expect(echo.temperature).toBe(0.5);
-          expect(echo.max_tokens).toBe(100);
-          expect(echo.tools).toEqual(requestBody.tools);
-          // stream should be stripped from the echo
-          expect((echo as Record<string, unknown>).stream).toBeUndefined();
+          const debug = isRecord(echoed.debug) ? echoed.debug : {};
+          expect(debug.model).toBe("debug/echo");
+          expect(Array.isArray(debug.messages)).toBe(true);
+          expect(debug.messages).toEqual(requestBody.messages);
+          expect(debug.temperature).toBe(0.5);
+          expect(debug.max_tokens).toBe(100);
+          expect(debug.tools).toEqual(requestBody.tools);
+          // stream should be stripped from the debug echo
+          expect((debug as Record<string, unknown>).stream).toBeUndefined();
         }
       }
     }
@@ -235,10 +235,10 @@ describe("echo API endpoint", () => {
     const root = await createTempRoot();
     const { base } = await startOpenworkServer(root);
 
-    const response = await fetch(`${base}/api/echo/v1/chat/completions`, {
+    const response = await fetch(`${base}/api/debug/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "echo", messages: [] }),
+      body: JSON.stringify({ model: "debug/echo", messages: [] }),
     });
 
     expect(response.status).toBe(200);
@@ -253,9 +253,9 @@ describe("echo API endpoint", () => {
         const jsonPart = content.slice(8, -4);
         const echoed: unknown = JSON.parse(jsonPart);
         if (isRecord(echoed)) {
-          const echo = isRecord(echoed.echo) ? echoed.echo : {};
-          expect(echo.model).toBe("echo");
-          expect(echo.messages).toEqual([]);
+          const debug = isRecord(echoed.debug) ? echoed.debug : {};
+          expect(debug.model).toBe("debug/echo");
+          expect(debug.messages).toEqual([]);
         }
       }
     }
@@ -266,14 +266,14 @@ describe("echo API endpoint", () => {
     const { base } = await startOpenworkServer(root);
 
     const requestBody = {
-      model: "echo",
+      model: "debug/echo",
       messages: [
         { role: "system", content: "You are a debug bot." },
         { role: "user", content: "Stream this back" },
       ],
     };
 
-    const response = await fetch(`${base}/api/echo/v1/chat/completions`, {
+    const response = await fetch(`${base}/api/debug/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ ...requestBody, stream: true }),
@@ -298,7 +298,7 @@ describe("echo API endpoint", () => {
     const root = await createTempRoot();
     const { base } = await startOpenworkServer(root);
 
-    const response = await fetch(`${base}/api/echo/v1/chat/completions`, {
+    const response = await fetch(`${base}/api/debug/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: "not-json",

@@ -89,7 +89,7 @@ import { serve, type ServeResult } from "./serve-node.js";
 import { serveStaticUi } from "./static-ui.js";
 import { externalFetch, loopbackFetch } from "./server-fetch.js";
 import { registerCoreRoutes } from "./routes/core.js";
-import { registerEchoRoutes } from "./routes/echo.js";
+import { registerDebugRoutes } from "./routes/debug.js";
 import { registerFileRoutes } from "./routes/files.js";
 import { registerOperationRoutes } from "./routes/operations.js";
 import { addRoute, matchRoute, type AuthMode, type RequestContext, type Route } from "./routes/registry.js";
@@ -2074,7 +2074,7 @@ function createRoutes(
     captureServerLogs: () => readServerLogBuffer(),
   });
 
-  registerEchoRoutes(routes);
+  registerDebugRoutes(routes);
 
   registerWorkspaceRoutes({
     routes,
@@ -2649,29 +2649,29 @@ function createRoutes(
     });
   });
 
-  addRoute(routes, "POST", "/runtime-config/echo-provider", "client", async (ctx) => {
+  addRoute(routes, "POST", "/runtime-config/debug-provider", "client", async (ctx) => {
     ensureWritable(config);
     requireClientScope(ctx, "collaborator");
     const workspace = resolveEngineRuntimeWorkspace(config);
     const body = await readJsonBody(ctx.request);
     const enabled = body.enabled === true;
 
-    const echoBaseUrl = `http://127.0.0.1:${config.port}/api/echo/v1`;
+    const debugBaseUrl = `http://127.0.0.1:${config.port}/api/debug/v1`;
 
     const providerPatch: Record<string, unknown> = enabled
       ? {
           debug: {
             name: "Debug",
             npm: "@ai-sdk/openai-compatible",
-            api: echoBaseUrl,
+            api: debugBaseUrl,
             options: {
-              baseURL: echoBaseUrl,
-              apiKey: "sk-echo",
+              baseURL: debugBaseUrl,
+              apiKey: "sk-debug",
             },
             models: {
               echo: {
-                id: "echo",
-                name: "Echo",
+                id: "debug/echo",
+                name: "Debug Echo",
                 limit: { context: 128000, output: 4096 },
                 capabilities: {
                   temperature: true,
