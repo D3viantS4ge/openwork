@@ -190,7 +190,11 @@ export function registerCoreRoutes(options: RegisterCoreRoutesOptions): void {
 
   // Managed OpenCode engine logs: returns captured stdout/stderr from the
   // engine child process when the server manages it (OPENWORK_MANAGE_OPENCODE).
-  addRoute(routes, "GET", "/w/:id/opencode/logs", "client", async () => {
+  // Note: must NOT use /workspace/:id/opencode/... because the opencode proxy
+  // middleware in server.ts intercepts any path where the rest after workspace
+  // ID starts with /opencode/. Using /workspace/:id/engine/... is consistent
+  // with the existing engine/reload endpoint.
+  addRoute(routes, "GET", "/workspace/:id/engine/logs", "client", async () => {
     const logs = captureManagedOpencodeLogs?.();
     if (!logs) {
       return jsonResponse({ ok: false, reason: "no_managed_opencode" });
