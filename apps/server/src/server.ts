@@ -2670,7 +2670,7 @@ function createRoutes(
             },
             models: {
               echo: {
-                id: "debug/echo",
+                id: "echo",
                 name: "Debug Echo",
                 limit: { context: 128000, output: 4096 },
                 capabilities: {

@@ -22,7 +22,7 @@ function debugChatCompletion(body: Record<string, unknown>): unknown {
     id: "debug-0",
     object: "chat.completion",
     created: Math.floor(Date.now() / 1000),
-    model: (body.model as string) ?? "debug/echo",
+    model: (body.model as string) ?? "echo",
     choices: [{
       index: 0,
       message: { role: "assistant", content },
@@ -45,7 +45,7 @@ function debugStreamChunks(body: Record<string, unknown>): ReadableStream<Uint8A
           id: "debug-0",
           object: "chat.completion.chunk",
           created: Math.floor(Date.now() / 1000),
-          model: body.model ?? "debug/echo",
+          model: body.model ?? "echo",
         })}\n\n`,
       ));
 
@@ -56,7 +56,7 @@ function debugStreamChunks(body: Record<string, unknown>): ReadableStream<Uint8A
           id: "debug-0",
           object: "chat.completion.chunk",
           created: Math.floor(Date.now() / 1000),
-          model: body.model ?? "debug/echo",
+          model: body.model ?? "echo",
         })}\n\n`,
       ));
 
@@ -67,7 +67,7 @@ function debugStreamChunks(body: Record<string, unknown>): ReadableStream<Uint8A
           id: "debug-0",
           object: "chat.completion.chunk",
           created: Math.floor(Date.now() / 1000),
-          model: body.model ?? "debug/echo",
+          model: body.model ?? "echo",
           usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
         })}\n\n`,
       ));

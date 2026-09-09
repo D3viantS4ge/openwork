@@ -88,7 +88,7 @@ describe("runtime-config debug-provider route", () => {
       const models = isRecord(debugProvider.models) ? debugProvider.models : {};
       expect(isRecord(models.echo)).toBe(true);
       if (isRecord(models.echo)) {
-        expect(models.echo.id).toBe("debug/echo");
+        expect(models.echo.id).toBe("echo");
         expect(models.echo.name).toBe("Debug Echo");
       }
     }
@@ -178,7 +178,7 @@ describe("debug API endpoint", () => {
     const { base } = await startOpenworkServer(root);
 
     const requestBody = {
-      model: "debug/echo",
+      model: "echo",
       messages: [
         { role: "system", content: "You are a debug bot." },
         { role: "user", content: "Hello, debug!" },
@@ -203,7 +203,7 @@ describe("debug API endpoint", () => {
     expect(isRecord(body)).toBe(true);
     if (isRecord(body)) {
       expect(body.object).toBe("chat.completion");
-      expect(body.model).toBe("debug/echo");
+      expect(body.model).toBe("echo");
       const choices = Array.isArray(body.choices) ? body.choices : [];
       expect(choices.length).toBe(1);
       if (choices[0]) {
@@ -218,7 +218,7 @@ describe("debug API endpoint", () => {
         expect(isRecord(echoed)).toBe(true);
         if (isRecord(echoed)) {
           const debug = isRecord(echoed.debug) ? echoed.debug : {};
-          expect(debug.model).toBe("debug/echo");
+          expect(debug.model).toBe("echo");
           expect(Array.isArray(debug.messages)).toBe(true);
           expect(debug.messages).toEqual(requestBody.messages);
           expect(debug.temperature).toBe(0.5);
@@ -238,7 +238,7 @@ describe("debug API endpoint", () => {
     const response = await fetch(`${base}/api/debug/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "debug/echo", messages: [] }),
+      body: JSON.stringify({ model: "echo", messages: [] }),
     });
 
     expect(response.status).toBe(200);
@@ -254,7 +254,7 @@ describe("debug API endpoint", () => {
         const echoed: unknown = JSON.parse(jsonPart);
         if (isRecord(echoed)) {
           const debug = isRecord(echoed.debug) ? echoed.debug : {};
-          expect(debug.model).toBe("debug/echo");
+          expect(debug.model).toBe("echo");
           expect(debug.messages).toEqual([]);
         }
       }
@@ -266,7 +266,7 @@ describe("debug API endpoint", () => {
     const { base } = await startOpenworkServer(root);
 
     const requestBody = {
-      model: "debug/echo",
+      model: "echo",
       messages: [
         { role: "system", content: "You are a debug bot." },
         { role: "user", content: "Stream this back" },
