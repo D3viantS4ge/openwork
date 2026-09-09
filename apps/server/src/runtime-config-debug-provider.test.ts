@@ -89,7 +89,7 @@ describe("runtime-config debug-provider route", () => {
       expect(isRecord(models.echo)).toBe(true);
       if (isRecord(models.echo)) {
         expect(models.echo.id).toBe("echo");
-        expect(models.echo.name).toBe("Debug Echo");
+        expect(models.echo.name).toBe("Echo");
       }
     }
   });

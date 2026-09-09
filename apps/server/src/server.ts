@@ -2671,7 +2671,7 @@ function createRoutes(
             models: {
               echo: {
                 id: "echo",
-                name: "Debug Echo",
+                name: "Echo",
                 limit: { context: 128000, output: 4096 },
                 capabilities: {
                   temperature: true,
