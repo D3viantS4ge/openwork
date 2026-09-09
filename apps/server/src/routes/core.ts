@@ -208,41 +208,39 @@ export function registerCoreRoutes(options: RegisterCoreRoutesOptions): void {
     return jsonResponse({ ok: true, path: target });
   });
 
-  // OpenCode engine operational log: reads the engine's Effect-framework log file
-  // (~/.local/share/opencode/log/opencode.log on Linux). This contains session
-  // activity, tool calls, model responses, etc. — far more useful than the raw
-  // process stdout/stderr for understanding agent behaviour.
+  // OpenCode engine logs: returns both the managed process stdout/stderr (for
+  // the ServiceCard "Last stdout / Last stderr" display) and the operational
+  // log file content (for copy/export — session activity, tool calls, etc.).
   // Note: must NOT use /workspace/:id/opencode/... because the opencode proxy
   // middleware in server.ts intercepts any path where the rest after workspace
   // ID starts with /opencode/. Using /workspace/:id/engine/... is consistent
   // with the existing engine/reload endpoint.
   addRoute(routes, "GET", "/workspace/:id/engine/logs", "client", async () => {
+    // 1. Process stdout/stderr ring buffer (for display)
+    const ring = captureManagedOpencodeLogs?.();
+
+    // 2. Operational log file (for copy/export)
     const logPath = resolveOpencodeLogFilePath();
+    let logFile: { content: string; path: string; size: number; capturedAt: string } | null = null;
     try {
       const fileStat = await stat(logPath);
-      const readSize = Math.min(fileStat.size, OPENCODE_LOG_MAX_BYTES);
-      const fd = await readFile(logPath, { encoding: "utf8" });
-      // Read only the last OPENCODE_LOG_MAX_BYTES if the file is larger
-      const content = fd.length > OPENCODE_LOG_MAX_BYTES
-        ? fd.slice(fd.length - OPENCODE_LOG_MAX_BYTES)
-        : fd;
-      return jsonResponse({
-        ok: true,
-        content,
-        path: logPath,
-        size: fileStat.size,
-        capturedAt: new Date().toISOString(),
-      });
-    } catch (error) {
-      const nodeError = error as NodeJS.ErrnoException;
-      if (nodeError.code === "ENOENT") {
-        return jsonResponse({ ok: false, reason: "log_file_not_found", path: logPath });
-      }
-      return jsonResponse({
-        ok: false,
-        reason: error instanceof Error ? error.message : String(error),
-      });
+      const raw = await readFile(logPath, { encoding: "utf8" });
+      const content = raw.length > OPENCODE_LOG_MAX_BYTES
+        ? raw.slice(raw.length - OPENCODE_LOG_MAX_BYTES)
+        : raw;
+      logFile = { content, path: logPath, size: fileStat.size, capturedAt: new Date().toISOString() };
+    } catch {
+      // Log file may not exist yet — that's fine, copy/export will show a message.
     }
+
+    return jsonResponse({
+      ok: true,
+      // For ServiceCard display (process stdout/stderr):
+      stdout: ring?.stdout ?? null,
+      stderr: ring?.stderr ?? null,
+      // For copy/export (operational log file):
+      logFile,
+    });
   });
 
   // Server's own log output: returns recent log lines from the server's ring buffer.

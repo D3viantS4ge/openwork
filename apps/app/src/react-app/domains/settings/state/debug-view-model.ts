@@ -378,7 +378,11 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
   );
   const [developerLog, setDeveloperLog] = useState<string[]>([]);
   const [developerLogStatus, setDeveloperLogStatus] = useState<string | null>(null);
-  const [opencodeLogs, setOpencodeLogs] = useState<{ content: string; path: string; size: number; capturedAt: string } | null>(null);
+  const [opencodeLogs, setOpencodeLogs] = useState<{
+    stdout: string | null;
+    stderr: string | null;
+    logFile: { content: string; path: string; size: number; capturedAt: string } | null;
+  } | null>(null);
   const [serverLogs, setServerLogs] = useState<{ stdout: string; capturedAt: string } | null>(null);
   const [electronMigrationUrl, setElectronMigrationUrl] = useState("");
   const [electronMigrationSha256, setElectronMigrationSha256] = useState("");
@@ -604,11 +608,11 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
 
   const engineCard = useMemo(() => {
     const card = describeEngine(engineInfoState, engineFallbackBaseUrl);
-    // In web/server mode, override stdout with the engine's operational log
-    // file content (session activity, tool calls, model responses, etc.).
+    // In web/server mode, override stdout/stderr with the managed process
+    // ring buffer (actual process output, not the operational log file).
     if (!isDesktopRuntime() && opencodeLogs) {
-      card.stdout = opencodeLogs.content;
-      card.stderr = "";
+      card.stdout = opencodeLogs.stdout ?? null;
+      card.stderr = opencodeLogs.stderr ?? null;
     }
     return card;
   }, [engineInfoState, engineFallbackBaseUrl, opencodeLogs]);
@@ -1035,7 +1039,8 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
   );
 
   const onCopyOpencodeLogs = useCallback(async () => {
-    const content = engineInfoState?.lastStdout ?? opencodeLogs?.content ?? null;
+    // Copy/export use the operational log file (not process stdout/stderr).
+    const content = opencodeLogs?.logFile?.content ?? engineInfoState?.lastStdout ?? null;
     if (!content) {
       setOpencodeLogStatus(t("settings.no_logs_captured"));
       return;
@@ -1049,7 +1054,8 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
   }, [engineInfoState?.lastStdout, opencodeLogs]);
 
   const onExportOpencodeLogs = useCallback(async () => {
-    const content = engineInfoState?.lastStdout ?? opencodeLogs?.content ?? null;
+    // Copy/export use the operational log file (not process stdout/stderr).
+    const content = opencodeLogs?.logFile?.content ?? engineInfoState?.lastStdout ?? null;
     if (!content) {
       setOpencodeLogStatus(t("settings.no_logs_captured"));
       return;
