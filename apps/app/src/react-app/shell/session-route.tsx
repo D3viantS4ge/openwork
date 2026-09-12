@@ -2372,8 +2372,8 @@ export function SessionRoute() {
         const next = !current;
         try { window.localStorage.setItem("openwork.developerMode", next ? "1" : "0"); } catch {}
         if (client) {
-          client.setEchoProviderEnabled(next).catch((error) => {
-            console.warn("[echo-provider] Failed to toggle echo provider:", error);
+          client.setDebugProviderEnabled(next).catch((error) => {
+            console.warn("[debug-provider] Failed to toggle debug provider:", error);
           });
         }
         return next;
