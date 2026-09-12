@@ -140,21 +140,6 @@ export function buildOpenworkRuntimeConfigObjectFromSnapshot(
           },
         },
       },
-      opencode: {
-        description: "OpenCode's default behavior without the OpenWork system prompt and tools",
-        mode: "primary",
-        temperature: 0.2,
-        permission: {
-          ...OPENWORK_TOOL_PERMISSION_DENIALS,
-          skill: {
-            "customize-opencode": "deny",
-            "get-started": "deny",
-            "command-creator": "deny",
-            "agent-creator": "deny",
-            "plugin-creator": "deny",
-          },
-        },
-      },
       plain: {
         description: "A minimal agent with no OpenWork or OpenCode system prompt",
         mode: "primary",

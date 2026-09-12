@@ -90,18 +90,16 @@ describe("openwork runtime config file", () => {
     });
   });
 
-  test("opencode and plain agents opt out of OpenWork and plain has a minimal prompt", async () => {
+  test("plain agent opts out of OpenWork and has a minimal prompt", async () => {
     const { config } = await setup();
     await writeOpenworkRuntimeConfigFile(config, "ws_1");
 
     const parsed = await readConfigFile(config);
     const agent = parsed.agent as Record<string, Record<string, unknown>>;
-    // The opencode and plain agents opt out via agent-name check in
-    // isOpenworkEnabled, not via options, so they have no openwork option.
-    expect(agent.opencode?.options).toBeUndefined();
+    // The plain agent opts out via agent-name check in isOpenworkEnabled,
+    // not via options, so it has no openwork option.
     expect(agent.plain?.options).toBeUndefined();
     expect(agent.plain?.prompt).toBe("You are a helpful assistant.");
-    expect(agent.opencode?.prompt).toBeUndefined();
 
     // The openwork extension tools are denied at the agent level (not on the
     // session) so flipping agents never leaks the previous agent's denials.
@@ -112,7 +110,6 @@ describe("openwork runtime config file", () => {
       openwork_docs_search: "deny",
       openwork_docs_read: "deny",
     };
-    expect(agent.opencode?.permission).toMatchObject(toolDenials);
     expect(agent.plain?.permission).toMatchObject(toolDenials);
     expect(agent.openwork?.permission).not.toMatchObject(toolDenials);
   });

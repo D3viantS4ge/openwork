@@ -3,7 +3,7 @@
  * resolve whether the current session's agent opts out of OpenWork context.
  * Shared by the OpenWork system-prompt plugins so they can skip the OpenWork
  * instructions for agents that declare `disable_openwork: true` in their
- * options, or for the built-in opencode and plain agents.
+ * options, or for the built-in plain agent.
  */
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -45,7 +45,7 @@ export function readEngineAgentContext(value: unknown): OpenWorkEngineAgentConte
     },
     isOpenworkEnabled: async (agentName) => {
       // Built-in agents that opt out of OpenWork context.
-      if (agentName === "opencode" || agentName === "plain") return false;
+      if (agentName === "plain") return false;
       try {
         const list = await appAgents.call(app);
         if (!Array.isArray(list)) return true;
