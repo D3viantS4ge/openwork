@@ -930,14 +930,6 @@ interface AssistantMessageGroupProps {
   isStreaming: boolean
 }
 
-// Positions within this many px of the bottom count as "at bottom" for the
-// capped step run: small anchoring jitter must not release the stream pin,
-// a real scroll-up must.
-const STEPS_STICKY_GAP_PX = 24
-// Scroll events within this window of a wheel/touch/pointer gesture are
-// treated as user input. Events from our own programmatic pins are never
-// preceded by a gesture, so they are ignored entirely.
-const STEPS_GESTURE_WINDOW_MS = 600
 function collectMcpAppParts(items: UIMessageWithIndex[]): DynamicToolUIPart[] {
   const parts = new Map<string, DynamicToolUIPart>()
   for (const item of items) {
@@ -967,60 +959,6 @@ function MessageGroup({
   // silently corrupt fork/revert boundaries.
   const lastRealItem = items.findLast((item) => !isSessionErrorMessage(item.message))
   const isLiveGroup = isStreaming && lastItem !== undefined && lastItem.index === messages.length - 1
-  const stepsRef = React.useRef<HTMLDivElement>(null)
-  // Whether the user is still looking at the tail of the capped step run.
-  // Starts true so streaming pins to the latest step; scrolling up inside
-  // the run (e.g. to read the start of a long reasoning block) releases the
-  // pin, and scrolling back to the bottom re-engages it.
-  const stepsAtBottomRef = React.useRef(true)
-  // User-input tracking for the steps run: scroll events caused by our own
-  // programmatic pin carry stale scrollTop values (content grows after the
-  // pin), so a naive bottom-gap check reads them as user scrolls and
-  // spuriously releases the pin. Only scroll events preceded by a wheel /
-  // touch / pointer gesture — or part of an ongoing scrollbar drag — are
-  // treated as user input.
-  const stepsGestureAtRef = React.useRef(0)
-  const stepsDraggingRef = React.useRef(false)
-
-  const markStepsGesture = React.useCallback(() => {
-    stepsGestureAtRef.current = Date.now()
-  }, [])
-
-  const handleStepsScroll = () => {
-    const node = stepsRef.current
-    if (!node) return
-    const userDriven =
-      stepsDraggingRef.current ||
-      Date.now() - stepsGestureAtRef.current < STEPS_GESTURE_WINDOW_MS
-    if (!userDriven) return
-    stepsAtBottomRef.current =
-      node.scrollHeight - node.scrollTop - node.clientHeight <= STEPS_STICKY_GAP_PX
-  }
-
-  // Keep the capped step run pinned to the latest step while streaming, but
-  // only while the user is at the bottom of the run — reading the start of a
-  // long reasoning block must not be fought by the stream. A fresh component
-  // instance per message (keyed by message id) resets the pin state.
-  React.useEffect(() => {
-    const node = stepsRef.current
-    if (node && isLiveGroup && stepsAtBottomRef.current) {
-      node.scrollTop = node.scrollHeight
-    }
-  })
-
-  // Clear the drag state when the pointer is released anywhere (the thumb
-  // may be released outside the container).
-  React.useEffect(() => {
-    const endDrag = () => {
-      stepsDraggingRef.current = false
-    }
-    window.addEventListener("pointerup", endDrag)
-    window.addEventListener("pointercancel", endDrag)
-    return () => {
-      window.removeEventListener("pointerup", endDrag)
-      window.removeEventListener("pointercancel", endDrag)
-    }
-  }, [])
 
   if (!lastItem || isMessageEmptyGroup(items)) {
     return null;
@@ -1159,24 +1097,13 @@ function MessageGroup({
       {stepItems.length > 0 ? (
         collapseSteps ? (
           <CompletedStepRun label={stepRunLabel}>
-            <div className="flex max-h-[520px] flex-col gap-2 overflow-y-auto">
+            <div className="flex max-h-[min(52rem,80dvh)] flex-col gap-2 overflow-y-auto">
               {renderItems(stepItems, 0)}
               {foldedReasoning}
             </div>
           </CompletedStepRun>
         ) : (
-          <div
-            ref={stepsRef}
-            onWheel={markStepsGesture}
-            onTouchStart={markStepsGesture}
-            onTouchMove={markStepsGesture}
-            onPointerDown={() => {
-              stepsDraggingRef.current = true
-              markStepsGesture()
-            }}
-            onScroll={handleStepsScroll}
-            className="flex max-h-[520px] flex-col gap-2 overflow-y-auto"
-          >
+          <div className="flex flex-col gap-2">
             {renderItems(stepItems, 0)}
           </div>
         )
