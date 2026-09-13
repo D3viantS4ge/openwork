@@ -272,3 +272,51 @@ describe("session run status reconnect reconciliation", () => {
     expect(useSessionActivityStore.getState().recordsByWorkspaceId[workspaceId]?.[sessionId]?.runActive).toBe(true);
   });
 });
+
+describe("session run status settle on stream reconnect", () => {
+  test("server.connected settles a run that ended while the event stream was down", async () => {
+    // The terminal session.idle/session.status never reached us (live-only
+    // stream, no replay), so the status cache and snapshot still claim the
+    // run is busy. On the next (re)connect the status refetch reports idle and
+    // the transcript must settle instead of staying stuck "running".
+    __setWorkspaceSessionSyncStatusFetcherForTest(async () => ({ [sessionId]: { type: "idle" } }));
+    const { input, cleanup, releaseSession } = createTestSync();
+    const queryClient = getReactQueryClient();
+    queryClient.setQueryData(statusKey(workspaceId, sessionId), { type: "busy" });
+    queryClient.setQueryData(snapshotKey(workspaceId, sessionId), createSnapshot({ type: "busy" }));
+    useSessionActivityStore.getState().setRunStatus(workspaceId, sessionId, { type: "busy" });
+
+    __applySessionSyncEventForTest(input, {
+      type: "server.connected",
+      properties: {},
+    });
+    await flushMicrotasks();
+
+    expect(queryClient.getQueryData(statusKey(workspaceId, sessionId))).toEqual({ type: "idle" });
+    expect(queryClient.getQueryState(snapshotKey(workspaceId, sessionId))?.isInvalidated).toBe(true);
+
+    releaseSession();
+    cleanup();
+  });
+
+  test("server.connected leaves a still-live run untouched", async () => {
+    __setWorkspaceSessionSyncStatusFetcherForTest(async () => ({ [sessionId]: { type: "busy" } }));
+    const { input, cleanup, releaseSession } = createTestSync();
+    const queryClient = getReactQueryClient();
+    queryClient.setQueryData(statusKey(workspaceId, sessionId), { type: "busy" });
+    queryClient.setQueryData(snapshotKey(workspaceId, sessionId), createSnapshot({ type: "busy" }));
+    useSessionActivityStore.getState().setRunStatus(workspaceId, sessionId, { type: "busy" });
+
+    __applySessionSyncEventForTest(input, {
+      type: "server.connected",
+      properties: {},
+    });
+    await flushMicrotasks();
+
+    expect(queryClient.getQueryData(statusKey(workspaceId, sessionId))).toEqual({ type: "busy" });
+    expect(queryClient.getQueryState(snapshotKey(workspaceId, sessionId))?.isInvalidated).toBeFalsy();
+
+    releaseSession();
+    cleanup();
+  });
+});

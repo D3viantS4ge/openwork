@@ -92,7 +92,7 @@ type SyncSubscriptionFactory = (
 type SessionStatusFetcher = (
   baseUrl: string,
   openworkToken: string,
-  signal: AbortSignal,
+  signal?: AbortSignal,
 ) => Promise<Record<string, SessionStatus>>;
 
 const defaultSyncSubscriptionFactory: SyncSubscriptionFactory = async (baseUrl, openworkToken, signal) => {
@@ -680,6 +680,19 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
   const queryClient = getReactQueryClient();
   const input = entry.input;
 
+  if (event.type === "server.connected") {
+    // Event stream (re)connected (the legacy /event route emits this on
+    // every new subscription, including native EventSource reconnects). The
+    // stream is live-only — events emitted while the connection was down,
+    // including the terminal session.status/session.idle of a finished run,
+    // are never replayed — so a run can finish server-side while the app
+    // keeps rendering a tool part stuck "running" and the status pinned
+    // busy until a reload. Re-fetch run statuses and settle any session
+    // whose run ended while we were offline.
+    void reconcileSessionRunStatuses(entry, input);
+    return;
+  }
+
   if (event.type === "session.created") {
     const session = getSessionCreatedInfo(event);
     if (!session) return;
@@ -961,25 +974,42 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
     const [mapped, ...attachments] = toUIParts(part);
     if (!mapped) return;
     const pending = entry.pendingDeltas.get(part.id);
-    // Seed the new part with any deltas that arrived before this
-    // declaration. We deliberately ignore `pending.reasoning` — it
-    // can't be trusted because opencode emits `field: "text"` for
-    // both text and reasoning streams. The part's actual kind
-    // (`mapped.type`) is the source of truth.
+    // Seed the part with the longest known view of the stream. We
+    // deliberately ignore `pending.reasoning` — it can't be trusted
+    // because opencode emits `field: "text"` for both text and reasoning
+    // streams. The part's actual kind (`mapped.type`) is the source of
+    // truth.
     //
-    // Both `pending.text` and `mapped.text` are cumulative views of the
-    // same stream, so we keep whichever is longer instead of
-    // concatenating (concatenation double-counts the bytes that landed
-    // in both). Without this, reasoning text shows up duplicated in the
-    // streaming UI.
-    const seededPart =
-      pending && (mapped.type === "text" || mapped.type === "reasoning")
-        ? {
-            ...mapped,
-            text: pending.text.length > mapped.text.length ? pending.text : mapped.text,
-            state: "streaming" as const,
-          }
-        : mapped;
+    // `pending.text`, `mapped.text`, and the part's text already in the
+    // live transcript are all cumulative views of the same stream, so we
+    // keep whichever is longest instead of concatenating (concatenation
+    // double-counts the bytes that landed in both). Without this, reasoning
+    // text shows up duplicated in the streaming UI. The transcript check
+    // also guards against a `message.part.updated` re-emission that carries
+    // a shorter snapshot of the part than the deltas we already applied —
+    // replacing with the shorter text visibly truncates the thinking to
+    // "only the recent reasoning" until a reload.
+    const currentPart = queryClient
+      .getQueryData<UIMessage[]>(transcriptKey(workspaceId, part.sessionID))
+      ?.find((message) => message.id === part.messageID)
+      ?.parts.find((candidate) => getPartMetadataId(candidate) === part.id);
+    const currentPartText =
+      currentPart !== undefined && (currentPart.type === "text" || currentPart.type === "reasoning")
+        ? currentPart.text
+        : undefined;
+    let seededPart: UIMessage["parts"][number] = mapped;
+    if (mapped.type === "text" || mapped.type === "reasoning") {
+      const mergedText = [mapped.text, pending?.text, currentPartText]
+        .filter((candidate): candidate is string => typeof candidate === "string")
+        .reduce((longest, candidate) => (candidate.length > longest.length ? candidate : longest), "");
+      seededPart = {
+        ...mapped,
+        text: mergedText,
+        ...(pending !== undefined || mergedText.length > mapped.text.length
+          ? { state: "streaming" as const }
+          : {}),
+      };
+    }
     // Drop any deltas for this partID still queued in the rAF flush
     // buffer — they've already been incorporated into `mapped.text`.
     // Without this, the rAF flush would re-append them on top of the
@@ -1232,7 +1262,7 @@ function startSync(input: SyncOptions, entry: SyncEntry) {
   };
 }
 
-async function reconcileSessionRunStatuses(entry: SyncEntry, input: SyncOptions, signal: AbortSignal) {
+async function reconcileSessionRunStatuses(entry: SyncEntry, input: SyncOptions, signal?: AbortSignal) {
   const startedAt = Date.now();
   let statuses: Record<string, SessionStatus>;
   try {
@@ -1240,10 +1270,11 @@ async function reconcileSessionRunStatuses(entry: SyncEntry, input: SyncOptions,
   } catch {
     return;
   }
-  if (signal.aborted) return;
+  if (signal?.aborted) return;
 
   const records = useSessionActivityStore.getState().recordsByWorkspaceId[input.workspaceId];
   if (!records) return;
+  const queryClient = getReactQueryClient();
   for (const sessionId of Object.keys(records)) {
     useSessionActivityStore.getState().seedSessionRun(
       input.workspaceId,
@@ -1252,6 +1283,19 @@ async function reconcileSessionRunStatuses(entry: SyncEntry, input: SyncOptions,
       undefined,
       { snapshotStartedAt: startedAt },
     );
+    // A run can end while the event stream is down, so the terminal
+    // session.status/session.idle never reached us to invalidate the
+    // snapshot — tool parts stay stuck "running" with the status pinned busy
+    // until a reload. When the server reports the run over but we still think
+    // it is live, push the terminal status into the status cache and
+    // reconcile the transcript from the snapshot so in-flight parts settle.
+    const serverStatus = statuses[sessionId] ?? idleStatus;
+    if (isLiveStatus(serverStatus)) continue;
+    const cachedStatus = queryClient.getQueryData<SessionStatus>(statusKey(input.workspaceId, sessionId));
+    const cachedSnapshot = queryClient.getQueryData<OpenworkSessionSnapshot>(snapshotKey(input.workspaceId, sessionId));
+    if (!isLiveStatus(cachedStatus) && !isLiveStatus(cachedSnapshot?.status)) continue;
+    queryClient.setQueryData(statusKey(input.workspaceId, sessionId), serverStatus);
+    void queryClient.invalidateQueries({ queryKey: snapshotKey(input.workspaceId, sessionId) });
   }
 }
 

@@ -315,3 +315,81 @@ describe("tool part mapper", () => {
     }
   });
 });
+
+function reasoningPart(text: string): Extract<Part, { type: "reasoning" }> {
+  return {
+    id: "prt-reason",
+    sessionID: "session-a",
+    messageID: "msg-a",
+    type: "reasoning",
+    text,
+  } as Extract<Part, { type: "reasoning" }>;
+}
+
+describe("streaming text accumulation", () => {
+  test("part.updated re-emission cannot truncate accumulated streaming text", async () => {
+    // A re-emitted message.part.updated can carry a shorter cumulative view of
+    // the part than the deltas we already applied (the reasoning text is only
+    // persisted at start/end, so a mid-stream declaration can lag the live
+    // cache). Replacing the part with the shorter text visibly truncates the
+    // thinking to "only the recent reasoning" until a reload — the longest
+    // view must win.
+    const syncInput = { workspaceId: "workspace-a", baseUrl: "http://127.0.0.1:1234", openworkToken: "token" };
+    const cleanup = __createWorkspaceSessionSyncForTest(syncInput);
+    const release = trackWorkspaceSessionSync(syncInput, "session-a");
+    try {
+      __applySessionSyncEventForTest(syncInput, {
+        type: "message.updated",
+        properties: { info: { id: "msg-a", role: "assistant", sessionID: "session-a" } },
+      } as never);
+      __applySessionSyncEventForTest(syncInput, {
+        type: "message.part.updated",
+        properties: { part: reasoningPart("") },
+      } as never);
+      __applySessionSyncEventForTest(syncInput, {
+        type: "message.part.delta",
+        properties: { sessionID: "session-a", messageID: "msg-a", partID: "prt-reason", field: "text", delta: "AABB" },
+      } as never);
+      await Promise.resolve();
+
+      __applySessionSyncEventForTest(syncInput, {
+        type: "message.part.updated",
+        properties: { part: reasoningPart("AB") },
+      } as never);
+
+      const transcript = getReactQueryClient().getQueryData<UIMessage[]>(transcriptKey("workspace-a", "session-a"));
+      expect((transcript?.[0]?.parts[0] as { text?: string }).text).toBe("AABB");
+      expect((transcript?.[0]?.parts[0] as { state?: string }).state).toBe("streaming");
+    } finally {
+      release();
+      cleanup();
+    }
+  });
+
+  test("part.updated declaration with pending deltas still seeds the longest text", async () => {
+    // Deltas that arrive before the part is declared are buffered in
+    // pendingDeltas; the declaration must seed them rather than the empty text
+    // the event carries.
+    const syncInput = { workspaceId: "workspace-a", baseUrl: "http://127.0.0.1:1234", openworkToken: "token" };
+    const cleanup = __createWorkspaceSessionSyncForTest(syncInput);
+    const release = trackWorkspaceSessionSync(syncInput, "session-a");
+    try {
+      __applySessionSyncEventForTest(syncInput, {
+        type: "message.part.delta",
+        properties: { sessionID: "session-a", messageID: "msg-a", partID: "prt-reason", field: "text", delta: "XYZ" },
+      } as never);
+      await Promise.resolve();
+
+      __applySessionSyncEventForTest(syncInput, {
+        type: "message.part.updated",
+        properties: { part: reasoningPart("") },
+      } as never);
+
+      const transcript = getReactQueryClient().getQueryData<UIMessage[]>(transcriptKey("workspace-a", "session-a"));
+      expect((transcript?.[0]?.parts[0] as { text?: string }).text).toBe("XYZ");
+    } finally {
+      release();
+      cleanup();
+    }
+  });
+});
