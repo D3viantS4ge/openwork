@@ -1960,7 +1960,7 @@ export function SessionRoute() {
         { token: endpoint.token, mode: "openwork" },
       );
       try {
-        const session = unwrap(
+        let session = unwrap(
           await workspaceClient.session.create({ directory: workspace.path?.trim() || undefined }),
         );
         if (workspaceId === selectedWorkspaceId) {
@@ -1987,8 +1987,11 @@ export function SessionRoute() {
         applyLastUsedModelToSession(session.id);
         if (overrides) applyRunPromptOverrides(session.id, overrides);
         if (archive) {
-          // Fire-and-forget; a failed archive should not block the session.
+          // Fire-and-forget server update; a failure should not block the session.
           setSessionArchived(workspaceClient, session.id, true, workspace.path?.trim() || undefined).catch(() => {});
+          // Stamp the local session so the sidebar filters it into Archived
+          // immediately, without waiting for a server round-trip.
+          session = { ...session, time: { ...session.time, archived: Date.now() } };
         }
         setSessionsByWorkspaceId((current) => ({
           ...current,
