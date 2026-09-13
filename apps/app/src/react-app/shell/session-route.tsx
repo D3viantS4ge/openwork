@@ -1987,9 +1987,8 @@ export function SessionRoute() {
         applyLastUsedModelToSession(session.id);
         if (overrides) applyRunPromptOverrides(session.id, overrides);
         if (archive) {
-          // Await so the server state is settled before navigation; a failed
-          // archive is non-critical and should not block the session.
-          await setSessionArchived(workspaceClient, session.id, true, workspace.path?.trim() || undefined).catch(() => {});
+          // Fire-and-forget; a failed archive should not block the session.
+          setSessionArchived(workspaceClient, session.id, true, workspace.path?.trim() || undefined).catch(() => {});
         }
         setSessionsByWorkspaceId((current) => ({
           ...current,
@@ -2059,9 +2058,7 @@ export function SessionRoute() {
               workspace.path?.trim() || undefined,
               { token: endpoint.token, mode: "openwork" },
             );
-            // Await so the server state is settled before the session page
-            // loads; a failed archive is non-critical.
-            void setSessionArchived(client, selectedSessionId, true, workspace.path?.trim() || undefined).catch(() => {});
+            setSessionArchived(client, selectedSessionId, true, workspace.path?.trim() || undefined).catch(() => {});
           }
         }
       }
