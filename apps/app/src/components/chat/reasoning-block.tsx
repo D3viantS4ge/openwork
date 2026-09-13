@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { ChevronDown } from "lucide-react"
 
 import {
@@ -17,12 +17,66 @@ type ReasoningBlockProps = {
   className?: string
 }
 
+// Positions within this many px of the bottom count as "at bottom" for the
+// stream pin; a real scroll-up must release it.
+const THOUGHT_STICKY_GAP_PX = 24
+// Scroll events within this window of a wheel/touch/pointer gesture are
+// treated as user input. Events from our own programmatic pins are never
+// preceded by a gesture, so they are ignored entirely.
+const THOUGHT_GESTURE_WINDOW_MS = 600
+
 /**
  * Thinking is open by default — the full reasoning renders as markdown
- * under the "Thinking… / Thought" header; a chevron collapses it.
+ * under the "Thinking… / Thought" header; a chevron collapses it. The
+ * content scrolls inside its own bounded region so the collapse label
+ * always sits above the scroll bar, and while streaming the region tails
+ * to the newest reasoning (unless the reader scrolled up).
  */
 export function ReasoningBlock({ text, isStreaming, className }: ReasoningBlockProps) {
   const [open, setOpen] = useState(true)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const atBottomRef = useRef(true)
+  const gestureAtRef = useRef(0)
+  const draggingRef = useRef(false)
+
+  const markGesture = useCallback(() => {
+    gestureAtRef.current = Date.now()
+  }, [])
+
+  const handleContentScroll = () => {
+    const node = contentRef.current
+    if (!node) return
+    const userDriven =
+      draggingRef.current ||
+      Date.now() - gestureAtRef.current < THOUGHT_GESTURE_WINDOW_MS
+    if (!userDriven) return
+    atBottomRef.current =
+      node.scrollHeight - node.scrollTop - node.clientHeight <= THOUGHT_STICKY_GAP_PX
+  }
+
+  // Tail the reasoning while it streams, but only while the reader is at
+  // the bottom of the region — scrolling up to read earlier thinking must
+  // not be fought by the stream.
+  useEffect(() => {
+    const node = contentRef.current
+    if (node && isStreaming && atBottomRef.current) {
+      node.scrollTop = node.scrollHeight
+    }
+  })
+
+  // Clear the drag state when the pointer is released anywhere (the thumb
+  // may be released outside the container).
+  useEffect(() => {
+    const endDrag = () => {
+      draggingRef.current = false
+    }
+    window.addEventListener("pointerup", endDrag)
+    window.addEventListener("pointercancel", endDrag)
+    return () => {
+      window.removeEventListener("pointerup", endDrag)
+      window.removeEventListener("pointercancel", endDrag)
+    }
+  }, [])
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className={cn("w-full", className)} data-reasoning-block="">
@@ -36,13 +90,26 @@ export function ReasoningBlock({ text, isStreaming, className }: ReasoningBlockP
         />
       </CollapsibleTrigger>
       <CollapsibleContent className="h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-150 ease-out data-starting-style:h-0 data-ending-style:h-0 [&[hidden]:not([hidden='until-found'])]:hidden">
-        <MessageContent
-          markdown
-          isStreaming={isStreaming}
-          className="text-muted-foreground prose mt-1 w-full min-w-0 rounded-lg bg-transparent p-0 text-sm"
+        <div
+          ref={contentRef}
+          onWheel={markGesture}
+          onTouchStart={markGesture}
+          onTouchMove={markGesture}
+          onPointerDown={() => {
+            draggingRef.current = true
+            markGesture()
+          }}
+          onScroll={handleContentScroll}
+          className="max-h-[520px] overflow-y-auto"
         >
-          {text}
-        </MessageContent>
+          <MessageContent
+            markdown
+            isStreaming={isStreaming}
+            className="text-muted-foreground prose mt-1 w-full min-w-0 rounded-lg bg-transparent p-0 text-sm"
+          >
+            {text}
+          </MessageContent>
+        </div>
       </CollapsibleContent>
     </Collapsible>
   )
