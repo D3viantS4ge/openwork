@@ -654,3 +654,17 @@ select:disabled {
     min-height: 100dvh;
   }
 }
+
+/* Collapsible block labels inside the step-run scroll area stay pinned to
+   the top of the scroll region so a block stays collapsible no matter how
+   far its content is scrolled (reasoning, tool calls, sub-agent runs,
+   aggregate rows). The surface background masks content scrolling beneath
+   the pinned label; outside a scroll area the labels look unchanged. */
+[data-steps-scroll] [data-slot="collapsible-trigger"],
+[data-steps-scroll] [data-tool-toggle-row],
+[data-steps-scroll] [data-tool-aggregate] > button {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--dls-surface);
+}

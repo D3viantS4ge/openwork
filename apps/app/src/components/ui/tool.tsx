@@ -151,7 +151,7 @@ const Tool = ({
 
   return (
     <Collapsible className={className} defaultOpen={defaultOpen}>
-      <div className="flex min-w-0 items-center gap-2" aria-live="polite">
+      <div data-tool-toggle-row="" className="flex min-w-0 items-center gap-2" aria-live="polite">
         <CollapsibleTrigger
           className="group text-muted-foreground hover:text-foreground flex min-w-0 flex-1 cursor-pointer items-center justify-start gap-2 overflow-hidden text-start text-sm transition-colors"
         >

@@ -1159,7 +1159,7 @@ function MessageGroup({
       {stepItems.length > 0 ? (
         collapseSteps ? (
           <CompletedStepRun label={stepRunLabel}>
-            <div className="flex max-h-[520px] flex-col gap-2 overflow-y-auto">
+            <div data-steps-scroll="" className="flex max-h-[520px] flex-col gap-2 overflow-y-auto">
               {renderItems(stepItems, 0)}
               {foldedReasoning}
             </div>
@@ -1175,6 +1175,7 @@ function MessageGroup({
               markStepsGesture()
             }}
             onScroll={handleStepsScroll}
+            data-steps-scroll=""
             className="flex max-h-[520px] flex-col gap-2 overflow-y-auto"
           >
             {renderItems(stepItems, 0)}
