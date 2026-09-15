@@ -121,13 +121,16 @@ describe("seedSessionState gate", () => {
     expect(getSessionAgent(sessionId)).toBe("general");
   });
 
-  test("leaves a top-level session (no parent) untouched", () => {
+  test("seeds a top-level session from its runtime agent/model when there is no override", () => {
     seedSessionState(workspaceId, createSnapshot(createSession({
       agent: "build",
       model: { providerID: "openai", id: "gpt-5" },
     })));
 
-    expect(getSessionModelSelection(sessionId)).toBeNull();
-    expect(getSessionAgent(sessionId)).toBeUndefined();
+    expect(getSessionModelSelection(sessionId)).toEqual({
+      model: { providerID: "openai", modelID: "gpt-5" },
+      variant: null,
+    });
+    expect(getSessionAgent(sessionId)).toBe("build");
   });
 });

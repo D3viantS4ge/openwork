@@ -1440,13 +1440,12 @@ export function seedSessionState(workspaceId: string, snapshot: OpenworkSessionS
 
   queryClient.setQueryData(todoKey(workspaceId, snapshot.session.id), snapshot.todos);
 
-  // A subsession spawned by a subagent carries the subagent's actual
-  // agent/model/variant in its session info. Reconcile the per-session
-  // selection so opening the subsession shows (and continues to send with)
-  // what actually ran there instead of the global default.
-  if (snapshot.session.parentID) {
-    seedSessionSelectionFromRuntime(snapshot.session);
-  }
+  // Reconcile the per-session selection with the runtime's recorded
+  // agent/model/variant so opening any session shows (and continues to send
+  // with) what actually ran there — subagent subsessions, CLI-created
+  // sessions, sessions continued elsewhere — instead of the global default.
+  // No-op when the user already has a remembered override.
+  seedSessionSelectionFromRuntime(snapshot.session);
 }
 
 /**
