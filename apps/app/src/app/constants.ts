@@ -17,6 +17,13 @@ export const VARIANT_PREF_KEY = "openwork.modelVariant";
 export { LANGUAGE_PREF_KEY } from "../i18n";
 export const HIDE_TITLEBAR_PREF_KEY = "openwork.hideTitlebar";
 
+/**
+ * The OpenWork default agent. Sessions run with the app's "Default agent"
+ * picker resolve to this agent in the runtime, and the composer treats it as
+ * the implicit default (shown as "Default agent" rather than a named agent).
+ */
+export const DEFAULT_AGENT_NAME = "openwork";
+
 export const DEFAULT_MODEL: ModelRef = {
   providerID: "opencode",
   modelID: "big-pickle",

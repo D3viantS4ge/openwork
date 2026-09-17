@@ -7,6 +7,7 @@ import fuzzysort from "fuzzysort";
 import { toast } from "@/components/ui/sonner";
 import type { CloudImportedPlugin, CloudImportedPluginFile } from "@/app/cloud/import-state";
 import type { ComposerAttachment, McpServerEntry, McpStatus, McpStatusMap, ModelOption, ModelRef, SkillCard, SlashCommandOption } from "@/app/types";
+import { DEFAULT_AGENT_NAME } from "@/app/constants";
 import { t } from "@/i18n";
 import {
   composerConfigureSectionForMenu,
@@ -127,7 +128,6 @@ type ComposerProps = {
 
 const FLUSH_PROMPT_EVENT = "openwork:flushPromptDraft";
 const FOCUS_PROMPT_EVENT = "openwork:focusPrompt";
-const DEFAULT_AGENT_NAME = "openwork";
 
 function isNonDefaultAgent(agent: Agent) {
   return agent.name !== DEFAULT_AGENT_NAME;

@@ -9,8 +9,15 @@
 // used to fall back to the global default — showing an agent/model/variant
 // that never ran there. This fills that gap by seeding the stores only when
 // the session has no remembered override, so a user's explicit choice is
-// never clobbered. Callers decide the scope (subsessions vs. all sessions).
+// never clobbered.
+//
+// The recorded agent is the resolved agent name: a session run with the
+// app's "Default agent" picker resolves to the OpenWork default agent and is
+// recorded as such, so it must not be materialized as a per-session override
+// (that would flip the picker from "Default agent" to "Openwork").
 import type { Session } from "@opencode-ai/sdk/v2/client";
+
+import { DEFAULT_AGENT_NAME } from "@/app/constants";
 
 import { getSessionAgent, useSessionAgentStore } from "./session-agent-store";
 import {
@@ -31,7 +38,10 @@ export function seedSessionSelectionFromRuntime(session: Session): void {
     }
   }
 
-  if (session.agent?.trim()) {
+  // Only remember a real (non-default) agent. The default agent is already
+  // what an empty memory falls back to, so seeding it would surface "Openwork"
+  // instead of the user's "Default agent" selection.
+  if (session.agent?.trim() && session.agent !== DEFAULT_AGENT_NAME) {
     if (getSessionAgent(sessionId) === undefined) {
       useSessionAgentStore.getState().setAgent(sessionId, session.agent);
     }

@@ -104,6 +104,22 @@ describe("seedSessionSelectionFromRuntime", () => {
     expect(getSessionModelSelection(sessionId)).toBeNull();
     expect(getSessionAgent(sessionId)).toBeUndefined();
   });
+
+  test("does not seed the per-session agent when the runtime recorded the default agent", () => {
+    seedSessionSelectionFromRuntime(createSession({
+      parentID: "parent-session",
+      agent: "openwork",
+      model: { providerID: "openai", id: "gpt-5" },
+    }));
+
+    // The default agent is already what an empty memory falls back to, so
+    // materializing it would flip the picker from "Default agent" to "Openwork".
+    expect(getSessionModelSelection(sessionId)).toEqual({
+      model: { providerID: "openai", modelID: "gpt-5" },
+      variant: null,
+    });
+    expect(getSessionAgent(sessionId)).toBeUndefined();
+  });
 });
 
 describe("seedSessionState gate", () => {
@@ -132,5 +148,20 @@ describe("seedSessionState gate", () => {
       variant: null,
     });
     expect(getSessionAgent(sessionId)).toBe("build");
+  });
+
+  test("does not flip a top-level session to the default agent after a run", () => {
+    seedSessionState(workspaceId, createSnapshot(createSession({
+      agent: "openwork",
+      model: { providerID: "openai", id: "gpt-5" },
+    })));
+
+    // Reproduces the regression: a new session run with "Default agent"
+    // records "openwork" and previously flipped the agent picker.
+    expect(getSessionModelSelection(sessionId)).toEqual({
+      model: { providerID: "openai", modelID: "gpt-5" },
+      variant: null,
+    });
+    expect(getSessionAgent(sessionId)).toBeUndefined();
   });
 });
