@@ -30,7 +30,7 @@ export type ManagedOpencodeServer = {
   execution: OpencodeExecutionSnapshot;
   isAlive: () => boolean;
   close: () => Promise<void>;
-  captureLogs: () => ManagedOpencodeLogSnapshot;
+  captureLogs?: () => ManagedOpencodeLogSnapshot;
 };
 
 export type OpencodeExecutionEnvEntry = {

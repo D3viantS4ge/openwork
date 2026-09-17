@@ -2500,7 +2500,7 @@ export function SessionRoute() {
           const firstTaskAttachments = attachments ?? [];
           // Attachment chips only survive in-memory (File objects), so the
           // persisted fallback draft drops their tokens.
-          saveSessionDraft(workspaceId, session.id, { text: firstTaskPrompt.replace(/\[attachment [^\]]+\]/g, "").trim(), mode: "prompt" });
+          saveSessionDraft(sessionDraftScope, workspaceId, session.id, { text: firstTaskPrompt.replace(/\[attachment [^\]]+\]/g, "").trim(), mode: "prompt" });
           // The composer reads its draft from the composer state store,
           // not the persisted draft store — seed both.
           useComposerStateStore.getState().setDraft(session.id, firstTaskPrompt);

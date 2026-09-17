@@ -3188,7 +3188,7 @@ function createRoutes(
     }));
 
     if (result.changed) {
-      await writeOpenworkRuntimeConfigFile(config, workspace.id);
+      await writeOpenworkRuntimeConfigFile(config);
       emitReloadEvent(ctx.reloadEvents, workspace, "config", buildConfigTrigger(openworkRuntimeConfigFilePath(config)));
     }
 

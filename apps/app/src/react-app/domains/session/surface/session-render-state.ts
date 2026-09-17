@@ -1,6 +1,6 @@
 import type { UIMessage } from "ai";
 
-import type { OpenworkSessionHistory, OpenworkSessionSnapshot } from "../../../../app/lib/openwork-server";
+import type { OpenworkSessionHistory } from "../../../../app/lib/openwork-server";
 import { mergeSnapshotAndLiveMessages } from "../sync/message-merge";
 import { applyRevertCursor } from "../sync/transcript-reconcile";
 import { snapshotToUIMessages } from "../sync/usechat-adapter";
@@ -36,7 +36,7 @@ export function resolveRenderedSessionSnapshot(input: {
  * reverted snapshot messages mid-run (see deriveRenderedSessionMessages).
  */
 export function resolveEffectiveRevertState(input: {
-  snapshot: OpenworkSessionSnapshot | null | undefined;
+  snapshot: OpenworkSessionHistory | null | undefined;
   liveMessages: UIMessage[];
 }): { revertMessageId: string | null; hiddenCount: number } {
   const snapshot = input.snapshot;

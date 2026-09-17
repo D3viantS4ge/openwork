@@ -1640,22 +1640,6 @@ export function SessionSurface(props: SessionSurfaceProps) {
     };
   }, [liveStatus.type, props.sessionId]);
 
-  const status = useMemo((): ThreadStatus => {
-    if (sending) {
-      return "submitted";
-    }
-
-    if (liveStatus.type === "busy") {
-      return "streaming";
-    }
-
-    if (liveStatus.type === "retry") {
-      return "retrying";
-    }
-
-    return "ready";
-  }, [liveStatus, sending]);
-
   const [evalThreadStatus, setEvalThreadStatus] = useState<ThreadStatus | null>(null);
   const autoSendPayload = getComposerAutoSendPayload(props.sessionId, sessionOwner);
   const autoSending = (Boolean(autoSendPayload)

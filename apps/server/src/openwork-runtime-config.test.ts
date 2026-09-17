@@ -152,7 +152,7 @@ describe("openwork runtime config file", () => {
 
   test("plain agent opts out of OpenWork and has a minimal prompt", async () => {
     const { config } = await setup();
-    await writeOpenworkRuntimeConfigFile(config, "ws_1");
+    await writeOpenworkRuntimeConfigFile(config);
 
     const parsed = await readConfigFile(config);
     const agent = parsed.agent as Record<string, Record<string, unknown>>;
