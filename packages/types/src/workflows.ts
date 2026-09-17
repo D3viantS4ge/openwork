@@ -35,11 +35,58 @@ export const workflowAutomationReferenceSchema = z.object({
 })
 export type WorkflowAutomationReference = z.infer<typeof workflowAutomationReferenceSchema>
 
+export const workflowGraphNodeSchema = z.discriminatedUnion("kind", [
+  z.object({
+    id: z.string(),
+    kind: z.literal("input"),
+    label: z.string(),
+    fields: z.array(z.string()),
+  }),
+  z.object({
+    id: z.string(),
+    kind: z.literal("tool"),
+    label: z.string(),
+    namespace: z.string(),
+    tool: z.string(),
+    scriptPath: z.string(),
+    assignsTo: z.string().nullable(),
+    parallelGroup: z.string().nullable(),
+  }),
+  z.object({ id: z.string(), kind: z.literal("search"), label: z.string() }),
+  z.object({ id: z.string(), kind: z.literal("branch"), label: z.string() }),
+  z.object({ id: z.string(), kind: z.literal("loop"), label: z.string() }),
+  z.object({ id: z.string(), kind: z.literal("return"), label: z.string() }),
+])
+export type WorkflowGraphNode = z.infer<typeof workflowGraphNodeSchema>
+
+export const workflowGraphEdgeSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  label: z.string().nullable(),
+  kind: z.enum(["flow", "data"]),
+})
+export type WorkflowGraphEdge = z.infer<typeof workflowGraphEdgeSchema>
+
+export const workflowGraphSchema = z.object({
+  nodes: z.array(workflowGraphNodeSchema),
+  edges: z.array(workflowGraphEdgeSchema),
+  parseError: z.string().nullable(),
+})
+export type WorkflowGraph = z.infer<typeof workflowGraphSchema>
+
+export const workflowRunPreviewSchema = z.object({
+  configObjectId: idSchema,
+  title: z.string(),
+  graph: workflowGraphSchema.nullable(),
+})
+export type WorkflowRunPreview = z.infer<typeof workflowRunPreviewSchema>
+
 export const workflowVersionSchema = z.object({
   id: idSchema,
   // Authoring source and example input are OpenWork management data, not MCP
   // runtime data. Non-manager detail responses intentionally return null.
   code: z.string().nullable(),
+  graph: workflowGraphSchema.nullable(),
   inputSchema: z.unknown().nullable(),
   outputSchema: z.unknown().nullable(),
   exampleInput: z.unknown().nullable().optional(),
@@ -65,6 +112,7 @@ export const workflowArtifactSnapshotSchema = z.object({
   inputSchemaDigest: digestSchema.nullable(),
   outputSchemaDigest: digestSchema.nullable(),
   rendererVersion: z.literal("codemode-markdown-v1").nullable(),
+  toolCalls: z.array(z.object({ name: z.string() })),
   status: z.enum(["succeeded", "failed"]),
   errorKind: z.string().nullable(),
   errorMessage: z.string().nullable(),
@@ -167,14 +215,41 @@ export const generatedArtifactViewRevisionSchema = z.object({
 export type GeneratedArtifactViewRevision = z.infer<typeof generatedArtifactViewRevisionSchema>
 
 export const generatedArtifactViewSchema = z.object({
+  dataMode: z.enum(["live", "snapshot"]).optional(),
   id: idSchema,
   configObjectId: idSchema,
   title: z.string().trim().min(1).max(255),
   description: z.string().trim().max(2_000).nullable(),
   status: z.enum(["active", "retired"]),
   activeRevisionId: idSchema.nullable(),
+  useInWorkflow: z.boolean().optional(),
   revisions: z.array(generatedArtifactViewRevisionSchema),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 })
 export type GeneratedArtifactView = z.infer<typeof generatedArtifactViewSchema>
+
+export const savedAppSummarySchema = z.object({
+  view: generatedArtifactViewSchema,
+  workflowTitle: z.string(),
+  canManage: z.boolean(),
+  onDashboard: z.boolean(),
+})
+export type SavedAppSummary = z.infer<typeof savedAppSummarySchema>
+
+export const savedAppDetailSchema = savedAppSummarySchema.extend({
+  revision: generatedArtifactViewRevisionSchema.nullable(),
+  html: z.string().nullable(),
+  payload: workflowArtifactPayloadSchema.nullable(),
+  previewNotice: z.string().nullable(),
+  runError: z.record(z.string(), z.unknown()).optional(),
+})
+export type SavedAppDetail = z.infer<typeof savedAppDetailSchema>
+
+export const saveAppSchema = z.object({
+  revisionId: idSchema,
+  title: z.string().trim().min(1).max(255),
+  useInWorkflow: z.boolean(),
+  expectedActiveRevisionId: idSchema.nullable(),
+})
+export type SaveApp = z.infer<typeof saveAppSchema>

@@ -3,6 +3,10 @@ title: "Add a custom MCP server"
 description: "Connect a custom or local MCP server that is not available through OpenWork Connect"
 ---
 
+<Note>
+**Local workspace setup.** Custom MCP servers are supported without an OpenWork Cloud account, so this path stays free and local to the current workspace. For a connection managed and assigned by your organization, use [OpenWork Cloud Connectors](/cloud/share-with-your-team/shared-mcp-connections).
+</Note>
+
 Use this guide only when you need a custom or local MCP server that is not available through OpenWork Connect.
 
 For Gmail, Google Calendar, Google Drive, Slack, Notion, Linear, and other
@@ -38,8 +42,9 @@ back to OpenWork. If a custom MCP needs behavior OpenWork does not support,
 
 Some MCP servers do not support dynamic client registration. If the server gives you a pre-registered OAuth client ID and client secret, add it through `Add workspace MCP` > `OAuth on this device`.
 
-For an advanced local Slack setup, follow
-[Connect Slack as a custom MCP](/start-here/connect-your-stack/connect-slack-mcp).
+<Note>
+Workspace MCPs are local to you. To share an MCP App with the organization as a dashboard, add it in OpenWork Cloud **Connectors** and see [Dashboards](/cloud/share-with-your-team/dashboards).
+</Note>
 
 <Frame>
   ![Error when MCP server does not support dynamic client registration](/images/mcp-dynamic-registration-error.png)

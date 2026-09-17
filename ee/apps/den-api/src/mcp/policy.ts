@@ -12,7 +12,6 @@ const SAFE_INCLUDED_TAGS = new Set([
   "Workers",
   "Worker Runtime",
   "Worker Activity",
-  "Memory",
   "Config Objects",
   "Plugins",
   "Marketplaces",

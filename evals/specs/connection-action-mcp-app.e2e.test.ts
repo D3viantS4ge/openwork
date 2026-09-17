@@ -1,456 +1,111 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
-import { expect, onTestFinished } from "vitest"
-import { clickButton, createAndSelectWorkspace, createOrgConnection, denFetch, evalIn, waitFor } from "@openwork/behaviors"
-import { connect, debuggerUrlFor, evaluate, listTargets } from "@openwork/cdp"
-import { desktop } from "@openwork/hosts"
-import { screenshot } from "@openwork/test-evidence"
-import { localMysqlIsRunning, needs, server, test } from "@openwork/testkit"
+import { expect } from "vitest";
+import { spec } from "@openwork/testkit";
+import { connectionActionMcpApp, connectionActionPrompt, connectionActionReply, connectionStatusPrompt, isRecord, ordinaryDiscoveryPrompt, ordinaryDiscoveryReply } from "../worlds/library.ts";
 
-const providerId = "connection-action-mcp-app-provider"
-const modelId = "connection-action-mcp-app-model"
-const resourceUri = "ui://openwork/connection-action/v1/view.html"
-const connectionName = "Acme Tracker (E2E)"
-const closingReply = "Connect your Acme Tracker account, then ask again."
-const e2eTestsEnabled = process.env.OPENWORK_EVAL_E2E_TESTS === "1"
-const localPlacement = process.env.OPENWORK_EVAL_DAYTONA !== "1"
-  && !process.env.OPENWORK_EVAL_DEN_API_URL?.trim()
-const mysqlOpen = await localMysqlIsRunning()
-const title = !e2eTestsEnabled
-  ? "connection-action MCP App skipped — needs: set OPENWORK_EVAL_E2E_TESTS=1"
-  : !localPlacement
-    ? "connection-action MCP App skipped — needs local placement without OPENWORK_EVAL_DEN_API_URL"
-    : !mysqlOpen
-      ? "connection-action MCP App skipped — needs MySQL on 127.0.0.1:3306"
-      : "a failed capability result renders the first-party connection-action MCP App"
+const test = spec.world(connectionActionMcpApp, { timeout: 600_000 });
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
+function record(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error("Expected an object");
+  return value;
 }
 
-function readBody(request: IncomingMessage): Promise<string> {
-  request.setEncoding("utf8")
-  return new Promise((resolve, reject) => {
-    let body = ""
-    request.on("data", (chunk: string) => {
-      body += chunk
-    })
-    request.on("end", () => resolve(body))
-    request.on("error", reject)
-  })
-}
-
-function sendJson(response: ServerResponse, status: number, body: unknown): void {
-  response.writeHead(status, {
-    "access-control-allow-origin": "*",
-    "cache-control": "no-store",
-    "content-type": "application/json",
-  })
-  response.end(JSON.stringify(body))
-}
-
-function streamChunk(delta: Record<string, unknown>, finishReason: string | null = null) {
-  return {
-    id: "chatcmpl-connection-action-mcp-app",
-    object: "chat.completion.chunk",
-    created: 1,
-    model: modelId,
-    choices: [{ index: 0, delta, finish_reason: finishReason }],
-  }
-}
-
-function sendStream(response: ServerResponse, chunks: Record<string, unknown>[]): void {
-  response.writeHead(200, {
-    "cache-control": "no-cache",
-    connection: "keep-alive",
-    "content-type": "text/event-stream",
-  })
-  let delay = 250
-  for (const chunk of chunks) {
-    setTimeout(() => response.write(`data: ${JSON.stringify(chunk)}\n\n`), delay)
-    delay += 250
-  }
-  setTimeout(() => response.end("data: [DONE]\n\n"), delay)
-}
-
-function projectedExecuteCapabilityTool(payload: Record<string, unknown>): string | null {
-  if (!Array.isArray(payload.tools)) return null
-  for (const tool of payload.tools) {
-    if (!isRecord(tool) || !isRecord(tool.function)) continue
-    const name = tool.function.name
-    if (typeof name === "string" && name.endsWith("_execute_capability")) return name
-  }
-  return null
-}
-
-function projectedSearchCapabilitiesTool(payload: Record<string, unknown>): string | null {
-  if (!Array.isArray(payload.tools)) return null
-  for (const tool of payload.tools) {
-    if (!isRecord(tool) || !isRecord(tool.function)) continue
-    const name = tool.function.name
-    if (typeof name === "string" && name.endsWith("_search_capabilities")) return name
-  }
-  return null
-}
-
-function completedToolCount(payload: Record<string, unknown>): number {
-  return Array.isArray(payload.messages)
-    ? payload.messages.filter((message) => isRecord(message) && message.role === "tool").length
-    : 0
-}
-
-async function waitForMountedConnectionCard(app: Awaited<ReturnType<typeof desktop>>, timeoutMs = 15_000): Promise<{ mounted: boolean; text: string }> {
-  const deadline = Date.now() + timeoutMs
-  let lastText = ""
-  while (Date.now() < deadline) {
-    const targets = await listTargets(app.handle.cdpUrl)
-    const sandbox = targets.find((target) => target.type === "iframe"
-      && target.url.includes("/mcp-apps/sandbox.html")
-      && target.webSocketDebuggerUrl)
-    if (sandbox) {
-      const client = await connect(debuggerUrlFor(app.handle.cdpUrl, sandbox))
-      try {
-        const text = await evaluate(client, `(() => {
-          const text = document.querySelector("iframe")?.contentDocument?.body?.innerText ?? "";
-          return text;
-        })()`)
-        if (typeof text === "string") {
-          lastText = text
-          const normalized = text.toLocaleLowerCase()
-          const mounted = normalized.includes("connection needed")
-            && normalized.includes(connectionName.toLocaleLowerCase())
-            && normalized.includes("not connected")
-            && normalized.includes(`connect ${connectionName.toLocaleLowerCase()}`)
-          if (mounted) return { mounted: true, text }
-        }
-      } finally {
-        client.close()
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250))
-  }
-  return { mounted: false, text: lastText }
-}
-
-test.skipIf(!e2eTestsEnabled || !localPlacement || !mysqlOpen)(title, { timeout: 360_000 }, async ({ evidence, place }) => {
-  needs({ optIn: ["OPENWORK_EVAL_E2E_TESTS"] })
-
-  await using den = await server({
-    place,
-    org: { name: `Connection Action App ${Date.now()}`, admin: { name: "Avery" } },
-  })
-  const orgsResult = await denFetch(den.admin, "/v1/me/orgs", {
-    headers: { authorization: `Bearer ${den.admin.token}` },
-  })
-  const organizations = isRecord(orgsResult.body) && Array.isArray(orgsResult.body.orgs)
-    ? orgsResult.body.orgs.filter(isRecord)
-    : []
-  const organizationId = String(organizations[0]?.id ?? "")
-  expect(organizationId).toMatch(/^org_/)
-
-  const connection = await createOrgConnection(den.admin, {
-    name: connectionName,
-    url: "https://acme-tracker.invalid/mcp",
-    authType: "oauth",
-    credentialMode: "per_member",
-    access: { orgWide: true },
-  })
-  const realToolCapability = `mcp:${connection.id}:list_charges`
-  const searchQueries = [
-    "Stripe revenue",
-    "Stripe balance payments revenue",
-    "list Stripe charges subscriptions invoices",
-    "Stripe charges",
-  ]
-
-  let modelExecuteCalls = 0
-  const fixture = createServer((request, response) => {
-    void (async () => {
-      const url = new URL(request.url ?? "/", "http://127.0.0.1")
-      if (request.method === "GET" && url.pathname === "/v1/models") {
-        sendJson(response, 200, { object: "list", data: [{ id: modelId, object: "model" }] })
-        return
-      }
-      if (request.method === "POST" && (url.pathname === "/v1/chat/completions" || url.pathname === "/chat/completions")) {
-        const parsed: unknown = JSON.parse(await readBody(request))
-        if (!isRecord(parsed)) throw new Error("Mock provider received a non-object request.")
-        const completed = completedToolCount(parsed)
-        if (completed >= searchQueries.length + 1) {
-          sendStream(response, [
-            streamChunk({ role: "assistant" }),
-            streamChunk({ content: closingReply }),
-            streamChunk({}, "stop"),
-          ])
-          return
-        }
-        const searching = completed < searchQueries.length
-        const toolName = searching
-          ? projectedSearchCapabilitiesTool(parsed)
-          : projectedExecuteCapabilityTool(parsed)
-        if (!toolName) throw new Error(`The ${searching ? "search_capabilities" : "execute_capability"} tool was not projected to the model.`)
-        if (!searching) modelExecuteCalls += 1
-        sendStream(response, [
-          streamChunk({ role: "assistant" }),
-          streamChunk({
-            tool_calls: [{
-              index: 0,
-              id: searching ? `call_search_acme_${completed}` : "call_list_acme_charges",
-              type: "function",
-              function: {
-                name: toolName,
-                arguments: JSON.stringify(searching
-                  ? { query: searchQueries[completed] }
-                  : { name: realToolCapability }),
-              },
-            }],
-          }),
-          streamChunk({}, "tool_calls"),
-        ])
-        return
-      }
-      sendJson(response, 404, { error: { message: "not found" } })
-    })().catch((error: unknown) => {
-      if (!response.headersSent) sendJson(response, 500, { error: String(error) })
-      else response.destroy(error instanceof Error ? error : undefined)
-    })
-  })
-  await new Promise<void>((resolve, reject) => {
-    fixture.once("error", reject)
-    fixture.listen(0, "127.0.0.1", resolve)
-  })
-  onTestFinished(async () => {
-    await new Promise<void>((resolve, reject) => fixture.close((error) => error ? reject(error) : resolve()))
-  })
-  const address = fixture.address()
-  if (!address || typeof address === "string") throw new Error("Connection-action model fixture did not bind a port.")
-  const fixtureUrl = `http://127.0.0.1:${address.port}`
-
-  const tokenResult = await denFetch(den.admin, "/v1/mcp/token", {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${den.admin.token}`,
-      "x-openwork-org-id": organizationId,
-    },
-    body: JSON.stringify({ scopes: ["mcp:read", "mcp:write"] }),
-  })
-  expect(tokenResult.response.ok, tokenResult.text).toBe(true)
-  const mcpToken = isRecord(tokenResult.body) && typeof tokenResult.body.token === "string"
-    ? tokenResult.body.token
-    : ""
-  expect(mcpToken).toMatch(/^ow_mcp_at_/)
-
-  await using app = await desktop({
-    name: "connection-action-mcp-app",
-    mode: process.env.OPENWORK_EVAL_CDP_URL?.trim() ? "attach" : "spawn",
-    env: {
-      ANTHROPIC_API_KEY: "",
-      OPENAI_API_KEY: "",
-      OPENROUTER_API_KEY: "",
-      GOOGLE_GENERATIVE_AI_API_KEY: "",
-      OPENWORK_API_KEY: "",
-      OPENWORK_INFERENCE_BASE_URL: "",
-    },
-  })
-  const workspace = await createAndSelectWorkspace(app, {
-    path: `/tmp/openwork-connection-action-mcp-app-${Date.now()}`,
-  })
-  const configured = await evalIn(app, `(async () => {
-    const port = localStorage.getItem("openwork.server.port");
-    const token = localStorage.getItem("openwork.server.token");
-    if (!port || !token) return "missing local server credentials";
-    const request = async (path, init) => {
-      const response = await fetch("http://127.0.0.1:" + port + path, {
-        ...init,
-        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
-      });
-      if (!response.ok) return path + " failed: " + response.status + " " + (await response.text()).slice(0, 500);
-      return "ok";
-    };
-    const workspaceId = ${JSON.stringify(workspace.workspaceId)};
-    const patched = await request("/workspace/" + encodeURIComponent(workspaceId) + "/config", {
-      method: "PATCH",
-      body: JSON.stringify({
-        opencode: {
-          provider: {
-            [${JSON.stringify(providerId)}]: {
-              npm: "@ai-sdk/openai-compatible",
-              name: "Connection-action MCP App model",
-              options: { baseURL: ${JSON.stringify(`${fixtureUrl}/v1`)}, apiKey: "sk-connection-action-mcp-app" },
-              models: { [${JSON.stringify(modelId)}]: { name: "Connection-action MCP App model", tool_call: true } },
-            },
-          },
-        },
-      }),
-    });
-    if (patched !== "ok") return patched;
-    const reloaded = await request("/workspace/" + encodeURIComponent(workspaceId) + "/engine/reload", { method: "POST" });
-    if (reloaded !== "ok" && !reloaded.includes("opencode_reload_timeout")) return reloaded;
-    const reconcileResponse = await fetch("http://127.0.0.1:" + port + "/workspace/" + encodeURIComponent(workspaceId) + "/mcp/openwork-cloud/reconcile", {
+for (const entry of [
+  { name: "connection search", prompt: connectionActionPrompt, tools: ["search_capabilities"] },
+  { name: "connection status execution", prompt: connectionStatusPrompt, tools: ["search_capabilities", "execute_capability"] },
+]) {
+test(`desktop connects through ${entry.name} with one native card and confirms authorization in chat`, async ({ world, agent, user, probe, evidence }) => {
+  let requestId = 0;
+  async function gateway(method: string, params: Record<string, unknown> = {}) {
+    const response = await fetch(`${world.den.ref.apiUrl}/mcp/agent`, {
       method: "POST",
-      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        config: {
-          type: "remote",
-          url: ${JSON.stringify(`${den.ref.apiUrl}/mcp/agent`)},
-          enabled: true,
-          headers: { Authorization: ${JSON.stringify(`Bearer ${mcpToken}`)} },
-          oauth: false,
-        },
-        provider: ${JSON.stringify(providerId)},
-        model: ${JSON.stringify(modelId)},
-        trigger: "connection-action-mcp-app-e2e",
-      }),
+      headers: { authorization: `Bearer ${world.appHostSession.token}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: ++requestId, method, params }),
+      signal: AbortSignal.timeout(60_000),
     });
-    const reconcileText = await reconcileResponse.text();
-    if (!reconcileResponse.ok) return "Cloud MCP reconcile failed: " + reconcileResponse.status + " " + reconcileText.slice(0, 1_000);
-    const health = JSON.parse(reconcileText);
-    if (health?.phase !== "ready") return "Cloud MCP reconcile was not ready: " + JSON.stringify(health).slice(0, 2_000);
-    const raw = localStorage.getItem("openwork.preferences");
-    let preferences = {};
-    try { preferences = raw ? JSON.parse(raw) : {}; } catch { preferences = {}; }
-    if (!preferences || typeof preferences !== "object" || Array.isArray(preferences)) preferences = {};
-    localStorage.setItem("openwork.preferences", JSON.stringify({
-      ...preferences,
-      defaultModel: { providerID: ${JSON.stringify(providerId)}, modelID: ${JSON.stringify(modelId)} },
-      modelVariant: null,
-      providerStepCompleted: true,
-    }));
-    localStorage.setItem("openwork.defaultModel", ${JSON.stringify(`${providerId}/${modelId}`)});
-    localStorage.removeItem("openwork.sessionModels." + workspaceId);
-    return "ok";
-  })()`, { awaitPromise: true, timeoutMs: 90_000 })
-  expect(configured).toBe("ok")
+    expect(response.status).toBe(200);
+    const raw = await response.text();
+    const line = raw.split("\n").find(value => value.startsWith("data:"));
+    return record(JSON.parse(line ? line.slice(5) : raw));
+  }
+  const tools = record((await gateway("tools/list")).result).tools;
+  expect(Array.isArray(tools)).toBe(true);
+  expect(tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: "execute_capability" })]));
+  expect(tools).not.toEqual(expect.arrayContaining([expect.objectContaining({ name: "connection_action" })]));
+  const legacyUri = "ui://openwork/connection-action/v1/view.html";
+  const resources = record((await gateway("resources/list")).result).resources;
+  expect(Array.isArray(resources)).toBe(true);
+  expect(resources).not.toEqual(expect.arrayContaining([expect.objectContaining({ uri: legacyUri })]));
+  const retiredResource = await gateway("resources/read", { uri: legacyUri });
+  expect(retiredResource.error).toBeDefined();
+  expect(retiredResource.result).toBeUndefined();
+  evidence.recordAssertionEvidence("The gateway no longer exposes the legacy connection app", "App-host tools include execute_capability but omit connection_action; resources omit the retired URI and a direct read returns an error without HTML", true);
 
-  await evalIn(app, "location.reload(); true")
-  await waitFor(app, "Boolean(window.__openworkControl)", { timeoutMs: 30_000, label: "desktop control after reload" })
-  await waitFor(app, `window.__openworkControl.listActions().some((action) => action.id === "session.create_task" && !action.disabled)`, {
-    timeoutMs: 60_000,
-    label: "new task action ready",
-  })
-  const task = await evalIn(app, `(async () => {
-    const deadline = Date.now() + 60_000;
-    let last = null;
-    while (Date.now() < deadline) {
-      last = await window.__openworkControl.execute("session.create_task", null);
-      if (last?.ok === true) return last;
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-    }
-    return { ...last, hash: location.hash, text: (document.body?.innerText ?? "").slice(0, 2_000) };
-  })()`, {
-    awaitPromise: true,
-    timeoutMs: 70_000,
-  })
-  expect(task, JSON.stringify(task)).toMatchObject({ ok: true })
-  await waitFor(app, `(() => {
-    const editor = document.querySelector('[contenteditable="true"][data-lexical-editor="true"]');
-    if (!(editor instanceof HTMLElement)) return false;
-    editor.focus();
-    return true;
-  })()`, {
-    timeoutMs: 30_000,
-    label: "composer focused",
-  })
-  await app.client.send("Input.insertText", {
-    text: "Check whether the Acme Tracker connection is ready to use.",
-  })
-  await clickButton(app, "Run task", { timeoutMs: 30_000 })
+  await agent.send(ordinaryDiscoveryPrompt);
+  await user.see({ text: ordinaryDiscoveryReply }, { timeoutMs: 120_000 });
+  await user.notSee({ testId: "desktop-connection-card" });
+  await user.notSee({ testId: "connector-catalog" });
+  await user.notSee({ role: "button", label: "Connect Notion" });
+  expect((await world.den.mocks.connector.requests()).filter(request => request.path === "/authorize")).toHaveLength(0);
+  const discoveryCalls = await world.den.mocks.connector.agentRequests({ promptMarker: ordinaryDiscoveryPrompt });
+  expect(discoveryCalls.filter(call => call.kind === "tool")).toHaveLength(1);
+  await user.screenshot();
+  evidence.recordAssertionEvidence("Ordinary discovery of an unconnected service stays quiet", "Dashboard capability search completed without a connection card, catalog, Connect button, or provider authorization request", true);
+  expect(entry.prompt).not.toContain(world.connection.id);
+  await agent.send(entry.prompt);
+  await user.see({ text: connectionActionReply }, { timeoutMs: 120_000 });
+  await user.see({ testId: "desktop-connection-card" });
+  await user.see({ role: "button", label: "Connect Notion" });
+  await user.notSee({ text: "Connected" });
+  await user.notSee({ text: "Finish sign-in in your browser" });
+  const calls = await world.den.mocks.connector.agentRequests({ promptMarker: entry.prompt });
+  const toolCalls = calls.filter(call => call.kind === "tool");
+  expect(toolCalls).toHaveLength(entry.tools.length);
+  for (const [index, tool] of entry.tools.entries()) expect(toolCalls[index]?.toolName).toMatch(new RegExp(`${tool}$`));
+  expect((await world.den.mocks.connector.requests()).filter(request => request.path === "/authorize")).toHaveLength(0);
+  const compact = await probe.eval(() => {
+    const card = document.querySelector<HTMLElement>('[data-testid="desktop-connection-card"]');
+    return { count: document.querySelectorAll('[data-testid="desktop-connection-card"]').length, height: card?.getBoundingClientRect().height, width: card?.getBoundingClientRect().width, hasChecklist: Boolean(card?.querySelector('ol')), embeddedApp: Boolean(document.querySelector<HTMLElement>('[data-mcp-app-resource="ui://openwork/connection-action/v1/view.html"]')) };
+  });
+  expect(compact).toMatchObject({ count: 1, hasChecklist: false, embeddedApp: false });
+  if (!compact || typeof compact !== "object" || !("height" in compact) || typeof compact.height !== "number" || !("width" in compact) || typeof compact.width !== "number") throw new Error("The connection card was not rendered.");
+  expect(compact.height).toBeLessThan(88);
+  await user.screenshot();
+  evidence.recordAssertionEvidence(`${entry.name} shows one native connection card without a checklist or embedded setup`, JSON.stringify(compact), true);
+  evidence.recordAssertionEvidence("Authorization does not start before the user clicks Connect", "No provider authorization request before Connect", true);
 
-  await waitFor(app, `document.body.innerText.includes(${JSON.stringify(closingReply)})`, {
-    timeoutMs: 120_000,
-    label: "connection-action closing reply",
-  })
-  expect(modelExecuteCalls).toBe(1)
-
-  const persistedTools = await evalIn(app, `(async () => {
-    const port = localStorage.getItem("openwork.server.port");
-    const token = localStorage.getItem("openwork.server.token");
-    if (!port || !token) return { error: "missing local server credentials" };
-    const routeParts = location.hash.split("/");
-    const sessionIndex = routeParts.indexOf("session");
-    const sessionId = sessionIndex >= 0 ? decodeURIComponent(routeParts[sessionIndex + 1] || "") : "";
-    const response = await fetch(
-      "http://127.0.0.1:" + port + "/workspace/" + encodeURIComponent(${JSON.stringify(workspace.workspaceId)})
-        + "/sessions/" + encodeURIComponent(sessionId) + "/messages?limit=50",
-      { headers: { Authorization: "Bearer " + token } },
-    );
-    const payload = await response.json();
-    const parts = [];
-    for (const message of Array.isArray(payload?.items) ? payload.items : []) {
-      for (const part of Array.isArray(message?.parts) ? message.parts : []) {
-        if (typeof part?.tool === "string" && part.tool.endsWith("_execute_capability")) {
-          parts.push({ tool: part.tool, state: part.state?.status });
-        }
-      }
-    }
-    return { parts };
-  })()`, { awaitPromise: true, timeoutMs: 30_000 })
-  const parts = isRecord(persistedTools) && Array.isArray(persistedTools.parts)
-    ? persistedTools.parts.filter(isRecord)
-    : []
-  expect(parts.length, JSON.stringify(persistedTools)).toBe(1)
-  expect(parts[parts.length - 1], JSON.stringify(persistedTools)).toMatchObject({
-    tool: "openwork-cloud_execute_capability",
-    state: "error",
-  })
-
-  await waitFor(app, `Boolean(document.querySelector(${JSON.stringify(`[data-mcp-app-resource="${resourceUri}"] iframe`)}))`, {
-    timeoutMs: 60_000,
-    label: `connection-action MCP App frame after ${JSON.stringify(parts)}`,
-  })
-  const mounted = await waitForMountedConnectionCard(app)
-  const transcript = String(await evalIn(app, "document.body?.innerText ?? ''"))
-  expect(mounted.mounted, `${transcript}\nIframe: ${mounted.text}`).toBe(true)
-  expect(transcript).not.toContain("Interactive view unavailable")
-  expect(transcript).not.toContain("MCP_APP_RESOURCE_NOT_FOUND")
-
-  // Session sync can briefly remount the message list (and its app frame)
-  // right after the run completes; settle before capturing visual evidence.
-  await waitFor(app, `!document.body.innerText.includes("Pulling in the latest messages")`, {
-    timeoutMs: 60_000,
-    label: "session sync settled before screenshot",
-  })
-  await waitFor(app, `Boolean(document.querySelector(${JSON.stringify(`[data-mcp-app-resource="${resourceUri}"] iframe`)}))`, {
-    timeoutMs: 60_000,
-    label: "connection-action frame after session sync",
-  })
-  const remounted = await waitForMountedConnectionCard(app, 30_000)
-  expect(remounted.mounted, remounted.text).toBe(true)
-  await evalIn(app, `document.querySelector('[data-mcp-app-resource="${resourceUri}"]')?.scrollIntoView({ block: "center" })`)
-  await waitFor(app, `(() => {
-    const card = document.querySelector('[data-mcp-app-resource="${resourceUri}"]');
-    if (!(card instanceof HTMLElement)) return false;
-    const worked = [...document.querySelectorAll("button")].find((button) => button.textContent?.trim().startsWith("Worked for"));
-    if (!(worked instanceof HTMLElement) || worked.getAttribute("aria-expanded") !== "false") return false;
-    const cardRect = card.getBoundingClientRect();
-    if (cardRect.width <= 0 || cardRect.height <= 0) return false;
-    for (let node = card.parentElement; node; node = node.parentElement) {
-      const style = getComputedStyle(node);
-      const rect = node.getBoundingClientRect();
-      if (style.display === "none" || style.visibility === "hidden") return false;
-      if ((style.overflowY === "hidden" || style.overflowY === "clip") && rect.height === 0) return false;
-    }
-    return true;
-  })()`, {
-    timeoutMs: 30_000,
-    label: "connection-action card visible outside collapsed work",
-  })
-  await new Promise((resolve) => setTimeout(resolve, 500))
-  // Ambient visual evidence of the rendered card; the iframe text assertions
-  // above are the enforced proof of its contents.
-  await screenshot(app)
-
-  evidence.recordAssertionEvidence(
-    "A failed provider tool call renders its attached connection card directly",
-    "The model called only the concrete provider tool, which failed with needs_connection; Desktop rendered the MCP App attached to that error without a second connection-status probe.",
-    modelExecuteCalls === 1,
-  )
-  evidence.recordAssertionEvidence(
-    "Connection steering renders its standard MCP App",
-    "Desktop mounted ui://openwork/connection-action/v1/view.html showing Connection needed, the connection name, Not connected, and a Connect action rather than only JSON steering text.",
-    mounted.mounted,
-  )
-  evidence.recordAssertionEvidence(
-    "The connection card remains visible outside collapsed work details",
-    "The card has visible layout while the Worked section remains collapsed; no Worked or Used expansion is required.",
-    true,
-  )
-})
+  await probe.eval(() => {
+    const card = document.querySelector<HTMLElement>('[data-testid="desktop-connection-card"]');
+    if (!card) throw new Error("Connection card missing");
+    const sizes: { width: number; height: number; text: string | null }[] = [];
+    const record = () => { const rect = card.getBoundingClientRect(); sizes.push({ width: rect.width, height: rect.height, text: card.textContent }); card.dataset.observedSizes = JSON.stringify(sizes); };
+    new MutationObserver(record).observe(card, { childList: true, subtree: true, characterData: true });
+    record();
+  });
+  const clickedAt = new Date().toISOString();
+  await user.click({ role: "button", label: "Connect Notion" });
+  const authorization = await world.den.mocks.connector.authorizeRequestSince(clickedAt, { timeoutMs: 60_000 });
+  expect(authorization.path).toBe("/authorize");
+  expect(authorization.params.get("state")).toBeTruthy();
+  await user.see({ text: "Connected" }, { timeoutMs: 120_000 });
+  await user.notSee({ role: "button", label: "Connect Notion" });
+  await user.notSee({ text: "Your Connections" });
+  const completed = await probe.eval(() => {
+    const card = document.querySelector<HTMLElement>('[data-testid="desktop-connection-card"]');
+    return { height: card?.getBoundingClientRect().height, width: card?.getBoundingClientRect().width, buttons: card?.querySelectorAll('button').length };
+  });
+  expect(completed).toMatchObject({ buttons: 0 });
+  if (!completed || typeof completed !== "object" || !("height" in completed) || typeof completed.height !== "number") throw new Error("The connected indicator was not rendered.");
+  expect(completed.height).toBe(compact.height);
+  expect(completed).toMatchObject({ width: compact.width });
+  evidence.recordAssertionEvidence("Connection completion preserves the card dimensions", JSON.stringify({ ready: compact, connected: completed }), true);
+  const transitions = await probe.eval(() => (JSON.parse(document.querySelector<HTMLElement>('[data-testid="desktop-connection-card"]')?.getAttribute("data-observed-sizes") ?? "[]")));
+  if (!Array.isArray(transitions)) throw new Error("No card transition measurements were recorded");
+  for (const dimensions of transitions) expect(dimensions).toMatchObject({ width: compact.width, height: compact.height });
+  for (const status of ["Opening sign-in…", "Finish sign-in in your browser", "Ready to use"]) {
+    expect(transitions).toEqual(expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining(status) })]));
+  }
+  evidence.recordAssertionEvidence("Sign-in transitions keep the card dimensions stable", JSON.stringify(transitions), true);
+  await user.screenshot();
+  evidence.recordAssertionEvidence("Desktop opens the provider directly and confirms completion without a Den screen", "Provider /authorize received the browser handoff; the native card shows Connected and removes Connect", true);
+});
+}

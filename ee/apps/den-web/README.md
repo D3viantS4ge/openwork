@@ -9,8 +9,8 @@ Frontend for `app.openworklabs.com`.
 - Lists and connects existing cloud workers.
 - Sends users to the organization billing page for subscription management.
 - Offers desktop handoff actions so users can open the generated worker directly in OpenWork or copy the connect credentials manually.
-- Uses a Next.js proxy route (`/api/den/*`) to reach `api.openworklabs.com` without browser CORS issues.
-- Uses a same-origin auth proxy (`/api/auth/*`) so GitHub OAuth callbacks can land on `app.openworklabs.com`.
+- Calls the Den API directly at the matching `api.*` origin (for example, `app.openworklabs.com` -> `api.app.openworklabs.com`), including Better Auth traffic.
+- Keeps a same-origin auth proxy (`/api/auth/*`) only for compatibility with already-registered auth callbacks that still land on the web host.
 
 ## Current hosted user flow
 
@@ -28,19 +28,42 @@ Frontend for `app.openworklabs.com`.
 3. Open:
    `http://localhost:3005`
 
+### Styling
+
+Den and desktop use Tailwind 4.3.3. Den uses `@tailwindcss/postcss` with Next.js;
+desktop uses `@tailwindcss/vite`. Do not add the old Tailwind PostCSS plugin or
+autoprefixer alongside it.
+
+`app/globals.css` explicitly scans Den's app/components and `packages/ui/src`,
+independent of the build's working directory. Add an `@source` entry when Den
+starts consuming another package that contains utility classes. Theme tokens
+live in `app/tailwind-theme.css`: the existing sRGB palette is retained to avoid
+a visual redesign. The unlayered Den CSS and light-only color scheme are
+intentional. Base overrides retain the previous border, placeholder and cursor
+defaults; gradients use `/srgb` to preserve interpolation.
+
+When bringing older UI work onto this branch, use `shadow-xs` for the old
+`shadow-sm`, `rounded-sm` for the old bare `rounded`, and `outline-hidden` for
+the old `outline-none` (including focus variants). Review `space-*` and `divide-*`
+on lists: Tailwind 4 applies spacing/borders to preceding children instead of
+following siblings. Native v4 utilities in shared packages are scanned too;
+sharing theme semantics with desktop is a separate change.
+
+Tailwind 4 requires Safari 16.4+, Chrome 111+, or Firefox 128+; see the
+[Tailwind upgrade guide](https://tailwindcss.com/docs/upgrade-guide).
+
 ### Optional env vars
 
-- `DEN_API_BASE` (server-only): upstream API base used by proxy routes. Required outside local dev wrappers.
+- `DEN_API_BASE` (server-only): upstream API base used by server-side health/readiness and compatibility auth proxy routes. Required outside local dev wrappers.
+- `DEN_API_PUBLIC_URL` (server/runtime): browser-reachable Den API origin handed to clients by `/api/runtime-config` and used as the `Location` of the legacy `/api/den/*` 307 redirect. Set it whenever `DEN_API_BASE` is a container-internal URL; when unset, the redirect falls back to `DEN_API_BASE`, then `api.<web host>`.
 - `DEN_AUTH_ORIGIN` (server-only): Origin header sent to Better Auth endpoints when the browser request does not include one. Required outside local dev wrappers.
-- `DEN_AUTH_FALLBACK_BASE` (server-only): fallback Den origin used if `DEN_API_BASE` serves an HTML/5xx error.
 - `DEN_WEB_PUBLIC_ORIGIN` (server/runtime): public origin used for metadata.
 - `DEN_WEB_OPENWORK_APP_CONNECT_URL` (runtime): Base URL for "Open in App" links.
   - Example: `https://openworklabs.com/app`
   - The web panel appends `/connect-remote` and injects worker URL/token params automatically.
 - `DEN_WEB_OPENWORK_WEB_URL` (runtime): URL opened by the dashboard Web tab.
   - default: `https://web.openworklabs.com`
-- `DEN_WEB_OPENWORK_AUTH_CALLBACK_URL` (runtime): Canonical URL used for GitHub auth callback redirects.
-  - this host must serve `/api/auth/*`; the included proxy route does that
+- `DEN_WEB_OPENWORK_AUTH_CALLBACK_URL` (runtime): Canonical URL where the app returns after auth completes.
 - `DEN_WEB_POSTHOG_KEY` (server/runtime): PostHog project key used for Den analytics.
 - `DEN_WEB_POSTHOG_HOST` (server/runtime): PostHog ingest host or same-origin proxy path.
   - default: `/ow`
@@ -59,7 +82,7 @@ Direct OTLP shutdown/flush for stock `next start` and Vercel deployments is oper
 
 Sentry wraps the Next config for browser Sentry builds (`NEXT_PUBLIC_DEN_OBSERVABILITY_BACKEND=sentry`) and for explicit source-map upload builds. Source-map uploads are disabled by default; enable them with the build-only `DEN_WEB_UPLOAD_SENTRY_SOURCEMAPS=true` flag and provide `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, and `SENTRY_PROJECT` as build credentials. Normal Docker/image builds do not need runtime `DEN_OBSERVABILITY_BACKEND` or `SENTRY_DSN` values. Never expose `SENTRY_AUTH_TOKEN` to the browser.
 
-Runtime logs and telemetry scrubbing avoid request bodies, cookies, authorization headers, credentials, and target query strings. The `/api/den/*` and `/api/auth/*` upstream proxy emits one structured completion/error log per request and forwards W3C trace context so web-to-api traffic can be correlated with Next traces.
+Runtime logs and telemetry scrubbing avoid request bodies, cookies, authorization headers, credentials, and target query strings. The compatibility `/api/den/*` route redirects legacy callers to the direct `api.*` origin; `/api/auth/*` remains an upstream proxy only for legacy auth callback compatibility and emits one structured completion/error log per request while forwarding W3C trace context.
 
 ### Related Den API env vars
 
@@ -80,9 +103,9 @@ Recommended project settings:
 - Framework preset: Next.js
 - Build command: `cd ../../.. && pnpm --filter @openwork-ee/den-web build`
 - Output directory: `.next`
-- Install command: `cd ../../.. && pnpm install --frozen-lockfile`
+- Install command: use the command committed in `vercel.json`
 
-These commands should be configured in the Vercel dashboard rather than committed in `vercel.json`, so the app still builds from the monorepo root and can resolve shared workspace packages like `@openwork-ee/utils`.
+The filtered install includes Den Web's workspace dependency closure, so shared packages like `@openwork-ee/utils` remain available without installing unrelated native desktop and server dependencies.
 
 Then assign custom domain:
 

@@ -366,7 +366,7 @@ function AgentEvidence(props: {
       <div className="flex flex-wrap gap-2">
         <Marker label="search_capabilities" value={agent.prompt.markers.searchCapabilities} />
         <Marker label="execute_capability" value={agent.prompt.markers.executeCapability} />
-        <Marker label={t("connect.diagnostics_memory_marker")} value={agent.prompt.markers.memoryBank} />
+        <Marker label={t("connect.diagnostics_artifacts_marker")} value={agent.prompt.markers.artifacts} />
       </div>
       <div className="space-y-1.5">
         <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-dls-secondary">
@@ -669,10 +669,6 @@ export function AgentContextDiagnosticsReportView(props: {
               value={t(BRANCH_LABEL_KEYS[props.report.connect.expectedBranch])}
             />
             <Fact label={t("connect.diagnostics_connect_policy")} value={connectStateSummary.statusLabel} />
-            <Fact
-              label={t("connect.diagnostics_legacy_google_workspace")}
-              value={booleanLabel(props.report.connect.legacyGoogleWorkspaceConfigured)}
-            />
             <Fact label={t("connect.diagnostics_global_cloud_mcp")} value={booleanLabel(props.report.connect.globalCloudMcpPresent)} />
             <Fact label={t("connect.diagnostics_workspace_cloud_mcp")} value={booleanLabel(props.report.connect.selectedWorkspaceCloudMcpPresent)} />
             <Fact label={t("connect.diagnostics_cross_workspace_drift")} value={booleanLabel(props.report.connect.crossWorkspaceSteeringDrift)} />

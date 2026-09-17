@@ -20,6 +20,7 @@ export type PluginArchRole = "viewer" | "editor" | "manager"
 export type PluginArchCapability = "config_object.create" | "connector_account.create" | "connector_instance.create" | "marketplace.create" | "plugin.create"
 
 export type PluginArchActorContext = {
+  apiKey?: true
   automation?: true
   memberTeams: MemberTeamSummary[]
   organizationContext: OrganizationContext
@@ -112,13 +113,13 @@ export function hasPluginArchCapability(context: PluginArchActorContext, capabil
   return isPluginArchOrgAdmin(context)
 }
 
-function ensureFreshPluginArchAdmin(context: PluginArchActorContext) {
-  if (context.automation === true) {
-    // Session freshness is a step-up check for interactive humans. Connector automation runs
-    // server-side without a session and is authorized by the connector instance's stored creator membership.
+function ensureFreshPluginArchAdmin(context: PluginArchActorContext, sessionMaxAgeMs?: number) {
+  if (context.apiKey === true || context.automation === true) {
+    // Session freshness is a step-up check for interactive humans. API keys and connector automation
+    // are non-interactive principals authorized by their scoped organization membership.
     return
   }
-  if (!isPluginArchOrgAdmin(context) || hasFreshPrivilegedSession({ session: context.session })) {
+  if (!isPluginArchOrgAdmin(context) || hasFreshPrivilegedSession({ session: context.session }, new Date(), sessionMaxAgeMs)) {
     return
   }
 
@@ -458,12 +459,13 @@ export async function requirePluginArchCapability(context: PluginArchActorContex
 export async function requirePluginArchResourceRole(input: {
   context: PluginArchActorContext
   requireFreshSession?: boolean
+  sessionMaxAgeMs?: number
   resourceId: ConfigObjectId | ConnectorInstanceId | MarketplaceId | PluginId
   resourceKind: PluginArchResourceKind
   role: PluginArchRole
 }) {
   if (input.role !== "viewer" && input.requireFreshSession !== false) {
-    ensureFreshPluginArchAdmin(input.context)
+    ensureFreshPluginArchAdmin(input.context, input.sessionMaxAgeMs)
   }
 
   const resolved = await resolvePluginArchResourceRole(input as RequireResourceRoleInput)

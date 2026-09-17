@@ -1,6 +1,10 @@
 import * as crypto from "node:crypto";
+import { readOrganizationMetadata } from "@openwork/types/den/managed-models-policy";
+import { invalidateTeamInferenceOAuth, revokeMemberGatewayCredentials } from "./llm/inference-provider-lifecycle.js";
+import { ensureMemberGatewayKey } from "./gateway-keys.js";
 import { getInitialActiveOrganizationIdForUser } from "./active-organization.js";
 import { db } from "./db.js";
+import { resolveOrganizationMemberAuthority } from "./organization-team-roles.js";
 import { env } from "./env.js";
 import { appLogger } from "./observability/logger.js";
 import {
@@ -31,6 +35,7 @@ import {
 import { DEN_ACCOUNT_CONFIG } from "./account-linking-policy.js";
 import { cache } from "./cache.js";
 import { SCIM_TOKEN_STORAGE_STRATEGY } from "./scim-token-storage.js";
+import { createScimExistingUserLinkCheck } from "./scim-existing-user-linking.js";
 import { syncDenSignupContact } from "./loops.js";
 import { sendEmail } from "./utils/email/send-email.js";
 import {
@@ -61,13 +66,19 @@ import {
   getOrganizationSsoJitRole,
   ORGANIZATION_SSO_JIT_ROLE,
 } from "./sso-jit.js";
-import { isScimDeprovisionedIdentity } from "./scim-deprovisioning.js";
+import { isScimDeprovisionedEmailForSsoProvider, isScimDeprovisionedIdentity, SCIM_DEPROVISIONED_SIGN_IN_MESSAGE } from "./scim-deprovisioning.js";
 import {
   ORGANIZATION_SAML_ALLOW_IDP_INITIATED,
   ORGANIZATION_SAML_DEPRECATED_ALGORITHM_BEHAVIOR,
   ORGANIZATION_SAML_REQUIRE_TIMESTAMPS,
 } from "./sso-saml-policy.js";
 import { SSO_DOMAIN_VERIFICATION_TOKEN_PREFIX } from "./sso-domain-verification.js";
+import {
+  authorizeOrganizationSsoSignIn,
+  completeOrganizationSsoTestIntent,
+  failOrganizationSsoTestIntent,
+  getSsoTestIntentIdFromCallbackUrl,
+} from "./sso-test-lifecycle.js";
 import {
   getOrganizationContextForUser,
   listAssignableRoles,
@@ -279,6 +290,12 @@ async function deleteOrganizationMemberConnectedAccounts(input: {
       eq(schema.ConnectedAccountTable.organizationId, organizationId),
       eq(schema.ConnectedAccountTable.orgMembershipId, orgMembershipId),
     ));
+  await db
+    .delete(schema.LlmProviderMemberCredentialTable)
+    .where(and(
+      eq(schema.LlmProviderMemberCredentialTable.organizationId, organizationId),
+      eq(schema.LlmProviderMemberCredentialTable.orgMembershipId, orgMembershipId),
+    ));
 }
 
 function throwMemberLifecycleError(message: string): never {
@@ -308,6 +325,15 @@ const RAW_BETTER_AUTH_MUTATION_DENIALS: readonly (readonly [string, string])[] =
   ["/organization/create-role", "Use the Den roles API to manage organization roles."],
   ["/organization/update-role", "Use the Den roles API to manage organization roles."],
   ["/organization/delete-role", "Use the Den roles API to manage organization roles."],
+  ["/organization/create-team", "Use the Den teams API to manage teams."],
+  ["/organization/update-team", "Use the Den teams API to manage teams."],
+  ["/organization/remove-team", "Use the Den teams API to manage teams."],
+  ["/organization/add-team-member", "Use the Den teams API to manage team membership."],
+  ["/organization/remove-team-member", "Use the Den teams API to manage team membership."],
+  ["/organization/add-member", "Use the Den invitation API to add members."],
+  ["/organization/invite-member", "Use the Den invitation API to invite members."],
+  ["/organization/cancel-invitation", "Use the Den invitation API to cancel invitations."],
+  ["/organization/accept-invitation", "Use the Den invitation API to accept invitations."],
   ["/sso/register", "Use the Den SSO API to manage SSO providers."],
   ["/sso/update-provider", "Use the Den SSO API to manage SSO providers."],
   ["/sso/delete-provider", "Use the Den SSO API to manage SSO providers."],
@@ -329,6 +355,10 @@ export function getRawBetterAuthMutationDenial(path: string) {
     error: "forbidden",
     message: denial[1],
   };
+}
+
+async function denyBetterAuthTeamMutation() {
+  throw new APIError("FORBIDDEN", { message: "Use the Den teams API to manage teams and their membership." });
 }
 
 function readStringProperty(value: unknown, propertyName: string) {
@@ -554,9 +584,15 @@ async function getOrganizationMemberRole(input: {
   if (!member) {
     return null;
   }
+  const authority = await resolveOrganizationMemberAuthority({
+    organizationId: normalizeDenTypeId("organization", input.organizationId),
+    memberId: member.id,
+  });
+  if (!authority) return null;
   return {
-    role: member.role,
-    isOwner: member.isOwner,
+    role: authority.directRole,
+    adminTeams: authority.adminTeams,
+    isOwner: hasRole(authority.directRole, ORGANIZATION_OWNER_ROLE),
   };
 }
 
@@ -571,6 +607,17 @@ function getEnterpriseAuthRedirectUrl(input: {
     url.searchParams.set("callbackURL", input.callbackUrl);
   }
   return url.toString();
+}
+
+function removeSsoTestSessionCookie(ctx: Parameters<Parameters<typeof createAuthMiddleware>[0]>[0]) {
+  const headers = ctx.context.responseHeaders;
+  if (!headers) return;
+  const sessionCookiePrefix = `${ctx.context.authCookies.sessionToken.name}=`;
+  const cookies = headers.getSetCookie().filter((cookie) => !cookie.startsWith(sessionCookiePrefix));
+  headers.delete("set-cookie");
+  for (const cookie of cookies) {
+    headers.append("set-cookie", cookie);
+  }
 }
 
 export const auth = betterAuth({
@@ -595,12 +642,22 @@ export const auth = betterAuth({
   databaseHooks: {
     user: {
       create: {
-        before: async (user) => ({
-          data: {
-            ...user,
-            email: normalizeLoginEmail(user.email),
-          },
-        }),
+        before: async (user, context) => {
+          const email = normalizeLoginEmail(user.email);
+          // SSO callbacks (/sso/callback/:providerId, /sso/saml2/sp/acs/:providerId)
+          // create the user before provisionUser runs, so refuse a SCIM-deprovisioned
+          // email here or the refused sign-in leaves a ghost user, session, and membership.
+          const ssoProviderId = readStringProperty(context?.params, "providerId");
+          if (ssoProviderId && await isScimDeprovisionedEmailForSsoProvider({ ssoProviderId, email })) {
+            throw new APIError("FORBIDDEN", { message: SCIM_DEPROVISIONED_SIGN_IN_MESSAGE });
+          }
+          return {
+            data: {
+              ...user,
+              email,
+            },
+          };
+        },
       },
       update: {
         before: async (user) => ({
@@ -619,7 +676,29 @@ export const auth = betterAuth({
         },
       },
     },
+    teamMember: {
+      delete: {
+        before: async (membership: typeof schema.TeamMemberTable.$inferSelect) => {
+          await db.transaction((tx) => invalidateTeamInferenceOAuth(tx, membership.teamId));
+        },
+      },
+    },
+    team: {
+      delete: {
+        before: async (team: typeof schema.TeamTable.$inferSelect) => {
+          await db.transaction((tx) => invalidateTeamInferenceOAuth(tx, team.id));
+        },
+      },
+    },
     member: {
+      create: {
+        after: async (member: AuthMemberHookRow) => {
+          if (member.userId && !member.removedAt) await ensureMemberGatewayKey({
+            organizationId: normalizeDenTypeId("organization", member.organizationId),
+            memberId: normalizeDenTypeId("member", member.id),
+          });
+        },
+      },
       delete: {
         before: async (member: AuthMemberHookRow) => {
           const validation = await validateOrganizationMemberRemovalForHook({
@@ -638,6 +717,16 @@ export const auth = betterAuth({
             organizationId: member.organizationId,
             orgMembershipId: member.id,
             userId: member.userId,
+          });
+          await revokeMemberGatewayCredentials({
+            organizationId: normalizeDenTypeId("organization", member.organizationId),
+            memberId: normalizeDenTypeId("member", member.id),
+          });
+        },
+        after: async (member: AuthMemberHookRow) => {
+          await revokeMemberGatewayCredentials({
+            organizationId: normalizeDenTypeId("organization", member.organizationId),
+            memberId: normalizeDenTypeId("member", member.id),
           });
         },
       },
@@ -736,6 +825,11 @@ export const auth = betterAuth({
                 message: "The organization owner cannot leave the workspace. Transfer ownership first.",
               });
             }
+            if (member?.adminTeams.length && !hasRole(member.role, ORGANIZATION_SUPER_ADMIN_ROLE)) {
+              throw new APIError("FORBIDDEN", {
+                message: "Ask a workspace owner or super-admin to remove your Admin team membership before leaving.",
+              });
+            }
           }
         }
 
@@ -784,6 +878,22 @@ export const auth = betterAuth({
             }
           }
         }
+
+        if (ctx.path === "/sign-in/sso") {
+          const token = await ctx.getSignedCookie(ctx.context.authCookies.sessionToken.name, ctx.context.secret).catch(() => null);
+          const session = typeof token === "string" ? await cache.auth.session(token) : null;
+          const authorization = await authorizeOrganizationSsoSignIn({
+            providerId: readStringProperty(ctx.body, "providerId"),
+            organizationSlug: readStringProperty(ctx.body, "organizationSlug"),
+            domain: readStringProperty(ctx.body, "domain"),
+            email: readStringProperty(ctx.body, "email"),
+            callbackUrl: readStringProperty(ctx.body, "callbackURL"),
+            userId: session?.user.id ?? null,
+          });
+          if (!authorization.ok) {
+            throw new APIError("FORBIDDEN", { message: authorization.message });
+          }
+        }
       }
 
       if (ctx.path !== "/sign-in/email" && ctx.path !== "/sign-up/email") {
@@ -828,6 +938,31 @@ export const auth = betterAuth({
         return;
       }
 
+      if (ctx.path === "/sso/callback/:providerId" || ctx.path === "/sso/saml2/sp/acs/:providerId") {
+        const callbackUrl = ctx.context.responseHeaders?.get("location") ?? null;
+        const intentId = getSsoTestIntentIdFromCallbackUrl(callbackUrl);
+        const providerId = readStringProperty(ctx.params, "providerId");
+        if (!intentId || !providerId) {
+          return;
+        }
+
+        const newSession = ctx.context.newSession;
+        if (!newSession) {
+          await failOrganizationSsoTestIntent(intentId, "authentication");
+          return;
+        }
+
+        await completeOrganizationSsoTestIntent({
+          intentId,
+          providerId,
+          authenticatedUserId: newSession.user.id,
+        });
+        await ctx.context.internalAdapter.deleteSession(newSession.session.token);
+        await cache.auth.revokeSession(newSession.session.token);
+        removeSsoTestSessionCookie(ctx);
+        return;
+      }
+
       if (ctx.path !== "/callback/:id") {
         return;
       }
@@ -854,8 +989,18 @@ export const auth = betterAuth({
     }),
   },
   advanced: {
+    cookiePrefix: "openwork-den",
+    ...(env.betterAuthCookieDomain
+      ? {
+        crossSubDomainCookies: {
+          enabled: true,
+          domain: env.betterAuthCookieDomain,
+        },
+      }
+      : {}),
     ipAddress: {
       ipAddressHeaders: ["x-forwarded-for", "x-real-ip", "cf-connecting-ip"],
+      trustedProxies: env.trustedProxies,
       ipv6Subnet: 64,
     },
     database: {
@@ -1020,12 +1165,41 @@ export const auth = betterAuth({
         });
       },
       organizationHooks: {
+        beforeCreateOrganization: async ({ organization }) => {
+          let metadata: Record<string, unknown>;
+          try {
+            metadata = readOrganizationMetadata(organization.metadata);
+          } catch {
+            throw new APIError("BAD_REQUEST", { message: "Organization metadata must be a JSON object." });
+          }
+          if ("dpaSigned" in metadata) {
+            throw new APIError("FORBIDDEN", { message: "dpaSigned is reserved for internal platform administration." });
+          }
+          const capabilities = metadata.capabilities;
+          if (capabilities && typeof capabilities === "object" && "gatewayDashboard" in capabilities) {
+            throw new APIError("FORBIDDEN", { message: "capabilities.gatewayDashboard is reserved for internal platform administration." });
+          }
+        },
+        beforeUpdateOrganization: async ({ organization }) => {
+          // A replacement without dpaSigned can erase it just as easily as an explicit false.
+          if ("metadata" in organization) {
+            throw new APIError("FORBIDDEN", { message: "Use the Den organization settings API to update workspace configuration." });
+          }
+        },
+        beforeCreateTeam: denyBetterAuthTeamMutation,
+        beforeUpdateTeam: denyBetterAuthTeamMutation,
+        beforeDeleteTeam: denyBetterAuthTeamMutation,
+        beforeAddTeamMember: denyBetterAuthTeamMutation,
+        beforeRemoveTeamMember: denyBetterAuthTeamMutation,
         afterCreateOrganization: async ({ organization }) => {
           await seedDefaultOrganizationRoles(
             normalizeDenTypeId("organization", organization.id),
           );
         },
         beforeAddMember: async ({ member }) => {
+          if (readStringProperty(member, "teamId")) {
+            await denyBetterAuthTeamMutation();
+          }
           const role = typeof member.role === "string" ? member.role : "";
           if (hasRole(role, ORGANIZATION_SUPER_ADMIN_ROLE)) {
             throw new APIError("FORBIDDEN", {
@@ -1047,6 +1221,9 @@ export const auth = betterAuth({
           }
         },
         beforeCreateInvitation: async ({ invitation, inviter }) => {
+          if (readStringProperty(invitation, "teamId")) {
+            await denyBetterAuthTeamMutation();
+          }
           const organizationId = readStringProperty(invitation, "organizationId");
           if (!organizationId) {
             return;
@@ -1211,6 +1388,16 @@ export const auth = betterAuth({
       },
     }),
     scim({
+      linkExistingUsers: {
+        requireExistingOrgMembership: true,
+        shouldLinkUser: createScimExistingUserLinkCheck((where) => db
+          .select({ id: schema.MemberTable.id })
+          .from(schema.MemberTable)
+          .where(where)
+          .limit(1)),
+      },
+      // Group names are metadata, never organization role assignments.
+      mapGroupToRoles: () => [],
       storeSCIMToken: SCIM_TOKEN_STORAGE_STRATEGY,
       requiredRole: [ORGANIZATION_OWNER_ROLE, ORGANIZATION_SUPER_ADMIN_ROLE, ORGANIZATION_ADMIN_ROLE],
       beforeSCIMTokenGenerated: async ({ member }) => {
@@ -1264,9 +1451,7 @@ export const auth = betterAuth({
         const organizationId = normalizeDenTypeId("organization", provider.organizationId);
         const userId = normalizeDenTypeId("user", user.id);
         if (await isScimDeprovisionedIdentity({ organizationId, userId, email })) {
-          throw new APIError("FORBIDDEN", {
-            message: "This user was deprovisioned by SCIM. Reactivate them in the identity provider before signing in.",
-          });
+          throw new APIError("FORBIDDEN", { message: SCIM_DEPROVISIONED_SIGN_IN_MESSAGE });
         }
         const payload = {
           organizationId,

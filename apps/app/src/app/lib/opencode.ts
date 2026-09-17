@@ -1,10 +1,9 @@
-import { createOpencodeClient, type Message, type Part, type Session, type Todo } from "@opencode-ai/sdk/v2/client";
+import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 
 import { desktopFetch } from "./desktop";
-import { createOpenworkServerClient, OpenworkServerError } from "./openwork-server";
 import { isDesktopRuntime } from "./runtime-env";
 
-type FieldsResult<T> =
+export type FieldsResult<T> =
   | ({ data: T; error?: undefined } & { request: Request; response: Response })
   | ({ data?: undefined; error: unknown } & { request: Request; response: Response });
 
@@ -35,25 +34,6 @@ type CommandParameters = {
   reasoning_effort?: string;
 };
 
-type SessionListParameters = {
-  directory?: string;
-  roots?: boolean;
-  start?: number;
-  search?: string;
-  limit?: number;
-};
-
-type SessionLookupParameters = {
-  sessionID: string;
-  directory?: string;
-};
-
-type SessionMessagesParameters = {
-  sessionID: string;
-  directory?: string;
-  limit?: number;
-};
-
 export type OpencodeAuth = {
   username?: string;
   password?: string;
@@ -64,7 +44,54 @@ export type OpencodeAuth = {
 const DEFAULT_OPENCODE_REQUEST_TIMEOUT_MS = 10_000;
 const OAUTH_OPENCODE_REQUEST_TIMEOUT_MS = 5 * 60_000;
 const MCP_AUTH_OPENCODE_REQUEST_TIMEOUT_MS = 90_000;
-const SESSION_LONG_RUNNING_URL_RE = /\/session\/[^/?#]+\/(?:command|prompt_async|summarize)(?:[?#]|$)/;
+// Bound the acceptance handshake, not the task. A timeout leaves admission
+// unknown, so the transport must never automatically resend the prompt.
+const PROMPT_ASYNC_REQUEST_TIMEOUT_MS = 30_000;
+const SESSION_LONG_RUNNING_URL_RE = /\/session\/[^/?#]+\/(?:command|summarize)(?:[?#]|$)/;
+const SESSION_PROMPT_ASYNC_URL_RE = /\/session\/[^/?#]+\/prompt_async(?:[?#]|$)/;
+
+export class PromptAdmissionUnknownError extends Error {
+  readonly admission = "unknown";
+
+  constructor(options?: { cause?: unknown; messageID?: string }) {
+    super("Message acceptance is unknown. It may already be running; do not resend it while checking the conversation.", { cause: options?.cause });
+    this.name = "PromptAdmissionUnknownError";
+    this.messageID = options?.messageID;
+  }
+
+  readonly messageID?: string;
+}
+
+export function isPromptAdmissionUnknown(error: unknown): error is PromptAdmissionUnknownError {
+  return error instanceof PromptAdmissionUnknownError;
+}
+
+/** The settled server failure behind an uncertain admission: the parsed
+ * response body when the server answered, otherwise the transport error or
+ * undefined for a timeout. It explains the failure; it never proves rejection. */
+export function promptAdmissionFailure(error: PromptAdmissionUnknownError): unknown {
+  let cause: unknown = error.cause;
+  while (isPromptAdmissionUnknown(cause)) cause = cause.cause;
+  return cause;
+}
+
+async function readSettledFailure(response: Response): Promise<unknown> {
+  const text = await response.text().catch(() => "");
+  try {
+    return text ? JSON.parse(text) : undefined;
+  } catch {
+    return text;
+  }
+}
+
+let lastMessageStamp = 0;
+
+/** Native sortable msg_ format. This identifies a submission, NOT an idempotency key. */
+export function createPromptMessageID(): string {
+  lastMessageStamp = Math.max(Date.now() * 0x1000, lastMessageStamp + 1);
+  // Native stores the low six bytes of the timestamp/counter, then 14 random characters.
+  return `msg_${lastMessageStamp.toString(16).padStart(12, "0").slice(-12)}${crypto.randomUUID().replaceAll("-", "").slice(0, 14)}`;
+}
 
 function getRequestUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") return input;
@@ -77,6 +104,9 @@ function resolveRequestTimeoutMs(input: RequestInfo | URL, fallbackMs: number): 
   const url = getRequestUrl(input);
   if (SESSION_LONG_RUNNING_URL_RE.test(url)) {
     return 0;
+  }
+  if (SESSION_PROMPT_ASYNC_URL_RE.test(url)) {
+    return Math.max(fallbackMs, PROMPT_ASYNC_REQUEST_TIMEOUT_MS);
   }
   if (/\/provider\/oauth\//.test(url) || /\/mcp\/auth\/callback\b/.test(url)) {
     return Math.max(fallbackMs, OAUTH_OPENCODE_REQUEST_TIMEOUT_MS);
@@ -99,7 +129,7 @@ async function postSessionRequest<T>(
   baseUrl: string,
   path: string,
   body: Record<string, unknown>,
-  options?: { headers?: Record<string, string>; directory?: string; throwOnError?: boolean },
+  options?: { headers?: Record<string, string>; directory?: string; throwOnError?: boolean; signal?: AbortSignal },
 ): Promise<FieldsResult<T>> {
   const headers = new Headers(options?.headers);
   headers.set("Content-Type", "application/json");
@@ -112,6 +142,7 @@ async function postSessionRequest<T>(
     method: "POST",
     headers,
     body: JSON.stringify(body),
+    signal: options?.signal,
   });
 
   const request = new Request(`${baseUrl}${path}`, {
@@ -121,7 +152,13 @@ async function postSessionRequest<T>(
   });
 
   if (response.ok) {
-    const data = response.status === 204 ? ({} as T) : ((await response.json()) as T);
+    let data: T;
+    try {
+      data = response.status === 204 ? ({} as T) : ((await response.json()) as T);
+    } catch (cause) {
+      if (SESSION_PROMPT_ASYNC_URL_RE.test(path)) throw new PromptAdmissionUnknownError({ cause });
+      throw cause;
+    }
     return { data, request, response };
   }
 
@@ -154,67 +191,6 @@ function resolveOpenworkWorkspaceMount(baseUrl: string): { baseUrl: string; work
   }
 }
 
-function createSyntheticResult<T>(
-  url: string,
-  method: string,
-  input:
-    | { ok: true; data: T; status?: number }
-    | { ok: false; error: unknown; status?: number },
-): FieldsResult<T> {
-  const request = new Request(url, { method });
-  const response = new Response(input.ok ? JSON.stringify(input.data) : null, {
-    status: input.status ?? (input.ok ? 200 : 500),
-    headers: { "Content-Type": "application/json" },
-  });
-  if (input.ok) {
-    return { data: input.data, request, response };
-  }
-  return { error: input.error, request, response };
-}
-
-async function wrapOpenworkRead<T>(
-  url: string,
-  read: () => Promise<T>,
-  options?: { throwOnError?: boolean },
-): Promise<FieldsResult<T>> {
-  try {
-    return createSyntheticResult(url, "GET", { ok: true, data: await read() });
-  } catch (error) {
-    if (options?.throwOnError) throw error;
-    return createSyntheticResult(url, "GET", {
-      ok: false,
-      error,
-      status: error instanceof OpenworkServerError ? error.status : 500,
-    });
-  }
-}
-
-function shouldFallbackToLegacySessionRead(error: unknown): boolean {
-  if (!(error instanceof OpenworkServerError)) return false;
-  return error.status === 404 || error.status === 405 || error.status === 501;
-}
-
-async function wrapOpenworkReadWithFallback<T>(
-  url: string,
-  read: () => Promise<T>,
-  fallback: () => Promise<FieldsResult<T>>,
-  options?: { throwOnError?: boolean },
-): Promise<FieldsResult<T>> {
-  try {
-    return createSyntheticResult(url, "GET", { ok: true, data: await read() });
-  } catch (error) {
-    if (!shouldFallbackToLegacySessionRead(error)) {
-      if (options?.throwOnError) throw error;
-      return createSyntheticResult(url, "GET", {
-        ok: false,
-        error,
-        status: error instanceof OpenworkServerError ? error.status : 500,
-      });
-    }
-    return fallback();
-  }
-}
-
 async function fetchWithTimeout(
   fetchImpl: typeof globalThis.fetch,
   input: RequestInfo | URL,
@@ -226,15 +202,22 @@ async function fetchWithTimeout(
     return fetchImpl(input, init);
   }
 
+  const isRead = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase() === "GET";
+  const callerSignal = isRead
+    ? init?.signal === undefined ? (input instanceof Request ? input.signal : undefined) : init.signal
+    : undefined;
+  callerSignal?.throwIfAborted();
   const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-  const signal = controller?.signal;
-  const initWithSignal = signal && !init?.signal ? { ...(init ?? {}), signal } : init;
+  const signal = isRead && callerSignal && controller
+    ? AbortSignal.any([callerSignal, controller.signal])
+    : controller?.signal;
+  const initWithSignal = signal && (isRead || !init?.signal) ? { ...(init ?? {}), signal } : init;
 
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => {
       try {
-        controller?.abort();
+        controller?.abort(isRead ? new Error("Request timed out.") : undefined);
       } catch {
         // ignore
       }
@@ -243,8 +226,21 @@ async function fetchWithTimeout(
   });
 
   try {
-    return await Promise.race([fetchImpl(input, initWithSignal), timeoutPromise]);
+    const response = await Promise.race([fetchImpl(input, initWithSignal), timeoutPromise]);
+    // A proxy/server failure can happen after native admission. Only an
+    // explicit client rejection establishes that the prompt was not accepted.
+    if (SESSION_PROMPT_ASYNC_URL_RE.test(getRequestUrl(input)) && (response.status >= 500 || response.status === 408)) {
+      throw new PromptAdmissionUnknownError({ cause: await readSettledFailure(response) });
+    }
+    return response;
   } catch (error) {
+    if (isRead) {
+      signal?.throwIfAborted();
+      throw error;
+    }
+    if (SESSION_PROMPT_ASYNC_URL_RE.test(getRequestUrl(input))) {
+      throw isPromptAdmissionUnknown(error) ? error : new PromptAdmissionUnknownError({ cause: error });
+    }
     const name = (error && typeof error === "object" && "name" in error ? (error as any).name : "") as string;
     if (name === "AbortError") {
       throw new Error("Request timed out.");
@@ -298,7 +294,7 @@ function nativeFetchRef(): typeof globalThis.fetch {
   return globalThis.fetch as typeof globalThis.fetch;
 }
 
-const createDesktopFetch = (auth?: OpencodeAuth) => {
+export const createDesktopFetch = (auth?: OpencodeAuth) => {
   const authHeader = resolveAuthHeader(auth);
   const addAuth = (headers: Headers) => {
     if (!authHeader || headers.has("Authorization")) return;
@@ -317,9 +313,10 @@ const createDesktopFetch = (auth?: OpencodeAuth) => {
     const timeoutMs = shouldStream ? 0 : DEFAULT_OPENCODE_REQUEST_TIMEOUT_MS;
 
     if (input instanceof Request) {
-      const headers = new Headers(input.headers);
+      const readInit = (init?.method ?? input.method).toUpperCase() === "GET" ? init : undefined;
+      const headers = new Headers(readInit?.headers ?? input.headers);
       addAuth(headers);
-      const request = new Request(input, { headers });
+      const request = new Request(input, { ...readInit, headers });
       return fetchWithTimeout(underlyingFetch, request, undefined, timeoutMs);
     }
 
@@ -341,6 +338,7 @@ export function unwrap<T>(result: FieldsResult<T>): NonNullable<T> {
   if (result.data !== undefined) {
     return result.data as NonNullable<T>;
   }
+  if (isPromptAdmissionUnknown(result.error)) throw result.error;
   const message =
     result.error instanceof Error
       ? result.error.message
@@ -374,98 +372,28 @@ export function createClient(baseUrl: string, directory?: string, auth?: Opencod
 
   const session = client.session as typeof client.session;
   const openworkMount = auth?.mode === "openwork" ? resolveOpenworkWorkspaceMount(baseUrl) : null;
-  const openworkSessionClient =
-    openworkMount && auth?.token
-      ? createOpenworkServerClient({ baseUrl: openworkMount.baseUrl, token: auth.token })
-      : null;
-  // TODO(2026-04-12): remove the old-server compatibility path here once all
-  // OpenWork servers expose the workspace-scoped session read APIs.
   const sessionOverrides = session as any as {
-    list: (parameters?: SessionListParameters, options?: { throwOnError?: boolean }) => Promise<FieldsResult<Session[]>>;
-    get: (parameters: SessionLookupParameters, options?: { throwOnError?: boolean }) => Promise<FieldsResult<Session>>;
-    messages: (parameters: SessionMessagesParameters, options?: { throwOnError?: boolean }) => Promise<FieldsResult<Array<{ info: Message; parts: Part[] }>>>;
-    todo: (parameters: SessionLookupParameters, options?: { throwOnError?: boolean }) => Promise<FieldsResult<Todo[]>>;
     promptAsync: (parameters: PromptAsyncParameters, options?: { throwOnError?: boolean }) => Promise<FieldsResult<{}>>;
     command: (parameters: CommandParameters, options?: { throwOnError?: boolean }) => Promise<FieldsResult<{}>>;
   };
 
-  const listOriginal = sessionOverrides.list.bind(session);
-  sessionOverrides.list = (parameters?: SessionListParameters, options?: { throwOnError?: boolean }) => {
-    if (!openworkMount || !openworkSessionClient) {
-      return listOriginal(parameters, options);
-    }
-    const query = new URLSearchParams();
-    if (typeof parameters?.roots === "boolean") query.set("roots", String(parameters.roots));
-    if (typeof parameters?.start === "number") query.set("start", String(parameters.start));
-    if (parameters?.search?.trim()) query.set("search", parameters.search.trim());
-    if (typeof parameters?.limit === "number") query.set("limit", String(parameters.limit));
-    const url = `${openworkMount.baseUrl}/workspace/${encodeURIComponent(openworkMount.workspaceId)}/sessions${query.size ? `?${query.toString()}` : ""}`;
-    return wrapOpenworkReadWithFallback(
-      url,
-      async () => (await openworkSessionClient.listSessions(openworkMount.workspaceId, parameters)).items,
-      () => listOriginal(parameters, options),
-      options,
-    );
-  };
-
-  const getOriginal = sessionOverrides.get.bind(session);
-  sessionOverrides.get = (parameters: SessionLookupParameters, options?: { throwOnError?: boolean }) => {
-    if (!openworkMount || !openworkSessionClient) {
-      return getOriginal(parameters, options);
-    }
-    const url = `${openworkMount.baseUrl}/workspace/${encodeURIComponent(openworkMount.workspaceId)}/sessions/${encodeURIComponent(parameters.sessionID)}`;
-    return wrapOpenworkReadWithFallback(
-      url,
-      async () => (await openworkSessionClient.getSession(openworkMount.workspaceId, parameters.sessionID)).item,
-      () => getOriginal(parameters, options),
-      options,
-    );
-  };
-
-  const messagesOriginal = sessionOverrides.messages.bind(session);
-  sessionOverrides.messages = (parameters: SessionMessagesParameters, options?: { throwOnError?: boolean }) => {
-    if (!openworkMount || !openworkSessionClient) {
-      return messagesOriginal(parameters, options);
-    }
-    const query = new URLSearchParams();
-    if (typeof parameters.limit === "number") query.set("limit", String(parameters.limit));
-    const url = `${openworkMount.baseUrl}/workspace/${encodeURIComponent(openworkMount.workspaceId)}/sessions/${encodeURIComponent(parameters.sessionID)}/messages${query.size ? `?${query.toString()}` : ""}`;
-    return wrapOpenworkReadWithFallback(
-      url,
-      async () =>
-        (await openworkSessionClient.getSessionMessages(openworkMount.workspaceId, parameters.sessionID, {
-          limit: parameters.limit,
-        })).items,
-      () => messagesOriginal(parameters, options),
-      options,
-    );
-  };
-
-  const todoOriginal = sessionOverrides.todo.bind(session);
-  sessionOverrides.todo = (parameters: SessionLookupParameters, options?: { throwOnError?: boolean }) => {
-    if (!openworkMount || !openworkSessionClient) {
-      return todoOriginal(parameters, options);
-    }
-    const url = `${openworkMount.baseUrl}/workspace/${encodeURIComponent(openworkMount.workspaceId)}/sessions/${encodeURIComponent(parameters.sessionID)}/snapshot`;
-    return wrapOpenworkReadWithFallback(
-      url,
-      async () => (await openworkSessionClient.getSessionSnapshot(openworkMount.workspaceId, parameters.sessionID)).item.todos,
-      () => todoOriginal(parameters, options),
-      options,
-    );
-  };
-
-  const promptAsyncOriginal = sessionOverrides.promptAsync.bind(session);
-  sessionOverrides.promptAsync = (parameters: PromptAsyncParameters, options?: { throwOnError?: boolean }) => {
-    if (!openworkMount && !("reasoning_effort" in parameters)) {
-      return promptAsyncOriginal(parameters, options);
-    }
+  sessionOverrides.promptAsync = async (parameters: PromptAsyncParameters, options?: { throwOnError?: boolean }) => {
     const { sessionID, directory: requestDirectory, ...body } = parameters;
-    return postSessionRequest(fetchImpl, baseUrl, `/session/${encodeURIComponent(sessionID)}/prompt_async`, body, {
-      headers: Object.keys(headers).length ? headers : undefined,
-      directory: requestDirectory ?? directory,
-      throwOnError: options?.throwOnError,
-    });
+    try {
+      // Keep the tagged transport failure intact instead of serializing it
+      // through the SDK's error result. Native still receives prompt_async.
+      return await withAdmissionDeadline(PROMPT_ASYNC_REQUEST_TIMEOUT_MS, (signal) => postSessionRequest(fetchImpl, baseUrl, `/session/${encodeURIComponent(sessionID)}/prompt_async`, body, {
+        headers: Object.keys(headers).length ? headers : undefined,
+        directory: requestDirectory ?? directory,
+        throwOnError: options?.throwOnError,
+        signal,
+      }), () => new PromptAdmissionUnknownError({ messageID: parameters.messageID }));
+    } catch (error) {
+      if (isPromptAdmissionUnknown(error)) {
+        throw new PromptAdmissionUnknownError({ cause: error, messageID: parameters.messageID });
+      }
+      throw error;
+    }
   };
 
   const commandOriginal = sessionOverrides.command.bind(session);
@@ -482,6 +410,50 @@ export function createClient(baseUrl: string, directory?: string, auth?: Opencod
   };
 
   return client;
+}
+
+/** Includes body consumption: receiving headers alone cannot release a send lock. */
+async function withAdmissionDeadline<T>(timeoutMs: number, operation: (signal: AbortSignal) => Promise<T>, timeoutError: () => Error): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(timeoutError());
+      controller.abort();
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([operation(controller.signal), deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function hasAcceptedPromptMessage(client: ReturnType<typeof createClient>, sessionID: string, messageID: string): Promise<boolean> {
+  const result = await withAdmissionDeadline(DEFAULT_OPENCODE_REQUEST_TIMEOUT_MS,
+    (signal) => client.session.message({ sessionID, messageID }, { signal }),
+    () => new Error("Acceptance check timed out. The message is still held."));
+  const message = result.data?.info;
+  // Absence (including a transient 404) is not proof of rejection.
+  return message?.id === messageID && message.sessionID === sessionID && message.role === "user";
+}
+
+export type PromptAdmission = "accepted" | "absent" | "unknown";
+
+/** Reconcile an uncertain prompt against native. Only the exact user message
+ * proves acceptance. `absent` is authoritative the other way: native listed
+ * the idle conversation without the message, so the settled POST is not going
+ * to admit it later. A failed or partial read stays unknown and keeps the hold. */
+export async function readPromptAdmission(client: ReturnType<typeof createClient>, sessionID: string, messageID: string): Promise<PromptAdmission> {
+  if (await hasAcceptedPromptMessage(client, sessionID, messageID)) return "accepted";
+  const [messages, statuses] = await Promise.all([
+    client.session.messages({ sessionID }),
+    client.session.status(),
+  ]);
+  if (!Array.isArray(messages.data) || !statuses.data) return "unknown";
+  const status = statuses.data[sessionID];
+  if (status && status.type !== "idle") return "unknown";
+  return messages.data.some(({ info }) => info.id === messageID) ? "unknown" : "absent";
 }
 
 export async function waitForHealthy(

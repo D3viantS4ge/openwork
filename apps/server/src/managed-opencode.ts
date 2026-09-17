@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import net from "node:net";
 import { randomUUID } from "node:crypto";
+import { appendEngineOutputTail, createEngineStartupLineReader } from "./engine-output.js";
 
 export type ManagedChildProcess = {
   exitCode: number | null;
@@ -138,17 +139,19 @@ type ManagedOpencodeServerOptions = {
 
 class ManagedOpencodeExitError extends Error {
   readonly exitCode: number | null;
+  readonly addressInUse: boolean;
 
-  constructor(exitCode: number | null, output: string) {
-    super(`OpenCode server exited with code ${exitCode}${output.trim() ? `\n${output}` : ""}`);
+  constructor(exitCode: number | null, output: string, addressInUse: boolean) {
+    super(`OpenCode server exited with code ${exitCode}${addressInUse ? " (EADDRINUSE)" : ""}${output.trim() ? `\n${output}` : ""}`);
     this.exitCode = exitCode;
+    this.addressInUse = addressInUse;
   }
 }
 
 function isRetryableAddressInUseExit(error: unknown): boolean {
   return error instanceof ManagedOpencodeExitError &&
     error.exitCode === 1 &&
-    /\bEADDRINUSE\b/.test(error.message);
+    error.addressInUse;
 }
 
 async function startManagedOpencodeServer(
@@ -160,8 +163,14 @@ async function startManagedOpencodeServer(
   const password = randomSecret();
   const args = ["serve", "--hostname", hostname, "--port", String(port), "--cors", "*"];
   const command = options.bin?.trim() || "opencode";
+  // The engine's in-process npm installs use Arborist, which audits by default.
+  // That audit POST depends on npm's advisories endpoint, which has been observed
+  // to hang for the full five-minute registry timeout, so first-run must not wait.
+  // @npmcli/config reads npm_config_* settings from the environment.
+  const engineEnvDefaults = { npm_config_audit: "false" };
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    ...engineEnvDefaults,
     ...options.env,
     OPENCODE_SERVER_USERNAME: username,
     OPENCODE_SERVER_PASSWORD: password,
@@ -170,6 +179,7 @@ async function startManagedOpencodeServer(
   // that decrypts OpenWork-owned OAuth credentials.
   delete env.OPENWORK_ENCRYPTION_KEY;
   const injectedEnv = Object.entries({
+    ...engineEnvDefaults,
     ...(options.env ?? {}),
     OPENCODE_SERVER_USERNAME: username,
     OPENCODE_SERVER_PASSWORD: password,
@@ -204,58 +214,71 @@ async function startManagedOpencodeServer(
   let url: string;
   try {
     url = await new Promise<string>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error(`Timeout waiting for OpenCode server after ${options.timeoutMs ?? 15000}ms`)), options.timeoutMs ?? 15000);
-      let startupOutput = "";
-      const done = (value: string) => {
+      let settled = false;
+      let stdout = "";
+      let stderr = "";
+      let addressInUse = false;
+      const output = () => `stdout:\n${stdout}\nstderr:\n${stderr}`;
+      const collect = (tail: string, text: string) => {
+        // Remember the retry signal even if later diagnostics evict it. Keep
+        // stream boundaries separate, including a token split across chunks.
+        // Do not invent a word boundary where the overlap was cut.
+        addressInUse ||= /\bEADDRINUSE\b[\s\S]/.test((tail.length > 16 ? "_" : "") + tail.slice(-16) + text);
+        return appendEngineOutputTail(tail, text);
+      };
+      const lines = createEngineStartupLineReader((line) => {
+        if (!line.startsWith("opencode server listening")) return;
+        const match = line.match(/on\s+(https?:\/\/[^\s]+)/);
+        if (!match?.[1]) return fail(new Error(`Failed to parse OpenCode server URL from: ${line}\n${output()}`));
+        done(match[1]);
+      });
+      const finish = () => {
+        settled = true;
         clearTimeout(timeout);
+        lines.stop();
+        stdout = "";
+        stderr = "";
+        child.removeListener("close", onClose);
+      };
+      const done = (value: string) => {
+        if (settled) return;
+        finish();
         resolve(value);
       };
       const fail = (error: Error) => {
-        clearTimeout(timeout);
+        if (settled) return;
+        finish();
         reject(error);
       };
-      const onStdout = (chunk: Buffer) => {
+      const timeout = setTimeout(() => fail(new Error(`Timeout waiting for OpenCode server after ${options.timeoutMs ?? 15000}ms\n${output()}`)), options.timeoutMs ?? 15000);
+      const onClose = (code: number | null) => {
+        if (!settled) fail(new ManagedOpencodeExitError(code, output(),
+          addressInUse || /\bEADDRINUSE$/.test(stdout) || /\bEADDRINUSE$/.test(stderr)));
+      };
+      child.stdout?.on("data", (chunk) => {
+        // Keep draining both pipes after startup, without decoding or parsing.
+        // Feed the ring buffers regardless so captureLogs keeps the full log.
         const text = chunk.toString();
         stdoutBuffer = appendToBuffer(stdoutBuffer, text);
-        startupOutput += text;
-        for (const line of startupOutput.split("\n")) {
-          if (!line.startsWith("opencode server listening")) continue;
-          const match = line.match(/on\s+(https?:\/\/[^\s]+)/);
-          if (!match?.[1]) return fail(new Error(`Failed to parse OpenCode server URL from: ${line}`));
-          done(match[1]);
-        }
-      };
-      const onStderr = (chunk: Buffer) => {
+        if (settled) return;
+        stdout = collect(stdout, text);
+        lines.write(text);
+      });
+      child.stderr?.on("data", (chunk) => {
         const text = chunk.toString();
         stderrBuffer = appendToBuffer(stderrBuffer, text);
-        startupOutput += text;
-      };
-      child.stdout?.on("data", onStdout);
-      child.stderr?.on("data", onStderr);
-      child.once("error", fail);
+        if (settled) return;
+        stderr = collect(stderr, text);
+      });
+      child.on("error", fail);
       // ChildProcess can emit "exit" before its stdio pipes have drained. Wait
       // for "close" so retry classification includes every diagnostic line.
-      child.once("close", (code) => fail(new ManagedOpencodeExitError(code, startupOutput)));
+      child.once("close", onClose);
     });
   } catch (error) {
     await processLifecycle.close();
     throw error;
   }
-
-  // URL detected — replace the scanning listeners with simple accumulators
-  // so we don't keep splitting startupOutput (which grows unboundedly) on
-  // every chunk. The old listeners are removed to avoid the O(n²) scan loop.
-  // The new listeners only write to the ring buffers.
-  const onStdoutCapture = (chunk: Buffer) => {
-    stdoutBuffer = appendToBuffer(stdoutBuffer, chunk.toString());
-  };
-  const onStderrCapture = (chunk: Buffer) => {
-    stderrBuffer = appendToBuffer(stderrBuffer, chunk.toString());
-  };
-  child.stdout?.removeAllListeners("data");
-  child.stderr?.removeAllListeners("data");
-  child.stdout?.on("data", onStdoutCapture);
-  child.stderr?.on("data", onStderrCapture);
 
   return {
     url,

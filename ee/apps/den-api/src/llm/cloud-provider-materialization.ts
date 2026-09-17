@@ -1,23 +1,37 @@
 import { createHash } from "node:crypto"
-import { and, asc, eq, inArray, isNull } from "@openwork-ee/den-db/drizzle"
+import { catalogFastVariants, materializeLegacyFastProviders } from "@openwork/types/cloud-model-fast"
+import type { GatewayProviderSummary } from "@openwork/types/den/gateway"
+import { and, asc, eq, inArray, isNull, sql } from "@openwork-ee/den-db/drizzle"
 import {
+  GatewayProviderTable,
   LlmProviderModelTable,
   LlmProviderTable,
+  MemberTable,
   WorkerTable,
   WorkerTokenTable,
 } from "@openwork-ee/den-db/schema"
 import { db } from "../db.js"
 import { env } from "../env.js"
+import { ensureMemberGatewayKey } from "../gateway-keys.js"
+import { organizationAllowsManagedModels } from "../inference.js"
 import { appLogger } from "../observability/logger.js"
-import { fetchWithConnectRetry, previewFetch } from "../workers/preview-fetch.js"
-import { decodeProviderCredential, readProviderEnvNames } from "./provider-credentials.js"
+import { fetchPreviewNoRedirect, fetchWithConnectRetry, previewFetch } from "../workers/preview-fetch.js"
+import { gatewaySummary } from "./gateway-matrix.js"
+import {
+  decodeProviderCredential,
+  readProviderEnvNames,
+  runtimeProviderEnvNames,
+  runtimeProviderEnvTag,
+  selectLegacyScalarCredentialEnvName,
+  selectPrimaryCredentialEnvName,
+  toRuntimeProviderEnv,
+} from "./provider-credentials.js"
 
 type JsonRecord = Record<string, unknown>
 type OrganizationId = typeof LlmProviderTable.$inferSelect.organizationId
 type WorkerId = typeof WorkerTable.$inferSelect.id
 type WorkerTokenScope = typeof WorkerTokenTable.$inferSelect.scope
-type LlmProviderId = typeof LlmProviderTable.$inferSelect.id
-type LlmProviderSource = typeof LlmProviderTable.$inferSelect.source
+type LlmProviderSource = typeof LlmProviderTable.$inferSelect.source | "openwork_gateway"
 
 type EnvEntry = {
   key: string
@@ -32,7 +46,7 @@ type WorkerToken = {
 }
 
 export type CloudProviderMaterializationProvider = {
-  id: LlmProviderId
+  id: string
   source: LlmProviderSource
   providerId: string
   name: string
@@ -46,7 +60,7 @@ export type CloudProviderMaterializationProvider = {
 }
 
 export type CloudProviderMaterializationStore = {
-  listProviders: (organizationId: OrganizationId) => Promise<CloudProviderMaterializationProvider[]>
+  listProviders: (organizationId: OrganizationId, workerId: WorkerId) => Promise<CloudProviderMaterializationProvider[]>
   getActiveTokens: (workerId: WorkerId) => Promise<WorkerToken[]>
 }
 
@@ -61,6 +75,12 @@ type PreparedMaterialization = {
   fingerprint: string
   providers: MaterializedProvider[]
   envEntries: EnvEntry[]
+  /**
+   * Entries an earlier release wrote under a catalog provider's declared name
+   * before runtime names were provider-scoped. Deleted only while the worker
+   * still holds exactly the value now written under the scoped name.
+   */
+  supersededEntries: EnvEntry[]
 }
 
 type FetchImpl = (input: string, init?: RequestInit) => Promise<Response>
@@ -111,6 +131,8 @@ const requestTimeoutMs = 8_000
  * picker.
  */
 const materializedFingerprintByWorkerInstance = new Map<string, string>()
+// Only write-phase failures are cached. Read failures can occur while the
+// sandbox engine is booting and are safe to retry immediately.
 const materializationFailureByWorkerInstance = new Map<string, {
   failedAt: number
   result: Extract<CloudProviderMaterializationResult, { ok: false }>
@@ -138,45 +160,108 @@ const modelConfigPassthroughKeys = [
   "variants",
 ]
 
+async function listLegacyProviders(organizationId: OrganizationId): Promise<CloudProviderMaterializationProvider[]> {
+  const managedModelsAllowed = await organizationAllowsManagedModels(organizationId)
+  const providers = await db
+    .select()
+    .from(LlmProviderTable)
+    .where(and(
+      eq(LlmProviderTable.organizationId, organizationId),
+      managedModelsAllowed ? undefined : sql`${LlmProviderTable.source} <> 'openwork'`,
+    ))
+    .orderBy(asc(LlmProviderTable.id))
+
+  if (providers.length === 0) return []
+
+  const providerIds = providers.map((provider) => provider.id)
+  const models = await db
+    .select()
+    .from(LlmProviderModelTable)
+    .where(inArray(LlmProviderModelTable.llmProviderId, providerIds))
+    .orderBy(asc(LlmProviderModelTable.llmProviderId), asc(LlmProviderModelTable.modelId))
+
+  const modelsByProvider = new Map<string, CloudProviderMaterializationProvider["models"]>()
+  for (const model of models) {
+    const existing = modelsByProvider.get(model.llmProviderId) ?? []
+    existing.push({
+      modelId: model.modelId,
+      name: model.name,
+      modelConfig: model.modelConfig,
+    })
+    modelsByProvider.set(model.llmProviderId, existing)
+  }
+
+  return providers.map((provider) => ({
+    id: provider.id,
+    source: provider.source,
+    providerId: provider.providerId,
+    name: provider.name,
+    providerConfig: provider.providerConfig,
+    apiKey: provider.apiKey ?? null,
+    models: modelsByProvider.get(provider.id) ?? [],
+  }))
+}
+
+export function gatewayMaterializationProvider(summary: GatewayProviderSummary, memberKey: string): CloudProviderMaterializationProvider {
+  const runtimePrefix = `${runtimeProviderEnvTag(summary.id)}_`
+  const envNames = readProviderEnvNames(summary.providerConfig).map((name) => name.startsWith(runtimePrefix) ? name.slice(runtimePrefix.length) : name)
+  const credential = envNames.length > 1
+    ? JSON.stringify(Object.fromEntries(envNames.map((name) => [name, memberKey])))
+    : memberKey
+  return {
+    id: summary.id,
+    source: "openwork_gateway",
+    providerId: summary.providerId,
+    name: summary.name,
+    providerConfig: { ...summary.providerConfig, env: envNames },
+    apiKey: credential,
+    models: summary.models.map((model) => ({
+      modelId: model.id,
+      name: model.name,
+      modelConfig: model.config,
+    })),
+  }
+}
+
+async function listGatewayProviders(organizationId: OrganizationId, workerId: WorkerId): Promise<CloudProviderMaterializationProvider[]> {
+  const [owner] = await db
+    .select({ memberId: MemberTable.id })
+    .from(WorkerTable)
+    .innerJoin(MemberTable, and(
+      eq(MemberTable.organizationId, organizationId),
+      eq(MemberTable.userId, WorkerTable.created_by_user_id),
+      isNull(MemberTable.removedAt),
+    ))
+    .where(and(eq(WorkerTable.id, workerId), eq(WorkerTable.org_id, organizationId)))
+    .limit(1)
+  if (!owner) return []
+
+  const providers = await db
+    .select()
+    .from(GatewayProviderTable)
+    .where(and(
+      eq(GatewayProviderTable.organization_id, organizationId),
+      eq(GatewayProviderTable.status, "active"),
+    ))
+    .orderBy(asc(GatewayProviderTable.id))
+  const materialized: CloudProviderMaterializationProvider[] = []
+  let memberKey: string | null = null
+  for (const provider of providers) {
+    const summary = await gatewaySummary(provider, owner.memberId, env.gatewayPublicBaseUrl, false)
+    if (summary.models.length === 0) continue
+    memberKey ??= await ensureMemberGatewayKey({ organizationId, memberId: owner.memberId })
+    materialized.push(gatewayMaterializationProvider(summary, memberKey))
+  }
+  return materialized
+}
+
 const databaseMaterializationStore: CloudProviderMaterializationStore = {
-  async listProviders(organizationId) {
-    const providers = await db
-      .select()
-      .from(LlmProviderTable)
-      .where(eq(LlmProviderTable.organizationId, organizationId))
-      .orderBy(asc(LlmProviderTable.id))
-
-    if (providers.length === 0) {
-      return []
-    }
-
-    const providerIds = providers.map((provider) => provider.id)
-    const models = await db
-      .select()
-      .from(LlmProviderModelTable)
-      .where(inArray(LlmProviderModelTable.llmProviderId, providerIds))
-      .orderBy(asc(LlmProviderModelTable.llmProviderId), asc(LlmProviderModelTable.modelId))
-
-    const modelsByProvider = new Map<LlmProviderId, CloudProviderMaterializationProvider["models"]>()
-    for (const model of models) {
-      const existing = modelsByProvider.get(model.llmProviderId) ?? []
-      existing.push({
-        modelId: model.modelId,
-        name: model.name,
-        modelConfig: model.modelConfig,
-      })
-      modelsByProvider.set(model.llmProviderId, existing)
-    }
-
-    return providers.map((provider) => ({
-      id: provider.id,
-      source: provider.source,
-      providerId: provider.providerId,
-      name: provider.name,
-      providerConfig: provider.providerConfig,
-      apiKey: provider.apiKey ?? null,
-      models: modelsByProvider.get(provider.id) ?? [],
-    }))
+  async listProviders(organizationId, workerId) {
+    const [legacy, gateway] = await Promise.all([
+      listLegacyProviders(organizationId),
+      listGatewayProviders(organizationId, workerId),
+    ])
+    return [...legacy, ...gateway]
   },
   async getActiveTokens(workerId) {
     return db
@@ -233,7 +318,7 @@ function runtimeProviderId(provider: Pick<CloudProviderMaterializationProvider, 
 }
 
 function isCloudManagedProviderKey(providerId: string) {
-  return /^lpr_/i.test(providerId) || providerId.trim() === "openwork"
+  return /^(?:lpr_|ipr_)/i.test(providerId) || providerId.trim() === "openwork"
 }
 
 function upsertEnvEntry(entries: EnvEntry[], key: string, value: string) {
@@ -267,8 +352,16 @@ function readOpenWorkInferenceBaseUrl(providerConfig: JsonRecord) {
 
 function providerEnvEntries(provider: CloudProviderMaterializationProvider): EnvEntry[] {
   const entries: EnvEntry[] = []
-  const envNames = readProviderEnvNames(provider.providerConfig)
-  const credential = decodeProviderCredential(provider.apiKey)
+  const stored = decodeProviderCredential(provider.apiKey)
+  // Stored rows keep the catalog's declared names; the worker sees the
+  // provider-scoped runtime names for both the block and the multi-env map.
+  const credential = toRuntimeProviderEnv({
+    id: provider.id,
+    source: provider.source,
+    providerConfig: provider.providerConfig,
+    apiKeys: stored.apiKeys,
+  })
+  const envNames = readProviderEnvNames(credential.providerConfig)
 
   if (credential.apiKeys) {
     const keys = Object.keys(credential.apiKeys)
@@ -281,11 +374,16 @@ function providerEnvEntries(provider: CloudProviderMaterializationProvider): Env
     }
   }
 
-  if (credential.apiKey && envNames[0]) {
-    upsertEnvEntry(entries, envNames[0], credential.apiKey)
+  if (stored.apiKey && envNames[0]) {
+    upsertEnvEntry(
+      entries,
+      selectLegacyScalarCredentialEnvName(envNames) ?? envNames[0],
+      stored.apiKey,
+    )
   }
 
-  const primaryCredential = credential.apiKey?.trim() || entries[0]?.value || ""
+  const primaryCredentialEnvName = selectPrimaryCredentialEnvName(envNames, entries.map((entry) => entry.key))
+  const primaryCredential = stored.apiKey?.trim() || entries.find((entry) => entry.key === primaryCredentialEnvName)?.value || ""
   if (provider.source === "openwork" && primaryCredential) {
     upsertEnvEntry(entries, "OPENWORK_API_KEY", primaryCredential)
     const baseUrl = readOpenWorkInferenceBaseUrl(provider.providerConfig)
@@ -297,7 +395,7 @@ function providerEnvEntries(provider: CloudProviderMaterializationProvider): Env
   return entries
 }
 
-function buildModelConfig(model: CloudProviderMaterializationProvider["models"][number]) {
+function buildModelConfig(model: CloudProviderMaterializationProvider["models"][number], providerNpm: unknown) {
   const next: JsonRecord = {
     id: model.modelId,
     name: model.name,
@@ -310,6 +408,8 @@ function buildModelConfig(model: CloudProviderMaterializationProvider["models"][
     }
   }
 
+  const variants = catalogFastVariants(model.modelConfig, providerNpm)
+  if (variants) next.variants = variants
   return next
 }
 
@@ -317,13 +417,13 @@ function buildProviderConfig(provider: CloudProviderMaterializationProvider) {
   const models: JsonRecord = {}
   const sortedModels = [...provider.models].sort((left, right) => left.modelId.localeCompare(right.modelId))
   for (const model of sortedModels) {
-    models[model.modelId] = buildModelConfig(model)
+    models[model.modelId] = buildModelConfig(model, provider.providerConfig.npm)
   }
 
   const config: JsonRecord = {
     id: provider.providerId,
     name: provider.name,
-    env: readProviderEnvNames(provider.providerConfig),
+    env: runtimeProviderEnvNames(provider),
   }
 
   if (Object.keys(models).length > 0 || provider.source !== "openwork") {
@@ -359,12 +459,12 @@ function buildProviderConfig(provider: CloudProviderMaterializationProvider) {
 }
 
 function providerHasRequiredCredential(provider: CloudProviderMaterializationProvider, envEntries: EnvEntry[]) {
-  const envNames = readProviderEnvNames(provider.providerConfig)
+  const envNames = runtimeProviderEnvNames(provider)
   if (envNames.length === 0) {
     return true
   }
 
-  return envEntries.some((entry) => envNames.includes(entry.key))
+  return selectPrimaryCredentialEnvName(envNames, envEntries.map((entry) => entry.key)) !== null
 }
 
 function prepareMaterialization(providers: CloudProviderMaterializationProvider[]): PreparedMaterialization {
@@ -391,6 +491,18 @@ function prepareMaterialization(providers: CloudProviderMaterializationProvider[
       upsertEnvEntry(envEntries, entry.key, entry.value)
     }
   }
+  const desiredKeys = new Set(envEntries.map((entry) => entry.key))
+  const supersededEntries: EnvEntry[] = []
+  for (const { provider, envEntries: written } of materialized) {
+    const declared = readProviderEnvNames(provider.providerConfig)
+    runtimeProviderEnvNames(provider).forEach((runtimeName, index) => {
+      const declaredName = declared[index]
+      const value = written.find((entry) => entry.key === runtimeName)?.value
+      if (declaredName && declaredName !== runtimeName && value !== undefined && !desiredKeys.has(declaredName)) {
+        upsertEnvEntry(supersededEntries, declaredName, value)
+      }
+    })
+  }
 
   const fingerprintPayload = materialized.map((entry) => ({
     id: entry.provider.id,
@@ -407,7 +519,12 @@ function prepareMaterialization(providers: CloudProviderMaterializationProvider[
     fingerprint: `owp:v1:${hashString(stableJson(fingerprintPayload))}`,
     providers: materialized,
     envEntries,
+    supersededEntries,
   }
+}
+
+function staleSupersededKeys(supersededEntries: EnvEntry[], snapshot: EnvSnapshot) {
+  return supersededEntries.filter((entry) => snapshot.get(entry.key) === entry.value).map((entry) => entry.key)
 }
 
 export function computeCloudProviderMaterializationFingerprint(providers: CloudProviderMaterializationProvider[]) {
@@ -418,7 +535,7 @@ async function fetchWithTimeout(fetchImpl: FetchImpl, url: string, init: Request
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), requestTimeoutMs)
   try {
-    return await fetchImpl(url, { ...init, signal: controller.signal })
+    return await fetchPreviewNoRedirect(fetchImpl, url, { ...init, signal: controller.signal })
   } finally {
     clearTimeout(timeout)
   }
@@ -581,12 +698,16 @@ function buildRuntimeProviderPatch(prepared: PreparedMaterialization, currentMan
 }
 
 function materializedProviderStateMatches(prepared: PreparedMaterialization, currentManagedProviders: JsonRecord) {
-  const desiredManagedProviders: JsonRecord = {}
+  const desiredManagedProviders: Record<string, JsonRecord> = {}
   for (const provider of prepared.providers) {
     desiredManagedProviders[provider.runtimeProviderId] = provider.config
   }
 
-  return stableJson(currentManagedProviders) === stableJson(desiredManagedProviders)
+  const current = stableJson(currentManagedProviders)
+  // New v1 engines expose the expanded config; older servers still expose the
+  // disabled import metadata. Accept either to avoid reloads on every resolve.
+  return current === stableJson(desiredManagedProviders)
+    || current === stableJson(materializeLegacyFastProviders(desiredManagedProviders))
 }
 
 function materializedEnvStateMatches(entries: EnvEntry[], snapshot: EnvSnapshot) {
@@ -632,20 +753,20 @@ async function readEnvSnapshot(input: {
   fetchImpl: FetchImpl
   instanceUrl: string
   hostToken: string
-  entries: EnvEntry[]
+  keys: string[]
 }): Promise<EnvSnapshot> {
   const snapshot: EnvSnapshot = new Map()
-  for (const entry of input.entries) {
-    if (snapshot.has(entry.key)) {
+  for (const key of input.keys) {
+    if (snapshot.has(key)) {
       continue
     }
     const existing = await readEnvEntry({
       fetchImpl: input.fetchImpl,
       instanceUrl: input.instanceUrl,
       hostToken: input.hostToken,
-      key: entry.key,
+      key,
     })
-    snapshot.set(entry.key, existing?.value ?? null)
+    snapshot.set(key, existing?.value ?? null)
   }
 
   return snapshot
@@ -947,6 +1068,7 @@ export async function materializeCloudWorkerProviders(input: {
   const cacheKey = materializationCacheKey(input.workerId, instanceUrl)
   let fingerprint: string | null = null
   let providerCount = 0
+  let writePhaseStarted = false
 
   try {
     if (!instanceUrl) {
@@ -958,7 +1080,7 @@ export async function materializeCloudWorkerProviders(input: {
       return recentFailure.result
     }
 
-    const providers = await store.listProviders(input.organizationId)
+    const providers = await store.listProviders(input.organizationId, input.workerId)
     const prepared = prepareMaterialization(providers)
     fingerprint = prepared.fingerprint
     providerCount = prepared.providers.length
@@ -989,11 +1111,17 @@ export async function materializeCloudWorkerProviders(input: {
       fetchImpl,
       instanceUrl,
       hostToken: tokens.hostToken,
-      entries: prepared.envEntries,
+      keys: [...prepared.envEntries, ...prepared.supersededEntries].map((entry) => entry.key),
     })
+    const staleKeys = staleSupersededKeys(prepared.supersededEntries, envSnapshot)
+    // Roll back only what this pass writes or deletes; a bare-name entry that
+    // is left alone is never touched on the way out either.
+    const touchedKeys = new Set([...prepared.envEntries.map((entry) => entry.key), ...staleKeys])
+    const envRollbackSnapshot: EnvSnapshot = new Map([...envSnapshot].filter(([key]) => touchedKeys.has(key)))
     if (
       materializedProviderStateMatches(prepared, currentManagedProviders)
       && materializedEnvStateMatches(prepared.envEntries, envSnapshot)
+      && staleKeys.length === 0
     ) {
       materializedFingerprintByWorkerInstance.set(cacheKey, fingerprint)
       materializationFailureByWorkerInstance.delete(cacheKey)
@@ -1004,6 +1132,7 @@ export async function materializeCloudWorkerProviders(input: {
     let providerPatched = false
 
     try {
+      writePhaseStarted = true
       await writeEnvEntries({
         fetchImpl,
         instanceUrl,
@@ -1067,7 +1196,7 @@ export async function materializeCloudWorkerProviders(input: {
           fetchImpl,
           instanceUrl,
           hostToken: tokens.hostToken,
-          snapshot: envSnapshot,
+          snapshot: envRollbackSnapshot,
         }).catch((rollbackError) => {
           materializationLogger.warn("cloud provider env rollback failed", {
             worker_id: input.workerId,
@@ -1077,6 +1206,24 @@ export async function materializeCloudWorkerProviders(input: {
         })
       }
       throw error
+    }
+
+    // The org credential an earlier release left under the bare catalog name
+    // would keep enabling OpenCode's built-in vendor catalog. Remove it only on
+    // an exact value match (a different value is the member's own), and only
+    // after the scoped names are in place; a failed delete is retried by the
+    // next pass because it keeps the state out of noop.
+    for (const key of staleKeys) {
+      await deleteEnvEntry({ fetchImpl, instanceUrl, hostToken: tokens.hostToken, key, ignoreNotFound: true }).catch(
+        (deleteError) => {
+          materializationLogger.warn("cloud provider stale env cleanup failed", {
+            worker_id: input.workerId,
+            organization_id: input.organizationId,
+            env_key: key,
+            reason: deleteError instanceof Error ? deleteError.message : "env_delete_failed",
+          })
+        },
+      )
     }
 
     materializedFingerprintByWorkerInstance.set(cacheKey, fingerprint)
@@ -1096,7 +1243,9 @@ export async function materializeCloudWorkerProviders(input: {
       result,
       cause: error,
     })
-    materializationFailureByWorkerInstance.set(cacheKey, { failedAt: now(), result })
+    if (writePhaseStarted) {
+      materializationFailureByWorkerInstance.set(cacheKey, { failedAt: now(), result })
+    }
     return result
   }
 }

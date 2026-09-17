@@ -1,14 +1,19 @@
 import type { Hono } from "hono"
 import { describeRoute } from "hono-openapi"
 import { z } from "zod"
+import { workflowRunPreviewSchema } from "@openwork/types/workflows"
 import { listWorkflowRuns } from "../../workflow-runs.js"
+import { workflowRunPreviews } from "../../workflows.js"
+import { listTeamsForMember } from "../../orgs.js"
+import { checkEntitlement } from "../../entitlements.js"
 import { db } from "../../db.js"
+import { keysetCursorQuerySchema, nextCursorSchema } from "../../list-pagination.js"
 import { orgMemberRoute, queryValidator } from "../../middleware/index.js"
-import { denTypeIdSchema, invalidRequestSchema, jsonResponse, unauthorizedSchema } from "../../openapi.js"
+import { denTypeIdSchema, enterprisePlanRequiredSchema, invalidRequestSchema, jsonResponse, unauthorizedSchema } from "../../openapi.js"
 import type { OrgRouteVariables } from "./shared.js"
-import { memberHasRole } from "./shared.js"
 
 const listWorkflowRunsQuerySchema = z.object({
+  cursor: keysetCursorQuerySchema.optional(),
   limit: z.coerce.number().int().min(1).max(200).optional().default(50),
 })
 
@@ -25,10 +30,12 @@ const workflowRunSchema = z.object({
   finishedAt: z.string().datetime(),
   createdAt: z.string().datetime(),
   orgMembershipId: denTypeIdSchema("member").nullable(),
+  workflow: workflowRunPreviewSchema.nullable(),
 })
 
 const workflowRunListResponseSchema = z.object({
   runs: z.array(workflowRunSchema),
+  nextCursor: nextCursorSchema,
 }).meta({ ref: "WorkflowRunListResponse" })
 
 export function registerOrgWorkflowRunRoutes<T extends { Variables: OrgRouteVariables }>(app: Hono<T>) {
@@ -37,23 +44,36 @@ export function registerOrgWorkflowRunRoutes<T extends { Variables: OrgRouteVari
     describeRoute({
       tags: ["Workflow Runs"],
       summary: "List Workflow runs",
-      description: "Lists Workflow run receipts visible to the active organization member.",
+      description: "Lists Workflow run receipts visible to the active organization member, newest first. "
+        + "Pass nextCursor from the previous page as cursor to continue; nextCursor is null on the last page.",
       responses: {
         200: jsonResponse("Workflow runs returned successfully.", workflowRunListResponseSchema),
         400: jsonResponse("The Workflow run list query was invalid.", invalidRequestSchema),
         401: jsonResponse("The caller must be signed in to list Workflow runs.", unauthorizedSchema),
+        402: jsonResponse("Workflow run analytics requires an Enterprise plan.", enterprisePlanRequiredSchema),
       },
     }),
     orgMemberRoute(),
     queryValidator(listWorkflowRunsQuerySchema),
     async (c) => {
       const context = c.get("organizationContext")
+      const entitlement = checkEntitlement(context.organization.metadata, "analytics")
+      if (!entitlement.ok) return c.json(entitlement.response, entitlement.status)
       const member = context.currentMember
-      const isAdmin = member.isOwner || memberHasRole(member.role, "admin")
-      const rows = await listWorkflowRuns(db, {
+      const query = c.req.valid("query")
+      const { items: rows, nextCursor } = await listWorkflowRuns(db, {
         organizationId: context.organization.id,
-        ...(isAdmin ? {} : { orgMembershipId: member.id }),
-        limit: c.req.valid("query").limit,
+        orgMembershipId: member.id,
+        limit: query.limit,
+        cursor: query.cursor,
+      })
+      const previews = await workflowRunPreviews({
+        context: {
+          organizationContext: context,
+          memberTeams: await listTeamsForMember({ organizationId: context.organization.id, memberId: member.id }),
+          session: c.get("session"),
+        },
+        runs: rows,
       })
 
       return c.json({
@@ -70,7 +90,9 @@ export function registerOrgWorkflowRunRoutes<T extends { Variables: OrgRouteVari
           finishedAt: row.finished_at.toISOString(),
           createdAt: row.created_at.toISOString(),
           orgMembershipId: row.org_membership_id,
+          workflow: previews.get(row.id) ?? null,
         })),
+        nextCursor,
       })
     },
   )

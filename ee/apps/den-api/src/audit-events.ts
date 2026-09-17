@@ -21,7 +21,12 @@ export const ORGANIZATION_AUDIT_ACTIONS = {
   scimReconciliationRun: "organization.scim.reconciliation_run",
   scimGroupMappingUpdated: "organization.scim.group_mapping_updated",
   ssoConnectionRegistered: "organization.sso.connection_registered",
+  ssoConnectionEnabled: "organization.sso.connection_enabled",
+  ssoConnectionDisabled: "organization.sso.connection_disabled",
   ssoConnectionDeleted: "organization.sso.connection_deleted",
+  openWorkWebComplimentaryAccessGranted: "organization.openwork_web.complimentary_access_granted",
+  openWorkWebComplimentaryAccessRevoked: "organization.openwork_web.complimentary_access_revoked",
+  dpaSignedUpdated: "organization.dpa_signed.updated",
 }
 
 type OrganizationAuditAction = typeof ORGANIZATION_AUDIT_ACTIONS[keyof typeof ORGANIZATION_AUDIT_ACTIONS]
@@ -44,7 +49,7 @@ export function buildOrganizationAuditEvent(input: {
   }
 }
 
-type OrganizationAuditEvent = ReturnType<typeof buildOrganizationAuditEvent>
+export type OrganizationAuditEvent = ReturnType<typeof buildOrganizationAuditEvent>
 
 export function isOrganizationAuditAlertAction(action: OrganizationAuditAction) {
   switch (action) {
@@ -62,7 +67,12 @@ export function isOrganizationAuditAlertAction(action: OrganizationAuditAction) 
     case ORGANIZATION_AUDIT_ACTIONS.scimConnectionDeleted:
     case ORGANIZATION_AUDIT_ACTIONS.scimGroupMappingUpdated:
     case ORGANIZATION_AUDIT_ACTIONS.ssoConnectionRegistered:
+    case ORGANIZATION_AUDIT_ACTIONS.ssoConnectionEnabled:
+    case ORGANIZATION_AUDIT_ACTIONS.ssoConnectionDisabled:
     case ORGANIZATION_AUDIT_ACTIONS.ssoConnectionDeleted:
+    case ORGANIZATION_AUDIT_ACTIONS.openWorkWebComplimentaryAccessGranted:
+    case ORGANIZATION_AUDIT_ACTIONS.openWorkWebComplimentaryAccessRevoked:
+    case ORGANIZATION_AUDIT_ACTIONS.dpaSignedUpdated:
       return true
     case ORGANIZATION_AUDIT_ACTIONS.scimReconciliationRun:
       return false
@@ -79,10 +89,7 @@ export function buildOrganizationAuditAlertLogLine(event: OrganizationAuditEvent
   })}`
 }
 
-export async function recordOrganizationAuditEvent(input: Parameters<typeof buildOrganizationAuditEvent>[0]) {
-  const { db } = await import("./db.js")
-  const event = buildOrganizationAuditEvent(input)
-  await db.insert(AuditEventTable).values(event)
+export function logOrganizationAuditEvent(event: OrganizationAuditEvent) {
   if (isOrganizationAuditAlertAction(event.action)) {
     logger.warn(`${AUDIT_ALERT_OPERATIONAL_MARKER} organization audit alert`, {
       operational_marker: AUDIT_ALERT_OPERATIONAL_MARKER,
@@ -93,4 +100,11 @@ export async function recordOrganizationAuditEvent(input: Parameters<typeof buil
       payload: event.payload,
     })
   }
+}
+
+export async function recordOrganizationAuditEvent(input: Parameters<typeof buildOrganizationAuditEvent>[0]) {
+  const { db } = await import("./db.js")
+  const event = buildOrganizationAuditEvent(input)
+  await db.insert(AuditEventTable).values(event)
+  logOrganizationAuditEvent(event)
 }

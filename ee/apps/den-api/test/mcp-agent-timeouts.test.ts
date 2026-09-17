@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js"
 import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js"
-import { beforeAll, expect, test } from "bun:test"
+import { afterAll, beforeAll, expect, mock, test } from "bun:test"
 import type { ExecuteCapabilityToolResult } from "../src/mcp/agent.js"
 import {
   BUILTIN_ADD_TO_MARKETPLACE_CAPABILITY,
@@ -13,6 +13,25 @@ import {
   searchBuiltinSkillCapabilities,
 } from "../src/mcp/builtin-skills.js"
 import { compareCapabilityMatches, type CapabilityMatch } from "../src/mcp/search.js"
+
+// These unit tests exercise protocol/result shaping, not authentication or HTML
+// rendering. Avoid auth's startup database writes and generated bundle imports.
+mock.module("../src/auth.js", () => ({
+  auth: {},
+  DEN_MCP_OPAQUE_ACCESS_TOKEN_PREFIX: "ow_mcp_at_",
+  DEN_MCP_FIRST_PARTY_CLIENT_ID: "openwork-desktop",
+  DEN_MCP_FIRST_PARTY_RESOURCES: ["http://127.0.0.1:8790/mcp/agent"],
+  DEN_MCP_GRANT_ID_CLAIM: "https://openworklabs.com/grant_id",
+  DEN_MCP_ORG_ID_CLAIM: "https://openworklabs.com/org_id",
+  DEN_MCP_OAUTH_RESOURCE: "http://127.0.0.1:8790/mcp/agent",
+  DEN_MCP_RESOURCE: "http://127.0.0.1:8790/mcp",
+  DEN_MCP_RESOURCE_CLAIM: "https://openworklabs.com/resource",
+  DEN_MCP_RESOURCES: ["http://127.0.0.1:8790/mcp"],
+  DEN_MCP_TOKEN_USE_CLAIM: "https://openworklabs.com/token_use",
+}))
+mock.module("@openwork/mcp-apps/plugin-flow", () => ({ pluginFlowAppHtml: "<html></html>" }))
+mock.module("@openwork/mcp-apps/skill-created", () => ({ skillCreatedAppHtml: "<html></html>" }))
+afterAll(() => mock.restore())
 
 function seedRequiredEnv() {
   process.env.DATABASE_URL = process.env.DATABASE_URL ?? "mysql://root:password@127.0.0.1:3306/openwork_test"
@@ -119,7 +138,7 @@ test("agent MCP server exposes steering instructions during initialize", async (
   expect(client.getInstructions()).toContain("Use create_skill")
   expect(client.getInstructions()).toContain("do not route these flows through execute_capability, postPlugins, or postConfigObjectsVersions")
   expect(client.getInstructions()).toContain("update_skill to publish a new immutable version")
-  expect(client.getInstructions()).toContain("execute that exact match once: it returns the live status and renders an actionable connection card")
+  expect(client.getInstructions()).toContain("Do not execute the same status again when the search response includes connectionAction")
   expect(client.getInstructions()).toContain("create-skill")
   expect(client.getInstructions()).toContain("share-plugin")
   expect(client.getInstructions()).toContain("add-to-marketplace")
@@ -137,6 +156,9 @@ test("agent MCP server exposes steering instructions during initialize", async (
   expect(client.getInstructions()).toContain("always attempts the downstream provider call")
   expect(client.getInstructions()).toContain("invalid_capability_arguments")
   expect(client.getInstructions()).toContain("never retry the same arguments unchanged")
+  expect(client.getInstructions()).toContain("on the remote session")
+  expect(client.getInstructions()).toContain("remote-session:create")
+  expect(client.getInstructions()).toContain("OpenWork Web instance")
 
   await client.close()
   await server.close()
@@ -293,6 +315,24 @@ test("capability search results include structured output alongside text compati
 
   expect(result.structuredContent).toEqual({ matches })
   expect(JSON.parse(result.content[0]?.text ?? "{}")).toEqual({ matches })
+  const connectionStatus = {
+    version: 1, kind: "connection_action", source: "openwork-cloud",
+    layer: "mcp_connection", errorCode: "not_connected", authType: "oauth", credentialMode: "per_member",
+    connectionId: "emc_notes", connectionName: "Notes", state: "needs_connection",
+    actor: "member", message: "Connect your notes account.",
+    action: { type: "connect", label: "Connect Notes", surface: "openwork_your_connections", retry: "search_capabilities" },
+  }
+  const blocked = [{ ...matches[0], kind: "connection_status", connectionStatus }]
+  const quiet = agentModule.capabilitySearchToolResult(blocked)
+  expect(quiet.structuredContent.matches).toEqual(blocked)
+  expect(quiet.structuredContent.connectionAction).toBeUndefined()
+  expect(quiet).not.toHaveProperty("_meta")
+  const actionable = agentModule.capabilitySearchToolResult(blocked, undefined, null, true)
+  expect(actionable.structuredContent.matches).toEqual(blocked)
+  expect(actionable.structuredContent.connectionAction?.connectionId).toBe("emc_notes")
+  expect(actionable).not.toHaveProperty("_meta")
+  expect(agentModule.SEARCH_CAPABILITIES_OUTPUT_SCHEMA.safeParse(actionable.structuredContent).success).toBe(true)
+  expect(result).not.toHaveProperty("_meta")
 })
 
 test("capability search preserves the bounded-fanout coverage warning", () => {
@@ -360,6 +400,13 @@ test("external capability failures preserve the slim agent-facing MCP error enve
   expect("actionOwner" in payload).toBe(false)
   expect("operatorAction" in payload).toBe(false)
   expect("diagnostic" in payload.connectionStatus).toBe(false)
+  expect(result.structuredContent).toMatchObject({
+    schemaVersion: "1",
+    connectionId: "emc_test",
+    state: "reauth_required",
+    action: { type: "reconnect" },
+  })
+  expect(result).not.toHaveProperty("_meta")
 })
 
 test("invalid capability arguments preserve corrective retry instructions", () => {
@@ -394,12 +441,17 @@ test("invalid capability arguments preserve corrective retry instructions", () =
   })
 })
 
-test("successful provider output preserves advisory schema guidance as additional content", () => {
+test.each([true, false, undefined])("provider output preserves schema guidance without overwriting provider data (isError=%s)", (isError) => {
+  const provider = {
+    content: [{ type: "text", text: "Provider result." }],
+    structuredContent: { serverTools: ["provider-tool"], schemaGuidance: { provider: true } },
+    _meta: { privateFixture: "view-only" },
+    ...(isError === undefined ? {} : { isError }),
+  }
   const result = agentModule.externalCapabilitySuccessToolResult({
     ok: true,
-    result: {
-      content: [{ type: "text", text: "Provider accepted the request." }],
-    },
+    result: provider,
+    mcpApp: { connectionId: "emc_fixture", toolName: "render", resourceUri: "ui://fixture/view.html", arguments: {} },
     schemaGuidance: {
       advisory: true,
       providerCallAttempted: true,
@@ -417,15 +469,24 @@ test("successful provider output preserves advisory schema guidance as additiona
     },
   })
 
-  expect(result.isError).toBeUndefined()
-  expect(result.content[0]).toEqual({ type: "text", text: "Provider accepted the request." })
+  expect(result.isError).toBe(isError)
+  expect(result.content[0]).toEqual(provider.content[0])
+  expect(result.structuredContent).toEqual(provider.structuredContent)
+  expect(result._meta).toMatchObject({
+    privateFixture: "view-only",
+    "openwork/serverTools": { searchCapabilities: "search_capabilities", executeCapability: "execute_capability" },
+    "openwork/schemaGuidance": { advisory: true },
+  })
+  expect(JSON.stringify(result.content)).not.toContain("view-only")
+  expect(JSON.stringify(result.content)).not.toContain("openwork/serverTools")
   expect(JSON.parse(result.content[1]?.text ?? "{}")).toMatchObject({
-    schemaGuidance: {
+    "openwork/schemaGuidance": {
       advisory: true,
       providerCallAttempted: true,
       warnings: [{ code: "arguments_schema_mismatch" }],
     },
   })
+  expect(agentModule.externalCapabilitySuccessToolResult({ ok: true, result: provider })).toEqual(provider)
 })
 
 test("structured search output remains compatible with marketplace match kinds and statuses", () => {
@@ -495,3 +556,21 @@ test("connection status only outranks equally relevant callable tools", () => {
   expect(matches[0]?.kind).toBe("connection_status")
   expect(matches[0]?.score).toBe(20)
 })
+
+
+test("connector discovery includes every preset and separates setup suggestions from tools", async () => {
+  const { connectorCatalogForQuery } = await import("../src/mcp/connector-catalog.js");
+  const { EXTERNAL_MCP_PRESETS } = await import("../src/capability-sources/external-mcp-presets.js");
+  const catalog = connectorCatalogForQuery("Please connect Slack");
+  expect(catalog?.selectedIds).toEqual(["slack"]);
+  expect(catalog?.entries.map(entry => entry.id)).toEqual(["google-workspace", "microsoft-365", ...EXTERNAL_MCP_PRESETS.map(preset => preset.presetId)]);
+  expect(catalog?.entries.find(entry => entry.id === "slack")?.setup).toBe("oauth_client");
+  expect(connectorCatalogForQuery("slacker")).toBeNull();
+  expect(connectorCatalogForQuery("write a report")).toBeNull();
+  expect(connectorCatalogForQuery("all quick adds")?.selectedIds).toEqual([]);
+  expect(connectorCatalogForQuery("Slack", true)?.selectedIds).toEqual([]);
+  const result = agentModule.capabilitySearchToolResult([], undefined, catalog);
+  expect(result.structuredContent.connectorCatalog).toEqual(catalog);
+  expect(result.structuredContent.hint).toContain("not connected tools");
+  for (const entry of catalog?.entries ?? []) expect(new URL(entry.setupUrl).searchParams.get("quickAdd")).toBe(entry.id);
+});

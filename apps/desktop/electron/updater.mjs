@@ -191,8 +191,17 @@ function updaterChannelState(app, channel, targetVersion = null, manifestChannel
   };
 }
 
-async function applyElectronUpdaterFeed(app, updater, targetVersion = null, manifestChannel = "latest", allowOlder = false) {
-  const channel = await readElectronUpdaterChannel(app, manifestChannel);
+async function applyElectronUpdaterFeed(
+  app,
+  updater,
+  targetVersion = null,
+  manifestChannel = "latest",
+  allowOlder = false,
+  channelOverride,
+) {
+  const channel = channelOverride === undefined
+    ? await readElectronUpdaterChannel(app, manifestChannel)
+    : normalizeElectronUpdaterChannel(channelOverride, manifestChannel);
   if (targetVersion && channel !== "stable") {
     throw new Error("Version-specific update feeds are supported only on the stable channel.");
   }
@@ -249,9 +258,10 @@ const SHIP_IT_DEFAULTS_DOMAIN = "com.differentai.openwork.ShipIt";
 // avoids the ENOENT abort.
 async function enableSquirrelDirectContentsWrite(
   shipItDefaultsDomain = SHIP_IT_DEFAULTS_DOMAIN,
+  writeDefaults = runDefaults,
 ) {
   if (process.platform !== "darwin") return;
-  await runDefaults(["write", shipItDefaultsDomain, "SquirrelMacEnableDirectContentsWrite", "-bool", "YES"]);
+  await writeDefaults(["write", shipItDefaultsDomain, "SquirrelMacEnableDirectContentsWrite", "-bool", "YES"]);
 }
 
 // Path of the ShipIt cache that, when stuck, keeps aborting future installs.
@@ -288,20 +298,35 @@ export function registerUpdaterIpc({
   loadAutoUpdater = () => import("electron-updater"),
   manifestChannel = "latest",
   shipItDefaultsDomain = SHIP_IT_DEFAULTS_DOMAIN,
+  writeDefaults = runDefaults,
+  nativeStagingTimeoutMs = 120_000,
   electronNet = null,
   shell = null,
   distribution = "public",
   platform = process.platform,
   arch = process.arch,
   env = process.env,
+  // Throws while the installation still has to be activated. Until then no Den
+  // is known, so the organization's allowed-versions policy cannot be honoured
+  // and the renderer must not be able to check for, stage, or install updates.
+  assertActivation = () => {},
 }) {
   let autoUpdaterInstance = null;
-  let autoUpdaterLoaded = false;
+  let autoUpdaterLoadPromise = null;
   let checkedUpdateVersion = null;
   let checkedUpdateTargetVersion = null;
+  let checkedUpdateChannel = null;
   let updateDownloaded = false;
+  let macStagedVersion = null;
   let recoveryReleases = [];
   const recoveryWitness = { installRequests: [], openedArtifactUrls: [], quitRequested: false };
+  let updaterOperationQueue = Promise.resolve();
+
+  function queueUpdaterOperation(operation) {
+    const result = updaterOperationQueue.then(operation, operation);
+    updaterOperationQueue = result.then(() => undefined, () => undefined);
+    return result;
+  }
 
   function sendToRenderer(channel, data) {
     try {
@@ -316,50 +341,106 @@ export function registerUpdaterIpc({
 
   async function ensureAutoUpdater() {
     if (!app.isPackaged) return null;
-    if (autoUpdaterLoaded) return autoUpdaterInstance;
-    autoUpdaterLoaded = true;
-    try {
-      const mod = await loadAutoUpdater();
-      autoUpdaterInstance = mod.autoUpdater ?? mod.default?.autoUpdater ?? null;
-      if (autoUpdaterInstance) {
-        autoUpdaterInstance.autoDownload = false;
-        autoUpdaterInstance.autoInstallOnAppQuit = true;
-        // Differential (blockmap) downloads reconstruct the update zip from the
-        // installed app + a diff. On macOS that reconstructed bundle is what
-        // feeds Squirrel's fragile move-based install, and is a common trigger
-        // for the "Failed to copy bundle … no such file" abort. Download the
-        // full zip instead — alpha builds are swapped wholesale anyway.
-        autoUpdaterInstance.disableDifferentialDownload = true;
-        // Make Squirrel.Mac write contents in place rather than moving whole
-        // bundles (see enableSquirrelDirectContentsWrite for why).
-        await enableSquirrelDirectContentsWrite(shipItDefaultsDomain);
-        autoUpdaterInstance.on("error", (err) => {
-          // Do not invalidate a staged download on arbitrary updater errors.
-          // A later transient check failure does not delete the downloaded
-          // update; quitAndInstall reports a descriptive failure if it is gone.
-          console.warn("[updater] error", err);
-        });
-        autoUpdaterInstance.on("update-downloaded", () => {
-          updateDownloaded = true;
-        });
-        // Forward download progress to the renderer so the UI can show
-        // incremental bytes instead of staying stuck at 0.
-        autoUpdaterInstance.on("download-progress", (info) => {
-          sendToRenderer("openwork:updater:download-progress", {
-            bytesPerSecond: info.bytesPerSecond ?? 0,
-            percent: info.percent ?? 0,
-            transferred: info.transferred ?? 0,
-            total: info.total ?? 0,
-            delta: info.delta ?? 0,
-          });
-        });
-        await applyElectronUpdaterFeed(app, autoUpdaterInstance, null, manifestChannel);
-      }
-    } catch (error) {
-      console.warn("[updater] electron-updater not available", error);
-      autoUpdaterInstance = null;
+    if (!autoUpdaterLoadPromise) {
+      autoUpdaterLoadPromise = (async () => {
+        try {
+          const mod = await loadAutoUpdater();
+          autoUpdaterInstance = mod.autoUpdater ?? mod.default?.autoUpdater ?? null;
+          if (autoUpdaterInstance) {
+            autoUpdaterInstance.autoDownload = false;
+            autoUpdaterInstance.autoInstallOnAppQuit = true;
+            // Differential (blockmap) downloads reconstruct the update zip from the
+            // installed app + a diff. On macOS that reconstructed bundle is what
+            // feeds Squirrel's fragile move-based install, and is a common trigger
+            // for the "Failed to copy bundle … no such file" abort. Download the
+            // full zip instead — alpha builds are swapped wholesale anyway.
+            autoUpdaterInstance.disableDifferentialDownload = true;
+            // Make Squirrel.Mac write contents in place rather than moving whole
+            // bundles (see enableSquirrelDirectContentsWrite for why).
+            await enableSquirrelDirectContentsWrite(shipItDefaultsDomain, writeDefaults);
+            autoUpdaterInstance.on("error", (err) => {
+              // Do not invalidate a staged download on arbitrary updater errors.
+              // A later transient check failure does not delete the downloaded
+              // update; quitAndInstall reports a descriptive failure if it is gone.
+              console.warn("[updater] error", err);
+            });
+            autoUpdaterInstance.on("update-downloaded", () => {
+              if (platform !== "darwin") updateDownloaded = true;
+            });
+            // Forward download progress to the renderer so the UI can show
+            // incremental bytes instead of staying stuck at 0.
+            autoUpdaterInstance.on("download-progress", (info) => {
+              sendToRenderer("openwork:updater:download-progress", {
+                bytesPerSecond: info.bytesPerSecond ?? 0,
+                percent: info.percent ?? 0,
+                transferred: info.transferred ?? 0,
+                total: info.total ?? 0,
+                delta: info.delta ?? 0,
+              });
+            });
+            await applyElectronUpdaterFeed(app, autoUpdaterInstance, null, manifestChannel);
+          }
+        } catch (error) {
+          console.warn("[updater] electron-updater not available", error);
+          autoUpdaterInstance = null;
+        }
+        return autoUpdaterInstance;
+      })();
     }
-    return autoUpdaterInstance;
+    return autoUpdaterLoadPromise;
+  }
+
+  async function downloadAndStageUpdate(updater, version) {
+    if (platform !== "darwin") {
+      updater.autoInstallOnAppQuit = true;
+      await updater.downloadUpdate();
+      return;
+    }
+
+    updateDownloaded = false;
+    macStagedVersion = null;
+    preventPendingUpdaterInstall(updater);
+    // MacUpdater exposes this property at runtime. Never treat ZIP completion
+    // (or its sticky squirrelDownloadedUpdate flag) as native install readiness.
+    const nativeUpdater = updater.nativeUpdater;
+    if (!nativeUpdater) throw new Error("Native macOS updater is unavailable.");
+
+    // With autoInstallOnAppQuit disabled, even a cached ZIP rebuilds the proxy
+    // feed without starting Squirrel. Own that check so errors after ZIP transfer
+    // and a stalled native stage cannot leave downloadUpdate pending forever.
+    await updater.downloadUpdate();
+    const feedUrl = nativeUpdater.getFeedURL();
+    if (!feedUrl) throw new Error("Native macOS update feed is unavailable.");
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        finish(new Error("Timed out preparing the macOS update. Please retry the download."));
+      }, nativeStagingTimeoutMs);
+      function finish(error) {
+        clearTimeout(timer);
+        nativeUpdater.removeListener("update-downloaded", onDownloaded);
+        nativeUpdater.removeListener("error", onError);
+        if (error) reject(error);
+        else resolve();
+      }
+      function onDownloaded(_event, _notes, _name, _date, updateUrl) {
+        // Each MacUpdater download creates a new loopback feed. A cached or
+        // delayed Squirrel event from an older feed must not ready this version.
+        if (typeof updateUrl !== "string" || !updateUrl.startsWith(`${feedUrl}/`)) return;
+        finish();
+      }
+      function onError(error) {
+        finish(error);
+      }
+      nativeUpdater.on("update-downloaded", onDownloaded);
+      nativeUpdater.on("error", onError);
+      try {
+        nativeUpdater.checkForUpdates();
+      } catch (error) {
+        finish(error);
+      }
+    });
+    macStagedVersion = version;
+    updater.autoInstallOnAppQuit = true;
   }
 
   async function resolveRecoveryArtifact(version) {
@@ -533,8 +614,7 @@ export function registerUpdaterIpc({
         if (compareStableVersions(release.version, currentVersion) === null) {
           throw new Error("Installed version could not be validated.");
         }
-        updater.autoInstallOnAppQuit = true;
-        await updater.downloadUpdate();
+        await downloadAndStageUpdate(updater, release.version);
         updater.quitAndInstall(false, true);
         return { ok: true, action: "install" };
       } catch (error) {
@@ -560,10 +640,13 @@ export function registerUpdaterIpc({
     }
   }
 
-  ipcMain.handle("openwork:recovery:use", async (_event, id) => useRecoveryRelease(id));
+  ipcMain.handle("openwork:recovery:use", async (_event, id) =>
+    queueUpdaterOperation(() => useRecoveryRelease(id)));
   ipcMain.handle("openwork:recovery:restorePrevious", async () => {
-    const previous = recoveryReleases.find((release) => release.marking === "previous");
-    return previous ? useRecoveryRelease(previous.id) : { ok: false, reason: "No verified previous version is available." };
+    return queueUpdaterOperation(() => {
+      const previous = recoveryReleases.find((release) => release.marking === "previous");
+      return previous ? useRecoveryRelease(previous.id) : { ok: false, reason: "No verified previous version is available." };
+    });
   });
   ipcMain.handle("openwork:recovery:evalSnapshot", async () => ({
     candidates: recoveryReleases,
@@ -571,15 +654,16 @@ export function registerUpdaterIpc({
     ...recoveryWitness,
   }));
 
-  ipcMain.handle("openwork:updater:getChannel", async () => {
+  ipcMain.handle("openwork:updater:getChannel", async () => queueUpdaterOperation(async () => {
     const channel = await readElectronUpdaterChannel(app, manifestChannel);
     return updaterChannelState(app, channel, null, manifestChannel);
-  });
+  }));
 
-  ipcMain.handle("openwork:updater:setChannel", async (_event, rawChannel) => {
+  ipcMain.handle("openwork:updater:setChannel", async (_event, rawChannel) => queueUpdaterOperation(async () => {
     const channel = await writeElectronUpdaterChannel(app, rawChannel, manifestChannel);
     checkedUpdateVersion = null;
     checkedUpdateTargetVersion = null;
+    checkedUpdateChannel = null;
     updateDownloaded = false;
     const updater = await ensureAutoUpdater();
     if (updater) {
@@ -587,15 +671,18 @@ export function registerUpdaterIpc({
       // also prevents an Alpha build from installing automatically on quit
       // after an organization policy moves the desktop back to Stable.
       preventPendingUpdaterInstall(updater);
-      return applyElectronUpdaterFeed(app, updater, null, manifestChannel);
+      return applyElectronUpdaterFeed(app, updater, null, manifestChannel, false, channel);
     }
     return updaterChannelState(app, channel, null, manifestChannel);
-  });
+  }));
 
-  ipcMain.handle("openwork:updater:check", async (_event, rawChannel, rawTargetVersion) => {
-    if (rawChannel !== undefined) {
-      await writeElectronUpdaterChannel(app, rawChannel, manifestChannel);
-    }
+  ipcMain.handle("openwork:updater:check", async (_event, rawChannel, rawTargetVersion) => queueUpdaterOperation(async () => {
+    assertActivation();
+    // A check selects a feed for this operation only. The persisted preference
+    // belongs exclusively to setChannel so a stale check cannot undo a choice.
+    const channel = rawChannel === undefined
+      ? await readElectronUpdaterChannel(app, manifestChannel)
+      : normalizeElectronUpdaterChannel(rawChannel, manifestChannel);
     const updater = await ensureAutoUpdater();
     try {
       const targetVersion = rawTargetVersion === undefined
@@ -605,13 +692,8 @@ export function registerUpdaterIpc({
         throw new Error("Target update version must use the stable x.y.z format.");
       }
       const channelState = updater
-        ? await applyElectronUpdaterFeed(app, updater, targetVersion, manifestChannel)
-        : updaterChannelState(
-            app,
-            await readElectronUpdaterChannel(app, manifestChannel),
-            targetVersion,
-            manifestChannel,
-          );
+        ? await applyElectronUpdaterFeed(app, updater, targetVersion, manifestChannel, false, channel)
+        : updaterChannelState(app, channel, targetVersion, manifestChannel);
       if (!updater) return { available: false, reason: "unavailable", ...channelState };
 
       const result = await updater.checkForUpdates();
@@ -621,8 +703,13 @@ export function registerUpdaterIpc({
         throw new Error(`Target update manifest did not resolve to v${targetVersion}.`);
       }
       const available = Boolean(info?.version && isVersionNewer(info.version, currentVersion));
+      if (platform === "darwin" && info?.version !== macStagedVersion) {
+        updateDownloaded = false;
+        preventPendingUpdaterInstall(updater);
+      }
       checkedUpdateVersion = available ? info.version : null;
       checkedUpdateTargetVersion = available ? targetVersion : null;
+      checkedUpdateChannel = available ? channelState.channel : null;
       if (!available) updateDownloaded = false;
       return {
         available,
@@ -635,21 +722,23 @@ export function registerUpdaterIpc({
     } catch (error) {
       checkedUpdateVersion = null;
       checkedUpdateTargetVersion = null;
+      checkedUpdateChannel = null;
       // A transient failed check must not invalidate an already-downloaded update.
       return {
         available: false,
         reason: String(error?.message ?? error),
         ...updaterChannelState(
           app,
-          await readElectronUpdaterChannel(app, manifestChannel),
+          channel,
           null,
           manifestChannel,
         ),
       };
     }
-  });
+  }));
 
-  ipcMain.handle("openwork:updater:download", async () => {
+  ipcMain.handle("openwork:updater:download", async () => queueUpdaterOperation(async () => {
+    assertActivation();
     const updater = await ensureAutoUpdater();
     if (!updater) return { ok: false, reason: "unavailable" };
     try {
@@ -658,6 +747,8 @@ export function registerUpdaterIpc({
         updater,
         checkedUpdateTargetVersion,
         manifestChannel,
+        false,
+        checkedUpdateChannel ?? undefined,
       );
       const currentVersion = resolveAppVersion(app);
       if (!checkedUpdateVersion || !isVersionNewer(checkedUpdateVersion, currentVersion)) {
@@ -682,30 +773,30 @@ export function registerUpdaterIpc({
       // Clear any stuck ShipIt state from a prior aborted install so this
       // download applies cleanly on quit.
       await cleanStaleUpdaterState(app, shipItDefaultsDomain);
-      updater.autoInstallOnAppQuit = true;
-      await updater.downloadUpdate();
+      await downloadAndStageUpdate(updater, checkedUpdateVersion);
       updateDownloaded = true;
       return { ok: true };
     } catch (error) {
       updateDownloaded = false;
       return { ok: false, reason: String(error?.message ?? error) };
     }
-  });
+  }));
 
-  ipcMain.handle("openwork:updater:installAndRestart", async () => {
+  ipcMain.handle("openwork:updater:installAndRestart", async () => queueUpdaterOperation(async () => {
+    assertActivation();
     if (!updateDownloaded) return { ok: false, reason: "update-not-downloaded" };
     const updater = await ensureAutoUpdater();
     if (!updater) return { ok: false, reason: "unavailable" };
     try {
       // Re-assert the in-place-write default right before the swap; the ShipIt
       // defaults domain may have been wiped when stale state was cleaned.
-      await enableSquirrelDirectContentsWrite();
+      await enableSquirrelDirectContentsWrite(shipItDefaultsDomain, writeDefaults);
       updater.quitAndInstall(false, true);
       return { ok: true };
     } catch (error) {
       return { ok: false, reason: String(error?.message ?? error) };
     }
-  });
+  }));
 
   return { ensureAutoUpdater };
 }

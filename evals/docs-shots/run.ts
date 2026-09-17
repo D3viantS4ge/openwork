@@ -12,11 +12,15 @@
  * Redis on 127.0.0.1:6379 (pnpm dev:den:mysql).
  */
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
-import { captureGated, freezeMotion, setViewport } from "./capture.ts";
-import { DEFAULT_VIEWPORT } from "./scene.ts";
-import { scenes } from "./scenes/index.ts";
-import { REPO_ROOT, Stage } from "./stage.ts";
+import { spawnSync } from "node:child_process";
+import { basename, dirname, resolve } from "node:path";
+import { docShotReceiptSchema } from "@openwork/review";
+import { emulateFocus, freezeMotion, paintBackdrop, setViewport } from "@openwork/cdp";
+import { Ctx } from "./ctx.ts";
+import { captureUntil } from "./loop.ts";
+import { shots } from "./shots/index.ts";
+import { DEFAULT_VIEWPORT } from "./shots/shot.ts";
+import { REPO_ROOT } from "./surfaces.ts";
 
 // Screenshots must never depend on ambient provider credentials: scenes bring
 // their own deterministic model witness where a model is needed at all.
@@ -33,38 +37,53 @@ for (const key of [
 
 const args = process.argv.slice(2);
 if (args.includes("--list")) {
-  for (const scene of scenes) console.log(`${scene.id}\t${scene.out}\t${scene.title}`);
+  for (const shot of shots) console.log(`${shot.id}\t${shot.out}`);
   process.exit(0);
 }
 const requested = args.filter((arg) => !arg.startsWith("--"));
-const unknown = requested.filter((id) => !scenes.some((scene) => scene.id === id));
+const unknown = requested.filter((id) => !shots.some((shot) => shot.id === id));
 if (unknown.length > 0) {
   console.error(`Unknown scene ids: ${unknown.join(", ")}. Use --list.`);
   process.exit(1);
 }
-const selected = requested.length > 0 ? scenes.filter((scene) => requested.includes(scene.id)) : scenes;
+const selected = requested.length > 0 ? shots.filter((shot) => requested.includes(shot.id)) : shots;
+const git = spawnSync("git", ["rev-parse", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" });
+if (git.status !== 0) throw new Error("DocShot requires a source commit.");
+const gitSha = git.stdout.trim();
 
-const stage = new Stage();
+const ctx = new Ctx();
 const failures: string[] = [];
 try {
-  for (const scene of selected) {
-    console.log(`\n[docs-shots] ${scene.id} — ${scene.title}`);
+  for (const shot of selected) {
+    console.log(`\n[docs-shots] ${shot.id}`);
     try {
-      const surface = await scene.run(stage);
-      await setViewport(surface, scene.viewport ?? DEFAULT_VIEWPORT);
+      const surface = await shot.run(ctx);
+      await setViewport(surface, shot.viewport ?? DEFAULT_VIEWPORT);
+      // The capture window is never OS-focused; without focus emulation every
+      // shot shows the app's blurred (dimmed) state.
+      await emulateFocus(surface);
+      // The macOS vibrancy sidebar is a transparent renderer region (the OS
+      // composites the tint outside the page, so a raw capture has alpha-0
+      // pixels there). Paint the light vibrancy tone at the html level so the
+      // capture reads like the real focused window.
+      if (surface.handle.kind === "electron") await paintBackdrop(surface, "#232326");
       await freezeMotion(surface);
-      const png = await captureGated(surface, scene.gate);
-      const outPath = resolve(REPO_ROOT, scene.out);
+      const png = await captureUntil(surface, shot.gate);
+      const outPath = resolve(REPO_ROOT, shot.out);
       await mkdir(dirname(outPath), { recursive: true });
       await writeFile(outPath, png);
-      console.log(`[docs-shots] wrote ${scene.out} (${png.byteLength} bytes)`);
+      await writeFile(`${outPath}.review.json`, JSON.stringify(docShotReceiptSchema.parse({
+        schemaVersion: 1, kind: "docshot", name: shot.id, gitSha,
+        createdAt: new Date().toISOString(), fileName: basename(outPath),
+      }), null, 2));
+      console.log(`[docs-shots] wrote ${shot.out} (${png.byteLength} bytes)`);
     } catch (error) {
-      failures.push(scene.id);
-      console.error(`[docs-shots] ${scene.id} FAILED:`, error);
+      failures.push(shot.id);
+      console.error(`[docs-shots] ${shot.id} FAILED:`, error);
     }
   }
 } finally {
-  await stage.dispose();
+  await ctx.dispose();
 }
 if (failures.length > 0) {
   console.error(`\n[docs-shots] failed scenes: ${failures.join(", ")}`);

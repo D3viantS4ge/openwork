@@ -32,14 +32,25 @@ Do NOT report:
 - Test fixtures, mocks, or intentionally fake credentials that never grant
   real access.
 
+Test code is not a production attack surface merely because it uses browser
+JavaScript evaluation, direct API calls, relaxed local authentication, or
+fixture shortcuts. For tests and test harnesses, report only when the diff
+creates a concrete path to real credentials, untrusted CI input, shared or
+production services, or shipped runtime code. Explain that path; do not
+apply production hardening standards to isolated test behavior. Test files
+are not exempt when such a path exists.
+
 For each finding, report:
 
-- The exact file and changed lines that introduce the issue.
-- The attack path: who controls the input and what they gain.
+- One finding per root cause, grouping all related locations and identifying
+  the exact changed lines that cause it.
+- The reachable attack path: who controls the input, the concrete failure,
+  and what they gain. Check and address contrary evidence before reporting.
 - Severity: `critical` (RCE, auth bypass, real secret leak), `high`
   (injection, XSS, SSRF, traversal), `medium` (info disclosure, weak crypto),
   `low` (defense-in-depth regression introduced by this diff).
-- A concrete fix in the changed code.
+- The smallest concrete fix in the changed code.
+- `Clear when:` followed by the observable condition that resolves the finding.
 
 If the diff introduces no new security issues, report nothing. Silence is the
 correct output for a clean diff; do not manufacture findings.

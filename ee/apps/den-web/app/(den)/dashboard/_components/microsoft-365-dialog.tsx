@@ -22,18 +22,20 @@ async function copyText(text: string): Promise<boolean> {
 
 export function Microsoft365Dialog({
   open,
+  providerId,
   submitting,
   error,
   onClose,
   onSubmit,
 }: {
   open: boolean;
+  providerId: string;
   submitting: boolean;
   error: unknown;
   onClose: () => void;
   onSubmit: (input: { clientId?: string; clientSecret?: string; tenantId?: string; features: string[] }) => void;
 }) {
-  const clientConfig = useNativeProviderClient("microsoft-365", open);
+  const clientConfig = useNativeProviderClient(providerId, open);
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [tenantId, setTenantId] = useState("");
@@ -51,13 +53,13 @@ export function Microsoft365Dialog({
     setCopiedRedirectUri(false);
     setReplacingCredentials(false);
     featuresPrefilled.current = false;
-  }, [open]);
+  }, [open, providerId]);
 
   useEffect(() => {
     if (!open || featuresPrefilled.current || !clientConfig.isSuccess || clientConfig.isFetching) return;
     setFeatures(clientConfig.data.features);
     featuresPrefilled.current = true;
-  }, [open, clientConfig.isSuccess, clientConfig.isFetching, clientConfig.data?.features]);
+  }, [open, providerId, clientConfig.isSuccess, clientConfig.isFetching, clientConfig.data?.features]);
 
   if (!open) return null;
 
@@ -142,7 +144,7 @@ export function Microsoft365Dialog({
                         <input
                           type="checkbox"
                           data-feature={permission.key}
-                          className="mt-0.5 h-4 w-4 rounded border-gray-300 text-gray-900"
+                          className="mt-0.5 h-4 w-4 rounded-sm border-gray-300 text-gray-900"
                           checked={features.includes(permission.key)}
                           disabled={loadingConfig}
                           onChange={() => toggleFeature(permission.key)}

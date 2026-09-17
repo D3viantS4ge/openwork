@@ -9,6 +9,7 @@ import {
 } from "@/components/markdown/markdown-primitive";
 import { useScrollStableHtml } from "@/components/markdown/scroll-stability";
 import { useSelectionStableValue } from "@/components/markdown/selection-stability";
+import { useMermaidEnhancer } from "@/components/markdown/mermaid";
 
 function MarkdownBlockInner(props: {
   text: string;
@@ -42,6 +43,7 @@ function MarkdownBlockInner(props: {
   const html = useSelectionStableValue(rootRef, candidateHtml);
   useScrollStableHtml(rootRef, html);
   const stableInnerHtml = useMemo(() => ({ __html: html }), [html]);
+  useMermaidEnhancer(rootRef, html, !props.streaming);
 
   useEffect(() => {
     const root = rootRef.current;

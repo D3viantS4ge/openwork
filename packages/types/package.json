@@ -4,6 +4,13 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./cloud-model-fast": {
+      "types": "./src/cloud-model-fast.ts",
+      "development": "./src/cloud-model-fast.ts",
+      "bun": "./src/cloud-model-fast.ts",
+      "browser": "./src/cloud-model-fast.ts",
+      "default": "./dist/cloud-model-fast.js"
+    },
     ".": {
       "types": "./src/index.ts",
       "development": "./src/index.ts",
@@ -74,6 +81,26 @@
       "development": "./src/den/egress-diagnostics.ts",
       "default": "./src/den/egress-diagnostics.ts"
     },
+    "./den/managed-models-policy": {
+      "types": "./src/den/managed-models-policy.ts",
+      "development": "./src/den/managed-models-policy.ts",
+      "default": "./src/den/managed-models-policy.ts"
+    },
+    "./den/deployment-capabilities": {
+      "types": "./src/den/deployment-capabilities.ts",
+      "development": "./src/den/deployment-capabilities.ts",
+      "default": "./src/den/deployment-capabilities.ts"
+    },
+    "./den/gateway": {
+      "types": "./src/den/gateway.ts",
+      "development": "./src/den/gateway.ts",
+      "default": "./dist/den/gateway.js"
+    },
+    "./den/gateway-usage": {
+      "types": "./src/den/gateway-usage.ts",
+      "development": "./src/den/gateway-usage.ts",
+      "default": "./src/den/gateway-usage.ts"
+    },
     "./den/inference": {
       "types": "./src/den/inference.ts",
       "development": "./src/den/inference.ts",
@@ -108,6 +135,17 @@
       "types": "./src/url.ts",
       "development": "./src/url.ts",
       "default": "./src/url.ts"
+    },
+    "./visualization": {
+      "types": "./src/visualization.ts",
+      "development": "./src/visualization.ts",
+      "default": "./src/visualization.ts"
+    },
+    "./den/desktop-policies-runtime": {
+      "types": "./src/den/desktop-policies.ts",
+      "development": "./src/den/desktop-policies.ts",
+      "bun": "./src/den/desktop-policies.ts",
+      "default": "./dist/den/desktop-policies.js"
     }
   },
   "files": [

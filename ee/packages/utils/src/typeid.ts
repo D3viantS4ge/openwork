@@ -43,6 +43,7 @@ export const idTypesMapNameToPrefix = {
   llmProvider: "lpr",
   llmProviderModel: "lpm",
   llmProviderAccess: "lpa",
+  llmProviderMemberCredential: "lpc",
   desktopPolicy: "dpo",
   desktopPolicyMember: "dpm",
   organizationRole: "orl",
@@ -73,6 +74,7 @@ export const idTypesMapNameToPrefix = {
   worker: "wrk",
   workerInstance: "wki",
   daytonaSandbox: "dts",
+  cloudRuntimeInstance: "cri",
   workerToken: "wkt",
   workerBundle: "wkb",
   automation: "atm",
@@ -80,6 +82,7 @@ export const idTypesMapNameToPrefix = {
   automationRun: "atr",
   automationRunEvent: "ate",
   automationThread: "ath",
+  remoteSessionCommand: "rsc",
   codemodeRun: "cmr",
   workflowRun: "wfr",
   artifactView: "arv",
@@ -95,9 +98,22 @@ export const idTypesMapNameToPrefix = {
   externalMcpConnection: "emc",
   externalMcpConnectionAccessGrant: "emg",
   pluginMcpRequirementBinding: "pmr",
-  memory: "mem",
-  memctx: "mctx",
+
+
   tempFile: "tmpf",
+  dashboard: "dsb",
+  dashboardAccessGrant: "dsg",
+  inferenceProvider: "ipr",
+  inferenceProviderModel: "ipm",
+  inferenceProviderCredential: "ipc",
+  inferenceProviderAccess: "ipa",
+  inferenceProviderOauthState: "ipos",
+  inferenceRequestLog: "irl",
+  inferenceUsageRollup: "iur",
+  gatewayKey: "gky",
+  gatewayModelGroup: "gmg",
+  gatewayModelGroupModel: "gmm",
+  gatewayCredentialSet: "gcs",
 } as const
 
 export const denTypeIdPrefixes = idTypesMapNameToPrefix

@@ -24,6 +24,9 @@ export type OrgRouteVariables =
   & Partial<MemberTeamsContext>
 
 export const PRIVILEGED_SESSION_MAX_AGE_MS = 15 * 60 * 1000
+// Reuse confirmation during content editing; access, credentials, publishing,
+// and destructive changes retain the shorter privileged window.
+export const CONTENT_EDIT_SESSION_MAX_AGE_MS = 60 * 60 * 1000
 export const CONNECTIONS_READ_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000
 export const WORKSPACE_REAUTH_SECURITY_MESSAGE = "For security, confirm it's you before changing workspace settings."
 
@@ -42,7 +45,7 @@ export function getFreshPrivilegedSessionRequiredResponse(): FreshPrivilegedSess
 }
 
 type PrivilegedOrgRouteContext = {
-  get: <K extends "organizationContext" | "session">(key: K) => OrgRouteVariables[K]
+  get: <K extends "apiKey" | "organizationContext" | "session">(key: K) => OrgRouteVariables[K]
 }
 
 type OrganizationAdminRouteContext = {
@@ -70,9 +73,13 @@ export function hasFreshPrivilegedSession(
 }
 
 function ensureFreshPrivilegedSession(
-  c: { get: (key: "session") => OrgRouteVariables["session"] },
+  c: { get: <K extends "apiKey" | "session">(key: K) => OrgRouteVariables[K] },
   maxAgeMs = PRIVILEGED_SESSION_MAX_AGE_MS,
 ) {
+  if (c.get("apiKey")) {
+    return { ok: true as const }
+  }
+
   if (hasFreshPrivilegedSession({ session: c.get("session") }, new Date(), maxAgeMs)) {
     return { ok: true as const }
   }

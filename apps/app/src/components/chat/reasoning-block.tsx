@@ -1,6 +1,7 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef } from "react"
+import { useWorkbenchDisclosure } from "@/react-app/domains/session/chat/workbench-ui-state"
 import { ChevronDown } from "lucide-react"
 
 import {
@@ -15,6 +16,7 @@ type ReasoningBlockProps = {
   text: string
   isStreaming: boolean
   className?: string
+  disclosureKey?: string
 }
 
 // Positions within this many px of the bottom count as "at bottom" for the
@@ -26,14 +28,15 @@ const THOUGHT_STICKY_GAP_PX = 24
 const THOUGHT_GESTURE_WINDOW_MS = 600
 
 /**
- * Thinking is open by default — the full reasoning renders as markdown
- * under the "Thinking… / Thought" header; a chevron collapses it. The
- * content scrolls inside its own bounded region so the collapse label
- * always sits above the scroll bar, and while streaming the region tails
- * to the newest reasoning (unless the reader scrolled up).
+ * Thinking is collapsed by default — the full reasoning renders as markdown
+ * only when opened; a chevron collapses it. The content scrolls inside its
+ * own bounded region so the collapse label always sits above the scroll bar,
+ * and while streaming the region tails to the newest reasoning (unless the
+ * reader scrolled up). The open/closed state is remembered per disclosure
+ * key via the workbench UI state.
  */
-export function ReasoningBlock({ text, isStreaming, className }: ReasoningBlockProps) {
-  const [open, setOpen] = useState(true)
+export function ReasoningBlock({ text, isStreaming, className, disclosureKey }: ReasoningBlockProps) {
+  const [open, setOpen] = useWorkbenchDisclosure(disclosureKey)
   const contentRef = useRef<HTMLDivElement>(null)
   const atBottomRef = useRef(true)
   const gestureAtRef = useRef(0)

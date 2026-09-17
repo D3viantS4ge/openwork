@@ -46,7 +46,6 @@ export default async function CloudPage() {
       <div className="relative z-10">
         <SiteNav
           stars={github.stars}
-          downloadHref={github.downloads.macos}
           callUrl={callHref}
           mobilePrimaryHref={CLOUD_SIGNUP_URL}
           mobilePrimaryLabel="Get started for free"
@@ -105,7 +104,11 @@ export default async function CloudPage() {
           </section>
 
           <section className="mt-[120px]">
-            <LpSectionHeader label="The dashboard" heading="Run agents like a fleet, not a folder of setups." />
+            <LpSectionHeader
+              label="The dashboard"
+              heading="Run agents like a fleet, not a folder of setups."
+              right={<LpArrowLink href="/dashboard">See OpenWork Dashboard</LpArrowLink>}
+            />
             <div className="mt-10 grid gap-6 md:grid-cols-2">
               {dashboardFeatures.map((feature) => (
                 <div key={feature.title} className="rounded-[24px] bg-[var(--lp-tonal)] p-7">

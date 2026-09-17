@@ -1,27 +1,51 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { type ReactNode, type Ref, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronRight, Loader2, Minus, MoreHorizontal, Pencil, Plug, Puzzle, RefreshCw, Search, Server, Trash2, Users, Wrench } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, ChevronRight, Link2, Loader2, MessageCircle, Minus, MoreHorizontal, Pencil, Plus, Puzzle, Search, Server, Trash2, Users, Wrench } from "lucide-react";
 import { buttonVariants, DenButton } from "../../_components/ui/button";
 import { DenInput } from "../../_components/ui/input";
 import { DenNotice } from "../../_components/ui/notice";
 import { DenSelect } from "../../_components/ui/select";
-import { DashboardPageTemplate } from "../../_components/ui/dashboard-page-template";
-import { getPluginRoute, getToolTesterRoute } from "../../_lib/den-org";
+import { DenChip } from "../../_components/ui/chip";
+import { DenPageHeader } from "../../_components/ui/page-header";
+import { getConfiguredMcpConnectionsRoute, getMcpConnectionRoute, getMcpConnectionsRoute, getPluginRoute, getToolTesterRoute, getYourConnectionsRoute } from "../../_lib/den-org";
 import { getRequestError, requestJson } from "../../_lib/den-flow";
+import { ConnectorCatalog, connectorChatHref } from "./connector-catalog-list";
+import type { PopularConnector } from "./connector-catalog";
+import {
+  connectorAccountStatus,
+  connectorAccountReady,
+  displayedConnectorConnections,
+  connectorDetailEffort,
+  connectorDetailFacts,
+  connectorDetailIdentity,
+  connectorDetailPrimaryAction,
+  resolveConnectorDetailSubject,
+} from "./connector-detail";
+import { EFFORT_LABELS, presetEffort } from "./connector-effort";
 import { IntegrationIcon } from "./integration-icon";
 import { Microsoft365Dialog } from "./microsoft-365-dialog";
-import { openMcpAuthorizationWindow, safeMcpAuthorizationUrl, showMcpAuthorizationError } from "./mcp-authorization-url";
+import { openMcpAuthorizationTab, safeMcpAuthorizationUrl, showMcpAuthorizationFailure } from "./mcp-authorization-url";
+import { MCP_AUTHORIZATION_TIMEOUT_MESSAGE, MCP_AUTHORIZATION_UNCONFIRMED_CONNECTED_MESSAGE, MCP_AUTHORIZATION_WINDOW_CLOSED_MESSAGE, resolveMcpAuthorizationPollOutcome } from "./mcp-account-authorization-state";
 import {
   editableMcpIdentityChanged,
   marketplaceIdentityOwnerNames,
   mcpAccessMode,
   type McpConnectionAccessMode,
 } from "./mcp-connection-editing";
-import { formatConnectionCreatorAttribution } from "./mcp-connection-display";
+import { formatConnectionCreatorAttribution, sortConnectionsForFocus, trustedConnectionFocusId } from "./mcp-connection-display";
+import {
+  AUTH_TYPE_OPTIONS,
+  CREDENTIAL_MODE_OPTIONS,
+  credentialModeDescription,
+  MCP_OAUTH_REDIRECT_DOCS_URL,
+  presetAuthTypeOptions,
+  SegmentedControl,
+  type SegmentedControlOption,
+} from "./mcp-connection-form-controls";
 import {
   connectionNeedsOAuthClientConfiguration,
   marketplaceConnectionNeedsAdminSetup,
@@ -29,6 +53,8 @@ import {
 import { McpCredentialInput } from "./mcp-credential-input";
 import { shouldShowMcpConnectionsStagingBanner } from "./mcp-connections-capability";
 import { useOrgDashboard } from "../_providers/org-dashboard-provider";
+import { useDenFlow } from "../../_providers/den-flow-provider";
+import { McpConnectionAppSetup } from "./mcp-connection-app-setup";
 import { marketplaceQueryKeys, useMarketplaces } from "./marketplace-data";
 import {
   type CreateMcpConnectionInput,
@@ -36,7 +62,6 @@ import {
   type ExternalMcpConnection,
   type ExternalMcpCredentialMode,
   type ExternalMcpPreset,
-  type ExternalMcpTool,
   type McpConnectionResolution,
   type McpIssuerReview,
   type McpRequirementsDiscovery,
@@ -55,7 +80,6 @@ import {
   useDiscoverMcpConnectionRequirements,
   useMcpConnectionPresets,
   useMcpConnections,
-  useMcpConnectionTools,
   useNativeProviderClient,
   useResolveMcpConnection,
   useReviewMcpIssuer,
@@ -75,10 +99,13 @@ import {
 } from "./mcp-scope-selection";
 import { getPluginPartsSummary, pluginQueryKeys, usePlugins } from "./plugin-data";
 import {
-  ConnectorQuickAddGrid,
   GOOGLE_WORKSPACE_QUICK_ADD_ID,
   MICROSOFT_365_QUICK_ADD_ID,
 } from "./connector-quick-add-grid";
+
+export type McpConnectionsScreenView = "catalog" | "configured" | "detail";
+type OAuthOutcome = "connected" | "pending" | "configuration_required" | "failed";
+type CreateOutcome = "created" | OAuthOutcome;
 
 const OAUTH_POLL_INTERVAL_MS = 2000;
 const OAUTH_POLL_TIMEOUT_MS = 90_000;
@@ -86,8 +113,6 @@ const MCP_REQUIREMENTS_DISCOVERY_DELAY_MS = 500;
 // Smart resolve fans out server-side probes, so it debounces longer than the
 // single-URL requirements discovery.
 const SMART_RESOLVE_DELAY_MS = 800;
-const MCP_TOOL_PAGE_SIZE = 50;
-const MCP_OAUTH_REDIRECT_DOCS_URL = "https://openworklabs.com/docs/cloud/share-with-your-team/shared-mcp-connections#oauth-redirect-url";
 
 function isDiscoverableMcpUrl(value: string): boolean {
   try {
@@ -105,14 +130,17 @@ const GOOGLE_WORKSPACE_PERMISSION_GROUPS = [
     name: "Calendar",
     permissions: [
       { key: "calendarRead", label: "Read calendar" },
-      { key: "calendarWrite", label: "Create calendar events" },
+      { key: "calendarWrite", label: "Create, edit, and cancel calendar events" },
     ],
   },
   {
     name: "Gmail",
     permissions: [
-      { key: "gmailDraft", label: "Draft emails" },
+      { key: "gmailDraft", label: "Create and edit email drafts" },
+      { key: "gmailSend", label: "Send email drafts after confirmation" },
       { key: "gmailRead", label: "Read Gmail" },
+      { key: "gmailManage", label: "Manage Gmail — send, archive, read status, labels, and trash" },
+      { key: "gmailLabels", label: "Create and manage Gmail labels" },
     ],
   },
   {
@@ -121,6 +149,13 @@ const GOOGLE_WORKSPACE_PERMISSION_GROUPS = [
       { key: "driveFile", label: "Work with selected Drive files" },
       { key: "driveRead", label: "Read all Drive files" },
       { key: "driveFull", label: "Full Drive access" },
+    ],
+  },
+  {
+    name: "Sheets",
+    permissions: [
+      { key: "sheetsRead", label: "Read spreadsheets" },
+      { key: "sheetsWrite", label: "Create spreadsheets and edit cells" },
     ],
   },
   {
@@ -161,7 +196,7 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
   }
 }
 
-type GithubPluginImportSkippedReason = "missing_url" | "local_unsupported" | "invalid_url" | "unsupported_auth";
+type GithubPluginImportSkippedReason = "headers_unsupported" | "invalid_config" | "invalid_url" | "local_unsupported" | "missing_url" | "unsupported_auth";
 
 type GithubPluginImportServer = {
   name: string;
@@ -195,7 +230,7 @@ function asString(value: unknown): string | null {
 }
 
 function parseSkippedReason(value: unknown): GithubPluginImportSkippedReason | null {
-  if (value === "missing_url" || value === "local_unsupported" || value === "invalid_url" || value === "unsupported_auth") {
+  if (value === "headers_unsupported" || value === "invalid_config" || value === "invalid_url" || value === "local_unsupported" || value === "missing_url" || value === "unsupported_auth") {
     return value;
   }
   return null;
@@ -244,15 +279,19 @@ function parseGithubPluginImportPreview(payload: unknown): GithubPluginImportPre
 function importServerStatus(server: GithubPluginImportServer): string {
   if (server.supported) return "ready";
   if (server.skippedReason === "missing_url") return "missing URL";
+  if (server.skippedReason === "local_unsupported") return "desktop-only";
+  if (server.skippedReason === "headers_unsupported") return "static headers unsupported";
+  if (server.skippedReason === "invalid_config") return "invalid config";
   return "unsupported";
 }
 
-export function McpConnectionsScreen() {
+export function McpConnectionsScreen({ view = "catalog", connectorId }: { view?: McpConnectionsScreenView; connectorId?: string }) {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const { orgContext, orgSlug } = useOrgDashboard();
   const { data: connections = [], isLoading, error, refetch } = useMcpConnections();
-  const { data: usableConnections = [], isLoading: usableConnectionsLoading } = useMcpConnections("usable");
-  const { data: presets = [] } = useMcpConnectionPresets();
+  const { data: usableConnections = [], isLoading: usableConnectionsLoading, error: usableConnectionsError } = useMcpConnections("usable");
+  const { data: presets = [], isLoading: presetsLoading, error: presetsError, refetch: refetchPresets } = useMcpConnectionPresets();
   const createConnection = useCreateMcpConnection();
   const createNativeConnection = useCreateNativeProviderConnection();
   const updateConnection = useUpdateMcpConnection();
@@ -273,22 +312,23 @@ export function McpConnectionsScreen() {
   const [issuerReviewConnection, setIssuerReviewConnection] = useState<ExternalMcpConnection | null>(null);
   const [issuerReviewPreview, setIssuerReviewPreview] = useState<McpIssuerReview | null>(null);
   const [googleDialogMode, setGoogleDialogMode] = useState<"create" | "legacy" | null>(null);
-  const [microsoftDialogOpen, setMicrosoftDialogOpen] = useState(false);
+  const [microsoftDialogConnectionId, setMicrosoftDialogConnectionId] = useState<string | null>(null);
   const showStagingBanner = orgContext ? shouldShowMcpConnectionsStagingBanner(orgContext.capabilities) : false;
   const [pollingConnectionId, setPollingConnectionId] = useState<string | null>(null);
   const [oauthClientConfigurationRequiredIds, setOAuthClientConfigurationRequiredIds] = useState<string[]>([]);
   const [connectionActionError, setConnectionActionError] = useState<{ connectionId: string; message: string } | null>(null);
   const [connectionActionNotice, setConnectionActionNotice] = useState<ReactNode | null>(null);
-  const [toolsConnectionId, setToolsConnectionId] = useState<string | null>(null);
   const [smartQuery, setSmartQuery] = useState("");
   const [smartBarState, setSmartBarState] = useState<"idle" | "waiting" | "resolving" | "done" | "error">("idle");
   const [smartBarError, setSmartBarError] = useState<unknown>(null);
   const [smartBarResolution, setSmartBarResolution] = useState<McpConnectionResolution | null>(null);
   const [smartBarSubmitting, setSmartBarSubmitting] = useState(false);
   const [instantAddingPresetId, setInstantAddingPresetId] = useState<string | null>(null);
+  const [detailLinkCopied, setDetailLinkCopied] = useState(false);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const handledQuickAddId = useRef<string | null>(null);
   const smartBarRequestId = useRef(0);
+  const focusedRowRef = useRef<HTMLDivElement | null>(null);
 
   function openQuickAdd(id: string) {
     if (id === GOOGLE_WORKSPACE_QUICK_ADD_ID) {
@@ -297,7 +337,8 @@ export function McpConnectionsScreen() {
       return;
     }
     if (id === MICROSOFT_365_QUICK_ADD_ID) {
-      setMicrosoftDialogOpen(true);
+      saveNativeClient.reset();
+      setMicrosoftDialogConnectionId(MICROSOFT_365_QUICK_ADD_ID);
       return;
     }
 
@@ -310,21 +351,53 @@ export function McpConnectionsScreen() {
     setFormOpen(true);
   }
 
-  function openAdvancedSetup(initialName = "", initialUrl = "") {
+  function openAdvancedSetup(initialName = "", initialUrl = "", preset: ExternalMcpPreset | null = null) {
     createConnection.reset();
-    setFormPreset(null);
+    setFormPreset(preset);
     setFormInitialView("advanced");
     setFormInitialName(initialName);
     setFormInitialUrl(initialUrl);
     setFormOpen(true);
   }
 
-  function manageConnection(connectionId: string) {
-    const connection = connections.find((entry) => entry.id === connectionId);
-    if (!connection) return;
-    updateConnection.reset();
-    setConfiguringOAuthClient(false);
-    setEditingConnection(connection);
+  function manageConnection(connection: ExternalMcpConnection) {
+    router.push(getMcpConnectionRoute(orgSlug, connection.id));
+  }
+
+  /**
+   * Catalog "+" for curated presets: connectors that need nothing from the
+   * org are added on the spot. OAuth servers with automatic app registration
+   * are added for everyone and the authorization tab opens right away so the
+   * admin's own account is connected in the same gesture. Presets that need
+   * an org secret (API key, pre-registered OAuth app) land in the guided form.
+   */
+  function addPreset(preset: ExternalMcpPreset) {
+    if (presetsLoading || presetsError) return;
+    const effort = presetEffort(preset);
+    if (effort === "instant") {
+      void handleInstantAdd(preset);
+      return;
+    }
+    if (effort === "one_click") {
+      void handleOneClickAdd(preset);
+      return;
+    }
+    openQuickAdd(preset.presetId);
+  }
+
+  function addPopularConnector(connector: PopularConnector) {
+    if (connector.target.kind === "google-workspace") {
+      openQuickAdd(GOOGLE_WORKSPACE_QUICK_ADD_ID);
+      return;
+    }
+    if (connector.target.kind === "microsoft-365") {
+      openQuickAdd(MICROSOFT_365_QUICK_ADD_ID);
+      return;
+    }
+    const presetId = connector.target.presetId;
+    const preset = presets.find((entry) => entry.presetId === presetId);
+    if (preset) addPreset(preset);
+    else setConnectionActionError({ connectionId: connector.id, message: "Setup options are unavailable. Reload setup options and try again." });
   }
 
   const smartBarInputKind = classifySmartAddInput(smartQuery);
@@ -371,7 +444,9 @@ export function McpConnectionsScreen() {
         ? ["This provider needs a pre-registered OAuth app."]
         : smartBarResolution?.preset?.authType === "apikey"
           ? ["This provider needs your org's API key."]
-          : []
+          : smartBarResolution?.preset && smartBarResolution.preset.authType !== smartBarPlan.input.authType
+            ? ["The server check differs from this provider's required authentication. Continue with the provider setup."]
+            : []
     : [];
   const smartBarOneClick = smartBarPlan?.readiness === "one_click" && smartBarBlockers.length === 0
     ? smartBarPlan
@@ -394,10 +469,7 @@ export function McpConnectionsScreen() {
     };
   }, []);
 
-  const legacyGoogleConnection = usableConnections.find((connection) => connection.id === GOOGLE_WORKSPACE_QUICK_ADD_ID);
-  const listedConnections = legacyGoogleConnection && !connections.some((connection) => connection.id === legacyGoogleConnection.id)
-    ? [legacyGoogleConnection, ...connections]
-    : connections;
+  const listedConnections = displayedConnectorConnections(connections, usableConnections);
 
   function stopPolling() {
     if (pollTimer.current) {
@@ -407,72 +479,95 @@ export function McpConnectionsScreen() {
     setPollingConnectionId(null);
   }
 
-  function pollUntilConnected(connectionId: string) {
+  function pollUntilConnected(connectionId: string, authorizationTab: Window) {
+    stopPolling();
     setPollingConnectionId(connectionId);
     const startedAt = Date.now();
-    pollTimer.current = setInterval(async () => {
+    let fetching = false;
+    const timer = setInterval(async () => {
+      if (fetching) return;
+      fetching = true;
       const result = await refetch();
+      fetching = false;
+      if (pollTimer.current !== timer) return;
       const connection = result.data?.find((entry) => entry.id === connectionId);
-      if (connection?.connected || Date.now() - startedAt > OAUTH_POLL_TIMEOUT_MS) {
+      const outcome = resolveMcpAuthorizationPollOutcome({
+        connected: !result.error && Boolean(connection && connectorAccountReady(connection)),
+        authorizationWindowClosed: authorizationTab.closed,
+        elapsedMs: Date.now() - startedAt,
+        timeoutMs: OAUTH_POLL_TIMEOUT_MS,
+      });
+      if (outcome !== "pending") {
         stopPolling();
+        if (outcome !== "connected") {
+          setConnectionActionNotice(null);
+          setConnectionActionError({ connectionId, message: outcome === "timeout" ? MCP_AUTHORIZATION_TIMEOUT_MESSAGE : MCP_AUTHORIZATION_WINDOW_CLOSED_MESSAGE });
+        }
       }
     }, OAUTH_POLL_INTERVAL_MS);
+    pollTimer.current = timer;
   }
 
-  async function handleConnectOAuth(connectionId: string, pendingAuthorizationWindow?: Window) {
+  async function handleConnectOAuth(connectionId: string, connectionName: string, pendingAuthorizationTab?: Window): Promise<OAuthOutcome> {
     setConnectionActionError(null);
-    let authorizationWindow: Window | null = pendingAuthorizationWindow ?? null;
+    setConnectionActionNotice(null);
+    stopPolling();
+    let authorizationTab: Window | null = pendingAuthorizationTab ?? null;
     try {
-      authorizationWindow = authorizationWindow ?? openMcpAuthorizationWindow();
+      authorizationTab = authorizationTab ?? openMcpAuthorizationTab({ connectionId, connectionName });
       const result = await startOAuth.mutateAsync(connectionId);
       if (result.status === "connected") {
-        authorizationWindow.close();
-        void refetch();
-        return;
+        const refreshed = await refetch();
+        const connection = refreshed.data?.find((entry) => entry.id === connectionId);
+        if (refreshed.error || !connection || !connectorAccountReady(connection)) throw new Error(MCP_AUTHORIZATION_UNCONFIRMED_CONNECTED_MESSAGE);
+        authorizationTab.close();
+        return "connected";
       }
       if (!result.authorizeUrl) throw new Error("The MCP provider did not return an authorization URL.");
-      authorizationWindow.location.href = safeMcpAuthorizationUrl(result.authorizeUrl);
-      pollUntilConnected(connectionId);
+      authorizationTab.location.href = safeMcpAuthorizationUrl(result.authorizeUrl);
+      pollUntilConnected(connectionId, authorizationTab);
+      return "pending";
     } catch (connectError) {
       const message = connectError instanceof Error ? connectError.message : "Failed to connect the MCP server.";
-      showMcpAuthorizationError(authorizationWindow, {
+      showMcpAuthorizationFailure(authorizationTab, {
+        connectionId,
+        connectionName,
         message,
         ...(connectError instanceof McpOAuthStartError
           ? { details: connectError.details }
           : {}),
       });
+      setConnectionActionError({ connectionId, message });
       if (connectError instanceof McpOAuthConfigurationRequiredError) {
         setOAuthClientConfigurationRequiredIds((current) => current.includes(connectionId)
           ? current
           : [...current, connectionId]);
-        return;
+        return "configuration_required";
       }
-      setConnectionActionError({
-        connectionId,
-        message,
-      });
+      return "failed";
     }
   }
 
   async function handleCreate(
     input: CreateMcpConnectionInput,
     options: { startOAuth: boolean },
-  ): Promise<void> {
-    const authorizationWindow = options.startOAuth
-      ? openMcpAuthorizationWindow()
+  ): Promise<CreateOutcome> {
+    const authorizationTab = options.startOAuth
+      ? openMcpAuthorizationTab({ connectionId: "", connectionName: input.name })
       : undefined;
     try {
       const created = await createConnection.mutateAsync(input);
       setFormOpen(false);
       setFormPreset(null);
-      // Shared-credential OAuth: the admin authorizes the org's single account
-      // right now. Per-member: nothing to authorize here — each granted person
-      // connects their own account from Your Connections.
+      // Only flows that explicitly request sign-in start authorization here.
       if (options.startOAuth) {
-        await handleConnectOAuth(created.id, authorizationWindow);
+        return await handleConnectOAuth(created.id, input.name, authorizationTab);
       }
+      return "created";
     } catch (createError) {
-      showMcpAuthorizationError(authorizationWindow ?? null, {
+      showMcpAuthorizationFailure(authorizationTab ?? null, {
+        connectionId: "",
+        connectionName: input.name,
         message: createError instanceof Error ? createError.message : "Failed to create the MCP connection.",
       });
       throw createError;
@@ -485,11 +580,12 @@ export function McpConnectionsScreen() {
     setConnectionActionError(null);
     setConnectionActionNotice(null);
     try {
-      await handleCreate(smartBarOneClick.input, {
+      const outcome = await handleCreate(smartBarOneClick.input, {
         startOAuth: smartBarOneClick.input.authType === "oauth" && smartBarOneClick.input.credentialMode === "shared",
       });
+      if (outcome === "failed" || outcome === "configuration_required") return;
       setSmartQuery("");
-      setConnectionActionNotice(`${smartBarOneClick.input.name} added for everyone in ${orgContext?.organization.name ?? "the organization"}.`);
+      setConnectionActionNotice(`${smartBarOneClick.input.name} added for everyone in ${orgContext?.organization.name ?? "the organization"}.${outcome === "pending" ? " Finish signing in to connect your account." : ""}`);
       await refetch();
     } catch (submitError) {
       setConnectionActionError({
@@ -543,6 +639,34 @@ export function McpConnectionsScreen() {
           </button>
         </>,
       );
+      await refetch();
+    } catch (createError) {
+      setConnectionActionError({
+        connectionId: preset.presetId,
+        message: createError instanceof Error ? createError.message : "Failed to add the MCP connection.",
+      });
+    } finally {
+      setInstantAddingPresetId(null);
+    }
+  }
+
+  async function handleOneClickAdd(preset: ExternalMcpPreset) {
+    setInstantAddingPresetId(preset.presetId);
+    setConnectionActionError(null);
+    setConnectionActionNotice(null);
+    try {
+      // Each person connects their own account; the admin's starts right now
+      // in the authorization tab handleCreate opens.
+      const outcome = await handleCreate({
+        name: preset.displayName,
+        url: preset.url,
+        authType: "oauth",
+        credentialMode: "per_member",
+        access: { orgWide: true, memberIds: [], teamIds: [] },
+      }, { startOAuth: true });
+      if (outcome === "failed" || outcome === "configuration_required") return;
+      const orgName = orgContext?.organization.name ?? "the organization";
+      setConnectionActionNotice(`${preset.displayName} added for everyone in ${orgName}. ${outcome === "connected" ? "Your account is connected." : "Finish signing in to connect your own account."}`);
       await refetch();
     } catch (createError) {
       setConnectionActionError({
@@ -625,13 +749,171 @@ export function McpConnectionsScreen() {
       : `${connection.name}'s current issuer was confirmed from live provider metadata.`);
   }
 
+  const configuredView = view === "configured";
+  const configuredRoute = getConfiguredMcpConnectionsRoute(orgSlug);
+  const focusConnectionId = configuredView ? trustedConnectionFocusId(listedConnections, searchParams.get("connectionId")) : null;
+  const configuredConnections = sortConnectionsForFocus(listedConnections, focusConnectionId);
+  const detailView = view === "detail";
+  const detailSubject = detailView ? resolveConnectorDetailSubject(connectorId ?? "", listedConnections, presets) : null;
+  const detailConnection = detailSubject?.kind === "connection" ? detailSubject.connection : null;
+  const detailIdentity = detailSubject ? connectorDetailIdentity(detailSubject) : null;
+  const detailEffort = detailSubject ? connectorDetailEffort(detailSubject) : null;
+  const detailPrimary = detailEffort ? connectorDetailPrimaryAction(detailEffort) : null;
+  const detailFacts = detailSubject
+    ? connectorDetailFacts(detailSubject, {
+      orgName: orgContext?.organization.name ?? "the org",
+      pluginHref: (pluginId) => getPluginRoute(orgSlug, pluginId),
+    })
+    : [];
+  const detailConnectionSetup = detailConnection ? connectionSetupState(detailConnection) : null;
+  const detailAccountStatus = detailConnection ? connectorAccountStatus(detailConnection, detailConnectionSetup?.setupRequired) : null;
+  const detailCanInspectTools = detailConnection && detailConnectionSetup
+    ? !isNativeProviderConnectionId(detailConnection.id, detailConnection.nativeProviderKey)
+      && !detailConnectionSetup.setupRequired
+      && connectorAccountReady(detailConnection)
+    : false;
+  const detailIsBusy = detailSubject?.kind === "popular"
+    ? detailSubject.popular.target.kind === "preset" && instantAddingPresetId === detailSubject.popular.target.presetId
+    : detailSubject?.kind === "preset"
+      ? instantAddingPresetId === detailSubject.preset.presetId
+      : false;
+  const detailSetupUnavailable = detailSubject?.kind === "popular" && detailSubject.popular.target.kind === "preset"
+    ? presetsLoading || Boolean(presetsError) || !detailSubject.preset
+    : detailSubject?.kind === "preset" && (presetsLoading || Boolean(presetsError));
+  const detailSetupDisabled = detailSetupUnavailable || isLoading || usableConnectionsLoading || Boolean(error || usableConnectionsError);
+
+  function connectionSetupState(connection: ExternalMcpConnection) {
+    const connectAttemptRequiresConfiguration = oauthClientConfigurationRequiredIds.includes(connection.id);
+    const needsOAuthClientConfiguration = connectionNeedsOAuthClientConfiguration(connection, connectAttemptRequiresConfiguration);
+    const needsPluginSetup = marketplaceConnectionNeedsAdminSetup(connection, presets) && !needsOAuthClientConfiguration;
+    return { needsOAuthClientConfiguration, needsPluginSetup, setupRequired: Boolean(connection.setupRequired) || needsPluginSetup || needsOAuthClientConfiguration };
+  }
+
+  function editConnection(connection: ExternalMcpConnection, configureOAuthClient = false) {
+    if (connection.id === MICROSOFT_365_QUICK_ADD_ID || connection.nativeProviderKey === "microsoft-365") {
+      saveNativeClient.reset();
+      setMicrosoftDialogConnectionId(connection.id);
+      return;
+    }
+    if (connection.id === GOOGLE_WORKSPACE_QUICK_ADD_ID) {
+      saveNativeClient.reset();
+      setGoogleDialogMode("legacy");
+      return;
+    }
+    updateConnection.reset();
+    setConfiguringOAuthClient(configureOAuthClient);
+    setEditingConnection(connection);
+  }
+
+  function recoverConnection(connection: ExternalMcpConnection) {
+    const setup = connectionSetupState(connection);
+    if (setup.needsOAuthClientConfiguration) return editConnection(connection, true);
+    if (setup.needsPluginSetup && connection.identityManagedBy[0]) {
+      router.push(getPluginRoute(orgSlug, connection.identityManagedBy[0].pluginId));
+      return;
+    }
+    if (setup.setupRequired) return editConnection(connection);
+    if (connection.authType !== "oauth") return editConnection(connection);
+    if (isNativeProviderConnectionId(connection.id, connection.nativeProviderKey)) {
+      router.push(`${getYourConnectionsRoute(orgSlug)}?connectionId=${encodeURIComponent(connection.id)}`);
+      return;
+    }
+    if (connection.issuerReviewRequired) return void handleOpenIssuerReview(connection);
+    void handleConnectOAuth(connection.id, connection.name);
+  }
+
+  /** Detail-page primary action: same paths the catalog "+" takes. */
+  function startDetailSetup() {
+    if (!detailSubject || detailSetupDisabled) return;
+    if (detailSubject.kind === "popular") {
+      addPopularConnector(detailSubject.popular);
+      return;
+    }
+    if (detailSubject.kind === "preset") {
+      addPreset(detailSubject.preset);
+      return;
+    }
+    if (detailSubject.kind === "microsoft-365") openQuickAdd(MICROSOFT_365_QUICK_ADD_ID);
+  }
+
+  async function copyDetailLink() {
+    if (typeof window === "undefined") return;
+    if (await copyTextToClipboard(window.location.href)) {
+      setDetailLinkCopied(true);
+      window.setTimeout(() => setDetailLinkCopied(false), 2000);
+    }
+  }
+
+  function renderConnectionRow(
+    connection: ExternalMcpConnection,
+    options: { highlighted?: boolean; rowRef?: Ref<HTMLDivElement> } = {},
+  ) {
+    const setup = connectionSetupState(connection);
+    const setupPluginId = connection.identityManagedBy[0]?.pluginId;
+    return <ConnectionRow
+      key={connection.id}
+      orgSlug={orgSlug}
+      connection={connection}
+      highlighted={options.highlighted ?? false}
+      rowRef={options.rowRef}
+      needsPluginSetup={setup.needsPluginSetup}
+      needsOAuthClientConfiguration={setup.needsOAuthClientConfiguration}
+      setupHref={setup.needsPluginSetup && setupPluginId ? getPluginRoute(orgSlug, setupPluginId) : null}
+      polling={pollingConnectionId === connection.id}
+      connecting={startOAuth.isPending && startOAuth.variables === connection.id}
+      errorMessage={connectionActionError?.connectionId === connection.id ? connectionActionError.message : null}
+      onEdit={() => editConnection(connection)}
+      onConfigure={() => editConnection(connection, true)}
+      onReviewIssuer={() => void handleOpenIssuerReview(connection)}
+      onConnect={() => void handleConnectOAuth(connection.id, connection.name)}
+      onDisconnect={() => void handleDisconnect(connection)}
+      onRemove={() => handleRemove(connection)}
+      disconnecting={disconnectConnection.isPending && disconnectConnection.variables === connection.id}
+      removing={deleteConnection.isPending && deleteConnection.variables === connection.id}
+    />;
+  }
+
+  useEffect(() => {
+    if (!focusConnectionId || !focusedRowRef.current) return;
+    focusedRowRef.current.scrollIntoView({ block: "center" });
+    focusedRowRef.current.focus({ preventScroll: true });
+  }, [focusConnectionId, configuredConnections.length]);
+
   return (
-    <DashboardPageTemplate
-      icon={Plug}
-      title="Connectors"
-      description="Connectors is where you can add MCP servers that your whole team can use."
-      colors={["#E2E8F0", "#020617", "#0F172A", "#94A3B8"]}
-    >
+    <div className="mx-auto max-w-[860px] px-4 pb-16 pt-6 sm:px-6 md:px-8" data-testid="mcp-connections-page" data-view={view}>
+      {detailView ? (
+        <Link
+          href={getMcpConnectionsRoute(orgSlug)}
+          className="mb-6 inline-flex items-center gap-1.5 text-[13px] text-gray-400 transition hover:text-gray-700"
+          data-testid="connector-detail-back"
+        >
+          <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+          Connectors
+        </Link>
+      ) : (
+        <DenPageHeader
+          className="mb-8"
+          title={configuredView ? "Configured connectors" : "Connectors"}
+          description={configuredView
+            ? "Everything your team has set up: connect accounts, review tools, change access, or uninstall."
+            : "Connectors is where you can add MCP servers that your whole team can use."}
+          action={configuredView ? (
+            <Link
+              href={getMcpConnectionsRoute(orgSlug)}
+              className={buttonVariants({ variant: "primary" })}
+              data-testid="configured-add-connector"
+            >
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              Add connector
+            </Link>
+          ) : (
+            <DenButton variant="primary" onClick={() => openAdvancedSetup()} data-testid="connectors-add-connector">
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              Add connector
+            </DenButton>
+          )}
+        />
+      )}
       {showStagingBanner ? (
         <div data-testid="mcp-connections-staging-banner" className="mb-6 rounded-[24px] border border-amber-200 bg-amber-50 px-5 py-4 text-[14px] leading-6 text-amber-800">
           <p className="font-semibold text-amber-900">OpenWork Connect (beta) is staged for this org.</p>
@@ -647,9 +929,23 @@ export function McpConnectionsScreen() {
         </div>
       ) : null}
 
+      {usableConnectionsError ? (
+        <div className="mb-6 text-[14px] text-red-700" role="alert">Native connection status could not be loaded. Refresh before changing setup.</div>
+      ) : null}
+
+      {presetsError || detailSetupUnavailable ? (
+        <div className="mb-6 flex items-center gap-3 text-[14px] text-gray-600" role={presetsError ? "alert" : "status"}>
+          <span>{presetsLoading ? "Loading setup options. Chat is still available." : "Setup options are unavailable. Chat is still available."}</span>
+          {!presetsLoading ? <DenButton variant="secondary" size="sm" onClick={() => void refetchPresets()}>Reload setup options</DenButton> : null}
+        </div>
+      ) : null}
+
       {connectionActionError ? (
         <div className="mb-6 rounded-[24px] border border-red-200 bg-red-50 px-5 py-4 text-[14px] text-red-700" role="alert">
           {connectionActionError.message}
+          {listedConnections.some((connection) => connection.id === connectionActionError.connectionId) ? (
+            <Link className="ml-2 font-semibold underline" href={getMcpConnectionRoute(orgSlug, connectionActionError.connectionId)}>Review connection</Link>
+          ) : null}
         </div>
       ) : null}
 
@@ -659,7 +955,7 @@ export function McpConnectionsScreen() {
         </div>
       ) : null}
 
-      <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-400">Quick add</h3>
+      {configuredView || detailView ? null : (
       <div className="mb-8">
         <div className="flex items-center gap-3">
           <div className="min-w-0 flex-1">
@@ -675,14 +971,14 @@ export function McpConnectionsScreen() {
           <button
             type="button"
             onClick={() => openAdvancedSetup()}
-            className="shrink-0 text-[12px] font-medium text-gray-500 underline decoration-gray-300 underline-offset-4 transition hover:text-gray-900"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-700 transition hover:border-gray-300 hover:bg-gray-50 hover:text-gray-900"
+            aria-label="Advanced setup"
+            title="Advanced setup — add any MCP server by URL"
+            data-testid="connector-advanced-setup"
           >
-            Advanced setup
+            <Plus className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
-        <p className="mt-1.5 text-[11px] text-gray-400">
-          Typing filters the tiles below. Pasting a URL checks the server and offers to add it right here.
-        </p>
 
         {smartBarState === "waiting" || smartBarState === "resolving" ? (
           <div className="mt-4 flex items-center gap-2.5 rounded-2xl border border-gray-100 bg-gray-50 px-4 py-3.5 text-[13px] text-gray-500" role="status">
@@ -707,6 +1003,7 @@ export function McpConnectionsScreen() {
               onClick={() => openAdvancedSetup(
                 smartBarResolution?.preset?.displayName ?? "",
                 smartBarResolution?.preset?.url ?? (smartBarInputKind === "domain" ? `https://${smartQuery.trim()}` : smartQuery.trim()),
+                smartBarResolution?.preset ?? null,
               )}
               className="shrink-0 font-medium underline underline-offset-2"
             >
@@ -729,7 +1026,7 @@ export function McpConnectionsScreen() {
                 <DenButton
                   variant="secondary"
                   size="sm"
-                  onClick={() => openAdvancedSetup(smartBarName, smartBarMatch.url)}
+                  onClick={() => openAdvancedSetup(smartBarName, smartBarMatch.url, smartBarResolution?.preset ?? null)}
                 >
                   Options
                 </DenButton>
@@ -761,7 +1058,7 @@ export function McpConnectionsScreen() {
                 Needs a little more setup: {smartBarBlockers.join(" · ")}{" "}
                 <button
                   type="button"
-                  onClick={() => openAdvancedSetup(smartBarName, smartBarMatch.url)}
+                  onClick={() => openAdvancedSetup(smartBarName, smartBarMatch.url, smartBarResolution?.preset ?? null)}
                   className="font-semibold underline underline-offset-2"
                 >
                   Continue setup
@@ -771,74 +1068,188 @@ export function McpConnectionsScreen() {
           </div>
         ) : null}
 
-        <div className="mt-5">
-          <ConnectorQuickAddGrid
-            connections={connections}
+        <div className="mt-8">
+          <ConnectorCatalog
+            connections={listedConnections}
             presets={presets}
-            onSelect={openQuickAdd}
             filter={smartBarResolutionMode ? "" : smartQuery}
+            configuredHref={configuredRoute}
+            configuredConnectionHref={(connectionId) => getMcpConnectionRoute(orgSlug, connectionId)}
+            connectorHref={(id) => getMcpConnectionRoute(orgSlug, id)}
+            onAddPopular={addPopularConnector}
+            onAddPreset={addPreset}
+            onAddMicrosoft365={() => openQuickAdd(MICROSOFT_365_QUICK_ADD_ID)}
             onManage={manageConnection}
-            onInstantAdd={(preset) => void handleInstantAdd(preset)}
-            instantAddingPresetId={instantAddingPresetId}
+            onRemove={handleRemove}
+            onRecover={recoverConnection}
+            setupRequired={(connection) => connectionSetupState(connection).setupRequired}
+            recoveringConnectionId={pollingConnectionId ?? (startOAuth.isPending ? startOAuth.variables : null)}
+            addingPresetId={instantAddingPresetId}
+            loading={presetsLoading}
+            unavailable={Boolean(presetsError)}
+            connectionsUnavailable={isLoading || usableConnectionsLoading || Boolean(error || usableConnectionsError)}
           />
         </div>
       </div>
+      )}
 
-      <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-400">Your connectors</h3>
+      {!configuredView ? null : (
+      <>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-400">Configured</h3>
+        <span className="text-[12px] text-gray-400">{configuredConnections.length} {configuredConnections.length === 1 ? "connector" : "connectors"}</span>
+      </div>
       {isLoading || usableConnectionsLoading ? (
         <div className="rounded-[28px] border border-gray-200 bg-white px-6 py-10 text-[15px] text-gray-500">
           Loading MCP connectors…
         </div>
-      ) : listedConnections.length === 0 ? (
+      ) : configuredConnections.length === 0 ? (
         <div className="rounded-[28px] border border-gray-200 bg-white px-6 py-10 text-center text-[14px] text-gray-500">
-          No MCP connectors yet.
+          No MCP connectors yet.{" "}
+          <Link href={getMcpConnectionsRoute(orgSlug)} className="font-semibold underline underline-offset-2">Browse connectors</Link>
         </div>
       ) : (
         <div className="divide-y divide-gray-100 rounded-2xl border border-gray-100 bg-white">
-          {listedConnections.map((connection) => {
-            const connectAttemptRequiresConfiguration = oauthClientConfigurationRequiredIds.includes(connection.id);
-            const needsOAuthClientConfiguration = connectionNeedsOAuthClientConfiguration(
-              connection,
-              connectAttemptRequiresConfiguration,
-            );
-            const needsPluginSetup = marketplaceConnectionNeedsAdminSetup(connection, presets)
-              && !needsOAuthClientConfiguration;
-            const setupPluginId = connection.identityManagedBy[0]?.pluginId;
-            return <ConnectionRow
-              key={connection.id}
-              connection={connection}
-              needsPluginSetup={needsPluginSetup}
-              needsOAuthClientConfiguration={needsOAuthClientConfiguration}
-              setupHref={needsPluginSetup && setupPluginId ? getPluginRoute(orgSlug, setupPluginId) : null}
-              polling={pollingConnectionId === connection.id}
-              connecting={startOAuth.isPending && startOAuth.variables === connection.id}
-              errorMessage={connectionActionError?.connectionId === connection.id ? connectionActionError.message : null}
-              onEdit={() => {
-                if (connection.id === GOOGLE_WORKSPACE_QUICK_ADD_ID) {
-                  saveNativeClient.reset();
-                  setGoogleDialogMode("legacy");
-                  return;
-                }
-                updateConnection.reset();
-                setConfiguringOAuthClient(false);
-                setEditingConnection(connection);
-              }}
-              onConfigure={() => {
-                updateConnection.reset();
-                setConfiguringOAuthClient(true);
-                setEditingConnection(connection);
-              }}
-              onReviewIssuer={() => void handleOpenIssuerReview(connection)}
-              onConnect={() => void handleConnectOAuth(connection.id)}
-              onDisconnect={() => void handleDisconnect(connection)}
-              onRemove={() => handleRemove(connection)}
-              disconnecting={disconnectConnection.isPending && disconnectConnection.variables === connection.id}
-              removing={deleteConnection.isPending && deleteConnection.variables === connection.id}
-              toolsOpen={toolsConnectionId === connection.id}
-              onToggleTools={() => setToolsConnectionId((current) => current === connection.id ? null : connection.id)}
-            />;
-          })}
+          {configuredConnections.map((connection) => renderConnectionRow(connection, {
+            highlighted: focusConnectionId === connection.id,
+            rowRef: focusConnectionId === connection.id ? focusedRowRef : undefined,
+          }))}
         </div>
+      )}
+      </>
+      )}
+
+      {!detailView || !detailSubject || !detailIdentity ? null : detailSubject.kind === "not_found" ? (
+        <div
+          className="rounded-[28px] border border-gray-200 bg-white px-6 py-10 text-center text-[14px] text-gray-500"
+          data-testid="connector-detail-not-found"
+        >
+          {isLoading || usableConnectionsLoading || presetsLoading ? "Loading connector…" : presetsError ? "Reload setup options to find this connector." : (
+            <>
+              We couldn&apos;t find that connector.{" "}
+              <Link href={getMcpConnectionsRoute(orgSlug)} className="font-semibold underline underline-offset-2">Browse connectors</Link>
+            </>
+          )}
+        </div>
+      ) : (
+        <article data-testid="connector-detail" data-connector-kind={detailSubject.kind}>
+          <header className="flex flex-col gap-5">
+            <IntegrationIcon
+              name={detailIdentity.name}
+              iconUrl={detailIdentity.icon.iconUrl}
+              simpleIconSlug={detailIdentity.icon.simpleIconSlug}
+              serviceUrl={detailIdentity.icon.serviceUrl}
+              className="h-[72px] w-[72px] rounded-[20px]"
+              imageClassName="h-9 w-9"
+            />
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h1 data-testid="connector-detail-title" className="flex flex-wrap items-center gap-2.5 text-[28px] font-medium leading-[34px] tracking-[-0.5px] text-gray-950">
+                  {detailIdentity.name}
+                  {detailConnection ? (
+                    <DenChip tone="neutral" size="sm" data-testid="connector-detail-state">
+                      {detailAccountStatus}
+                    </DenChip>
+                  ) : detailEffort ? (
+                    <DenChip tone="neutral" size="sm" data-testid="connector-detail-state">{EFFORT_LABELS[detailEffort]}</DenChip>
+                  ) : null}
+                </h1>
+                {detailIdentity.description ? (
+                  <p className="mt-2 text-[14px] leading-[20px] text-gray-500">{detailIdentity.description}</p>
+                ) : null}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <DenButton
+                  variant="secondary"
+                  size="sm"
+                  icon={detailLinkCopied ? Check : Link2}
+                  onClick={() => void copyDetailLink()}
+                  data-testid="connector-detail-copy-link"
+                >
+                  {detailLinkCopied ? "Copied" : "Copy link"}
+                </DenButton>
+                <DenButton size="sm" icon={MessageCircle} href={connectorChatHref(detailIdentity.name)} data-testid="connector-detail-chat">
+                  Chat
+                </DenButton>
+                {!detailConnection && detailPrimary ? (
+                  <DenButton size="sm" variant="secondary" loading={detailIsBusy} disabled={detailSetupDisabled} onClick={startDetailSetup} data-testid="connector-detail-primary">
+                    {detailPrimary.label}
+                  </DenButton>
+                ) : null}
+              </div>
+            </div>
+          </header>
+
+          <section className="mt-10" data-testid="connector-detail-connection">
+            <DetailSectionTitle>Connection</DetailSectionTitle>
+            {detailConnection ? (
+              <div className="rounded-2xl border border-gray-100 bg-white">
+                {renderConnectionRow(detailConnection)}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-4 rounded-2xl border border-dashed border-gray-200 bg-gray-50/60 px-5 py-5 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-[14px] font-medium text-gray-900">{isLoading || usableConnectionsLoading ? "Checking connection setup..." : error || usableConnectionsError || detailSetupUnavailable ? "Connection setup could not be confirmed" : `Not set up for ${orgContext?.organization.name ?? "your org"} yet`}</p>
+                  {detailPrimary ? <p className="mt-1 max-w-[520px] text-[13px] leading-5 text-gray-500">{detailPrimary.explanation}</p> : null}
+                </div>
+                {detailPrimary ? (
+                  <DenButton className="shrink-0" loading={detailIsBusy} disabled={detailSetupDisabled} onClick={startDetailSetup} data-testid="connector-detail-setup">
+                    {detailPrimary.label}
+                  </DenButton>
+                ) : null}
+              </div>
+            )}
+          </section>
+
+          {detailConnection ? (
+            <section className="mt-10" data-testid="connector-detail-tools">
+              <DetailSectionTitle>Tools</DetailSectionTitle>
+              {detailCanInspectTools ? (
+                <div className="flex flex-col gap-4 rounded-2xl border border-gray-100 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-[13px] leading-5 text-gray-500">
+                    Browse this connector&apos;s live tool catalog and run a tool against your connected account in the Tool Tester.
+                  </p>
+                  <Link
+                    href={`${getToolTesterRoute(orgSlug)}?connectionId=${encodeURIComponent(detailConnection.id)}`}
+                    className={buttonVariants({ variant: "secondary", size: "sm" })}
+                    data-testid="connector-detail-test-tools"
+                  >
+                    <Wrench className="h-3.5 w-3.5" aria-hidden="true" />
+                    Test tools
+                  </Link>
+                </div>
+              ) : (
+                <p className="text-[13px] leading-5 text-gray-500">
+                  {isNativeProviderConnectionId(detailConnection.id, detailConnection.nativeProviderKey)
+                    ? "Native connectors expose their capabilities through OpenWork Connect rather than an MCP tool catalog."
+                    : "Tools appear here once the connection is connected for you."}
+                </p>
+              )}
+            </section>
+          ) : null}
+
+          <section className="mt-10" data-testid="connector-detail-information">
+            <DetailSectionTitle>Information</DetailSectionTitle>
+            <dl className="divide-y divide-gray-100">
+              {detailFacts.map((fact) => (
+                <div key={`${fact.label}-${fact.value}`} className="grid gap-1 py-3 sm:grid-cols-[160px_1fr] sm:gap-6">
+                  <dt className="text-[13px] text-gray-400">{fact.label}</dt>
+                  <dd className={`min-w-0 text-[14px] text-gray-900 ${fact.mono ? "truncate font-mono text-[12.5px]" : ""}`}>
+                    {fact.href?.startsWith("/") ? (
+                      <Link href={fact.href} className="underline-offset-2 hover:underline">{fact.value}</Link>
+                    ) : fact.href ? (
+                      <a href={fact.href} target="_blank" rel="noopener noreferrer" className="underline-offset-2 hover:underline">{fact.value}</a>
+                    ) : fact.value}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+
+          <p className="mt-10 text-[12px] leading-5 text-gray-400">
+            When a connector is connected, OpenWork agents can use its tools with the connected account whenever a request calls for it. Tool calls follow the connector&apos;s tool policy, and anyone can disconnect their own account from Your Connections at any time.
+          </p>
+        </article>
       )}
 
       <AddConnectionDialog
@@ -911,17 +1322,19 @@ export function McpConnectionsScreen() {
         }}
       />
 
-      <Microsoft365Dialog
-        open={microsoftDialogOpen}
+      {microsoftDialogConnectionId ? <Microsoft365Dialog
+        key={microsoftDialogConnectionId}
+        providerId={microsoftDialogConnectionId}
+        open
         submitting={saveNativeClient.isPending}
         error={saveNativeClient.error}
-        onClose={() => setMicrosoftDialogOpen(false)}
+        onClose={() => setMicrosoftDialogConnectionId(null)}
         onSubmit={async (input) => {
-          await saveNativeClient.mutateAsync({ providerId: "microsoft-365", ...input });
-          setMicrosoftDialogOpen(false);
+          await saveNativeClient.mutateAsync({ providerId: microsoftDialogConnectionId, ...input });
+          setMicrosoftDialogConnectionId(null);
         }}
-      />
-    </DashboardPageTemplate>
+      /> : null}
+    </div>
   );
 }
 
@@ -1401,7 +1814,7 @@ function GoogleWorkspaceDialog({
                         <input
                           type="checkbox"
                           data-feature={permission.key}
-                          className="h-4 w-4 rounded border-gray-300 text-gray-900"
+                          className="h-4 w-4 rounded-sm border-gray-300 text-gray-900"
                           checked={features.includes(permission.key)}
                           disabled={loadingConfig}
                           onChange={() => toggleFeature(permission.key)}
@@ -1630,6 +2043,10 @@ function IssuerReviewDialog({
   );
 }
 
+function DetailSectionTitle({ children }: { children: ReactNode }) {
+  return <h2 className="mb-3 border-b border-gray-100 pb-3 text-[16px] font-medium tracking-[-0.02em] text-gray-950">{children}</h2>;
+}
+
 function accessSummaryLabel(connection: ExternalMcpConnection): string {
   const access = connection.access;
   if (!access) return "";
@@ -1641,7 +2058,10 @@ function accessSummaryLabel(connection: ExternalMcpConnection): string {
 }
 
 function ConnectionRow({
+  orgSlug,
   connection,
+  highlighted = false,
+  rowRef,
   needsPluginSetup,
   needsOAuthClientConfiguration,
   setupHref,
@@ -1656,10 +2076,11 @@ function ConnectionRow({
   onRemove,
   disconnecting,
   removing,
-  toolsOpen,
-  onToggleTools,
 }: {
+  orgSlug: string | null;
   connection: ExternalMcpConnection;
+  highlighted?: boolean;
+  rowRef?: Ref<HTMLDivElement>;
   needsPluginSetup: boolean;
   needsOAuthClientConfiguration: boolean;
   setupHref: string | null;
@@ -1674,22 +2095,20 @@ function ConnectionRow({
   onRemove: () => void;
   disconnecting: boolean;
   removing: boolean;
-  toolsOpen: boolean;
-  onToggleTools: () => void;
 }) {
   const isPerMember = connection.credentialMode === "per_member";
   const isNativeProvider = isNativeProviderConnectionId(connection.id, connection.nativeProviderKey);
   const isLegacyGoogleConnection = connection.id === GOOGLE_WORKSPACE_QUICK_ADD_ID;
+  const isLegacyNativeConnection = isLegacyGoogleConnection || connection.id === MICROSOFT_365_QUICK_ADD_ID;
   const creatorAttribution = formatConnectionCreatorAttribution(connection.createdByName);
   const [actionsOpen, setActionsOpen] = useState(false);
   const actionsMenuRef = useRef<HTMLDivElement>(null);
   const actionsTriggerRef = useRef<HTMLButtonElement>(null);
-  const setupRequired = needsPluginSetup || needsOAuthClientConfiguration;
-  const displayedConnected = connection.connected && !setupRequired;
-  const canConnectOAuth = !isLegacyGoogleConnection && !setupRequired && !connection.issuerReviewRequired && connection.authType === "oauth"
-    && (isPerMember ? !connection.connectedForMe : !connection.connected);
-  const canInspectTools = !isNativeProvider && !setupRequired && !connection.issuerReviewRequired
-    && (connection.credentialMode === "shared" ? connection.connected : connection.connectedForMe);
+  const setupRequired = Boolean(connection.setupRequired) || needsPluginSetup || needsOAuthClientConfiguration;
+  const displayedConnected = connectorAccountReady(connection) && !setupRequired;
+  const canConnectOAuth = !isNativeProvider && !setupRequired && !connection.issuerReviewRequired && connection.authType === "oauth"
+    && !displayedConnected;
+  const canInspectTools = !isNativeProvider && !setupRequired && connectorAccountReady(connection);
 
   useEffect(() => {
     if (!actionsOpen) return;
@@ -1715,7 +2134,12 @@ function ConnectionRow({
   }, [actionsOpen]);
 
   return (
-    <div data-testid={`mcp-connection-row-${connection.id}`}>
+    <div
+      ref={rowRef}
+      tabIndex={highlighted ? -1 : undefined}
+      className={`outline-none transition ${highlighted ? "bg-blue-50/70 ring-2 ring-inset ring-blue-200" : ""}`}
+      data-testid={`mcp-connection-row-${connection.id}`}
+    >
       <div className="flex flex-col gap-4 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 flex-1 items-center gap-3">
           <IntegrationIcon name={connection.name} serviceUrl={connection.url} />
@@ -1732,9 +2156,9 @@ function ConnectionRow({
                   OAuth settings need review
                 </span>
               ) : isPerMember ? (
-                <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${connection.connected ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-500"}`}>
+                <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${displayedConnected ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-500"}`}>
                   <Users className="h-3 w-3" />
-                  {connection.connected ? "Individual accounts connected" : "Not connected"}
+                  {polling ? "Waiting for authorization..." : connectorAccountStatus(connection, setupRequired)}
                 </span>
               ) : displayedConnected ? (
                 <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
@@ -1748,7 +2172,7 @@ function ConnectionRow({
                 </span>
               ) : (
                 <span className="inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-500">
-                  Not connected
+                  {connectorAccountStatus(connection, setupRequired)}
                 </span>
               )}
               {connection.access ? (
@@ -1776,6 +2200,14 @@ function ConnectionRow({
               Configure
             </DenButton>
           ) : null}
+          {setupRequired && !needsOAuthClientConfiguration && !setupHref ? (
+            <DenButton variant="primary" size="sm" onClick={onEdit}>Set up</DenButton>
+          ) : null}
+          {isNativeProvider && !setupRequired ? (
+            <DenButton variant="secondary" size="sm" href={`${getYourConnectionsRoute(orgSlug)}?connectionId=${encodeURIComponent(connection.id)}`}>
+              {displayedConnected ? "Your account" : connection.needsReconnect ? "Reconnect" : "Connect your account"}
+            </DenButton>
+          ) : null}
           {setupHref ? (
             <Link href={setupHref} className={buttonVariants({ variant: "primary", size: "sm" })}>
               Set up
@@ -1793,10 +2225,10 @@ function ConnectionRow({
               loading={connecting || polling}
               onClick={onConnect}
             >
-              Connect
+              {connection.needsReconnect || connection.credentialHealth === "reconnect_required" ? "Reconnect" : "Connect"}
             </DenButton>
           ) : null}
-          {displayedConnected && !isLegacyGoogleConnection ? (
+          {connection.connected && !isNativeProvider ? (
             <DenButton
               variant="secondary"
               size="sm"
@@ -1827,6 +2259,17 @@ function ConnectionRow({
                 aria-label={`Actions for ${connection.name}`}
                 className="absolute right-0 top-10 z-30 w-44 overflow-hidden rounded-2xl border border-gray-100 bg-white p-1.5 text-[13px] shadow-xl shadow-gray-900/10"
               >
+                <a
+                  role="menuitem"
+                  href={connectorChatHref(connection.name)}
+                  onClick={() => setActionsOpen(false)}
+                  className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-gray-600 transition hover:bg-gray-50 hover:text-gray-900"
+                  aria-label={`Chat with ${connection.name} in OpenWork`}
+                  data-testid={`chat-mcp-connection-${connection.id}`}
+                >
+                  <MessageCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                  Chat
+                </a>
                 <button
                   type="button"
                   role="menuitem"
@@ -1834,7 +2277,7 @@ function ConnectionRow({
                     setActionsOpen(false);
                     onEdit();
                   }}
-                  disabled={!connection.updatedAt && !isLegacyGoogleConnection}
+                  disabled={!connection.updatedAt && !isNativeProvider}
                   className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-gray-600 transition hover:bg-gray-50 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-50"
                   aria-label={`Edit ${connection.name}`}
                   data-testid={`edit-mcp-connection-${connection.id}`}
@@ -1842,21 +2285,26 @@ function ConnectionRow({
                   <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
                   Edit
                 </button>
-                <button
-                  type="button"
+                <Link
+                  href={`${getToolTesterRoute(orgSlug)}?connectionId=${encodeURIComponent(connection.id)}`}
                   role="menuitem"
-                  onClick={() => {
+                  onClick={(event) => {
+                    if (!canInspectTools) {
+                      event.preventDefault();
+                      return;
+                    }
                     setActionsOpen(false);
-                    onToggleTools();
                   }}
-                  disabled={!canInspectTools}
-                  title={canInspectTools ? "Inspect the tools this MCP exposes" : "Connect this account before inspecting tools"}
-                  className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-gray-600 transition hover:bg-gray-50 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-50"
+                  aria-disabled={!canInspectTools}
+                  tabIndex={canInspectTools ? undefined : -1}
+                  title={canInspectTools ? "Test the tools this MCP exposes" : "Connect this account before testing tools"}
+                  className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-gray-600 transition ${canInspectTools ? "hover:bg-gray-50 hover:text-gray-900" : "cursor-not-allowed opacity-50"}`}
+                  data-testid={`test-mcp-tools-${connection.id}`}
                 >
-                  {toolsOpen ? <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />}
-                  {toolsOpen ? "Hide tools" : "View tools"}
-                </button>
-                {!isLegacyGoogleConnection ? (
+                  <Wrench className="h-3.5 w-3.5" aria-hidden="true" />
+                  Test tools
+                </Link>
+                {!isLegacyNativeConnection ? (
                   <>
                     <div className="my-1 border-t border-gray-100" />
                     <button
@@ -1880,245 +2328,39 @@ function ConnectionRow({
           </div>
         </div>
       </div>
-      {toolsOpen && canInspectTools ? <McpToolCatalog connection={connection} /> : null}
-    </div>
-  );
-}
-
-function schemaInputs(schema: Record<string, unknown>): Array<{ name: string; required: boolean; type: string | null }> {
-  const properties = isRecord(schema.properties) ? schema.properties : {};
-  const required = new Set(Array.isArray(schema.required) ? schema.required.filter((item): item is string => typeof item === "string") : []);
-  return Object.entries(properties).map(([name, definition]) => ({
-    name,
-    required: required.has(name),
-    type: isRecord(definition) && typeof definition.type === "string" ? definition.type : null,
-  }));
-}
-
-function toolHints(tool: ExternalMcpTool): Array<{ label: string; className: string }> {
-  const annotations = tool.annotations;
-  if (!annotations) return [];
-  return [
-    annotations.readOnlyHint ? { label: "Read-only hint", className: "bg-blue-50 text-blue-700" } : null,
-    annotations.destructiveHint ? { label: "Destructive hint", className: "bg-red-50 text-red-700" } : null,
-    annotations.idempotentHint ? { label: "Idempotent hint", className: "bg-emerald-50 text-emerald-700" } : null,
-    annotations.openWorldHint ? { label: "External access hint", className: "bg-amber-50 text-amber-700" } : null,
-  ].filter((hint): hint is { label: string; className: string } => hint !== null);
-}
-
-function McpToolCatalog({ connection }: { connection: ExternalMcpConnection }) {
-  const catalog = useMcpConnectionTools(connection.id, true);
-  const [toolSearch, setToolSearch] = useState("");
-  const [visibleToolLimit, setVisibleToolLimit] = useState(MCP_TOOL_PAGE_SIZE);
-  const filteredTools = useMemo(() => {
-    const needle = toolSearch.trim().toLowerCase();
-    if (!needle) return catalog.data?.tools ?? [];
-    return (catalog.data?.tools ?? []).filter((tool) =>
-      [tool.name, tool.title, tool.annotations?.title, tool.description]
-        .some((value) => value?.toLowerCase().includes(needle)),
-    );
-  }, [catalog.data, toolSearch]);
-  const visibleTools = filteredTools.slice(0, visibleToolLimit);
-  const remainingToolCount = filteredTools.length - visibleTools.length;
-
-  return (
-    <div className="border-t border-gray-100 bg-gray-50/70 px-6 py-5" data-mcp-tool-catalog={connection.id}>
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <Wrench className="h-4 w-4 text-gray-500" />
-            <p className="text-[13px] font-semibold text-gray-900">Tools available to your agents</p>
-          </div>
-          <p className="mt-1 text-[12px] leading-5 text-gray-500">
-            Live from {connection.name}. Inspecting this list does not run a tool. Provider annotations are hints, not guarantees.
-          </p>
-        </div>
-        <DenButton variant="secondary" size="sm" loading={catalog.isFetching} onClick={() => void catalog.refetch()}>
-          <RefreshCw className="h-3.5 w-3.5" />
-          Refresh
-        </DenButton>
-      </div>
-
-      {catalog.data && catalog.data.tools.length > 0 ? (
-        <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="w-full sm:max-w-sm">
-            <DenInput
-              aria-label="Search MCP tools"
-              icon={Search}
-              value={toolSearch}
-              onChange={(event) => {
-                setToolSearch(event.target.value);
-                setVisibleToolLimit(MCP_TOOL_PAGE_SIZE);
-              }}
-              placeholder="Search tools by name or description"
-            />
-          </div>
-          <p className="shrink-0 text-[11px] font-medium text-gray-500" role="status">
-            {toolSearch.trim()
-              ? `${filteredTools.length} of ${catalog.data.tools.length} tools`
-              : `${catalog.data.tools.length} ${catalog.data.tools.length === 1 ? "tool" : "tools"} exposed`}
-          </p>
-        </div>
-      ) : null}
-
-      {catalog.isLoading ? (
-        <div className="mt-4 flex items-center gap-2 text-[12px] text-gray-500">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Reading the MCP tool catalog…
-        </div>
-      ) : catalog.error ? (
-        <div className="mt-4 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-[12px] leading-5 text-red-700">
-          {catalog.error instanceof Error ? catalog.error.message : "Could not read this MCP's tools."}
-        </div>
-      ) : catalog.data?.tools.length === 0 ? (
-        <div className="mt-4 rounded-xl border border-gray-200 bg-white px-4 py-3 text-[12px] text-gray-500">
-          This MCP is connected but does not currently expose any tools.
-        </div>
-      ) : filteredTools.length === 0 ? (
-        <div className="mt-4 rounded-xl border border-gray-200 bg-white px-4 py-3 text-[12px] text-gray-500">
-          No tools match “{toolSearch.trim()}”.
-        </div>
-      ) : (
-        <>
-          <div className="mt-4 grid gap-3 lg:grid-cols-2">
-            {visibleTools.map((tool) => {
-              const inputs = schemaInputs(tool.inputSchema);
-              const hints = toolHints(tool);
-              const displayTitle = tool.title || tool.annotations?.title;
-              return (
-                <details key={tool.name} className="group rounded-2xl border border-gray-200 bg-white p-4">
-                  <summary className="cursor-pointer list-none">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        {displayTitle ? (
-                          <>
-                            <p className="break-words text-[12px] font-semibold text-gray-900">{displayTitle}</p>
-                            <p className="mt-0.5 break-words font-mono text-[10px] text-gray-500">{tool.name}</p>
-                          </>
-                        ) : (
-                          <p className="break-words font-mono text-[12px] font-semibold text-gray-900">{tool.name}</p>
-                        )}
-                        <p className="mt-1 line-clamp-2 text-[12px] leading-5 text-gray-500">
-                          {tool.description || "No description provided by this MCP."}
-                        </p>
-                      </div>
-                      <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-gray-400 transition group-open:rotate-90" />
-                    </div>
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <p className="text-[11px] font-medium text-gray-500">
-                        {inputs.length === 0 ? "No inputs" : `${inputs.length} ${inputs.length === 1 ? "input" : "inputs"}`}
-                      </p>
-                      {hints.map((hint) => (
-                        <span
-                          key={hint.label}
-                          className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${hint.className}`}
-                          title="Provider-supplied MCP annotation; treat as a hint."
-                        >
-                          {hint.label}
-                        </span>
-                      ))}
-                    </div>
-                  </summary>
-                  <div className="mt-4 border-t border-gray-100 pt-4">
-                    {inputs.length > 0 ? (
-                      <div className="flex flex-wrap gap-2">
-                        {inputs.map((input) => (
-                          <span key={input.name} className="rounded-full bg-gray-100 px-2.5 py-1 font-mono text-[11px] text-gray-700">
-                            {input.name}{input.type ? `: ${input.type}` : ""}{input.required ? " · required" : ""}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-                    <details className="mt-3">
-                      <summary className="cursor-pointer text-[11px] font-medium text-gray-500">View input schema</summary>
-                      <pre className="mt-2 max-h-64 overflow-auto rounded-xl bg-gray-950 p-3 text-[10px] leading-4 text-gray-100">{JSON.stringify(tool.inputSchema, null, 2)}</pre>
-                    </details>
-                    {tool.outputSchema ? (
-                      <details className="mt-3">
-                        <summary className="cursor-pointer text-[11px] font-medium text-gray-500">View output schema</summary>
-                        <pre className="mt-2 max-h-64 overflow-auto rounded-xl bg-gray-950 p-3 text-[10px] leading-4 text-gray-100">{JSON.stringify(tool.outputSchema, null, 2)}</pre>
-                      </details>
-                    ) : null}
-                  </div>
-                </details>
-              );
-            })}
-          </div>
-          {remainingToolCount > 0 ? (
-            <div className="mt-4 flex justify-center">
-              <DenButton
-                variant="secondary"
-                size="sm"
-                onClick={() => setVisibleToolLimit((current) => current + MCP_TOOL_PAGE_SIZE)}
-              >
-                Show {Math.min(MCP_TOOL_PAGE_SIZE, remainingToolCount)} more
-              </DenButton>
-            </div>
-          ) : null}
-        </>
-      )}
-    </div>
-  );
-}
-
-type SegmentedControlOption<TValue extends string> = {
-  value: TValue;
-  label: string;
-};
-
-function SegmentedControl<TValue extends string>({
-  options,
-  value,
-  onChange,
-  disabled = false,
-}: {
-  options: SegmentedControlOption<TValue>[];
-  value: TValue;
-  onChange: (value: TValue) => void;
-  disabled?: boolean;
-}) {
-  const gridColumns = options.length === 2 ? "grid-cols-2" : "grid-cols-3";
-
-  return (
-    <div className={`grid ${gridColumns} gap-1 rounded-full border border-gray-200 bg-gray-50 p-1`} role="group">
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          disabled={disabled}
-          aria-pressed={value === option.value}
-          onClick={() => onChange(option.value)}
-          className={`rounded-full px-3 py-1.5 text-[12px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
-            value === option.value
-              ? "bg-white text-gray-900 shadow-[0_1px_2px_rgba(15,23,42,0.08)]"
-              : "text-gray-500 hover:text-gray-900"
-          }`}
-        >
-          {option.label}
-        </button>
-      ))}
     </div>
   );
 }
 
 type AddConnectionAccessMode = McpConnectionAccessMode;
 
-const AUTH_TYPE_OPTIONS: SegmentedControlOption<ExternalMcpAuthType>[] = [
-  { value: "oauth", label: "OAuth" },
-  { value: "apikey", label: "API key" },
-  { value: "none", label: "None" },
-];
-
-const CREDENTIAL_MODE_OPTIONS: SegmentedControlOption<ExternalMcpCredentialMode>[] = [
-  { value: "per_member", label: "Individual accounts" },
-  { value: "shared", label: "One org account" },
-];
-
 const ACCESS_MODE_OPTIONS: SegmentedControlOption<AddConnectionAccessMode>[] = [
   { value: "everyone", label: "Everyone" },
   { value: "teams", label: "Specific teams" },
   { value: "people", label: "Specific people" },
 ];
+
+function ExposeDirectlyField({ checked, onChange }: { checked: boolean; onChange: (value: boolean) => void }) {
+  return (
+    <div>
+      <label className="flex items-start gap-2 text-[12px] text-gray-700">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={checked}
+          onChange={(event) => onChange(event.target.checked)}
+        />
+        <span>
+          <span className="font-medium">Expose directly as an MCP server</span>
+          <span className="mt-0.5 block text-[11px] leading-5 text-gray-500">
+            The agent sees this server&apos;s own tools instead of going through search and execute.
+            Access grants and the tool policy still apply.
+          </span>
+        </span>
+      </label>
+    </div>
+  );
+}
 
 function EditConnectionDialog({
   connection,
@@ -2136,10 +2378,12 @@ function EditConnectionDialog({
   onSubmit: (input: UpdateMcpConnectionInput) => Promise<UpdatedMcpConnection>;
 }) {
   const { orgContext } = useOrgDashboard();
+  const { runtimeConfig, runtimeConfigLoaded } = useDenFlow();
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [authType, setAuthType] = useState<ExternalMcpAuthType>("oauth");
   const [credentialMode, setCredentialMode] = useState<ExternalMcpCredentialMode>("shared");
+  const [exposeDirectly, setExposeDirectly] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [showOAuthClient, setShowOAuthClient] = useState(false);
   const [oauthClientId, setOAuthClientId] = useState("");
@@ -2156,6 +2400,7 @@ function EditConnectionDialog({
     setUrl(connection.url);
     setAuthType(connection.authType);
     setCredentialMode(connection.credentialMode);
+    setExposeDirectly(connection.exposeDirectly);
     setApiKey("");
     setShowOAuthClient(configureOAuthClient || Boolean(connection.oauthClientId));
     setOAuthClientId(connection.oauthClientId ?? "");
@@ -2218,6 +2463,7 @@ function EditConnectionDialog({
       url: url.trim(),
       authType,
       credentialMode: proposedCredentialMode,
+      exposeDirectly,
       ...(!marketplaceManaged && authType === "apikey" && trimmedApiKey ? { apiKey: trimmedApiKey } : {}),
       ...(authType === "oauth" && showOAuthClient && trimmedClientId
         ? {
@@ -2404,6 +2650,13 @@ function EditConnectionDialog({
             ) : null}
           </div>
 
+          <ExposeDirectlyField checked={exposeDirectly} onChange={setExposeDirectly} />
+          <McpConnectionAppSetup
+            connection={connection}
+            publicApiUrl={runtimeConfigLoaded ? runtimeConfig.denApiUrl : ""}
+            enabled={orgContext?.capabilities.mcpConnections === true}
+          />
+
           <div>
             <label className="mb-1.5 block text-[12px] font-medium text-gray-700">Who can use this?</label>
             <SegmentedControl
@@ -2510,7 +2763,7 @@ function AddConnectionDialog({
   onSubmit: (
     input: CreateMcpConnectionInput,
     options: { startOAuth: boolean },
-  ) => Promise<void>;
+  ) => Promise<CreateOutcome>;
 }) {
   const { orgContext } = useOrgDashboard();
   const discoverRequirements = useDiscoverMcpConnectionRequirements();
@@ -2529,6 +2782,7 @@ function AddConnectionDialog({
   const [url, setUrl] = useState(preset?.url ?? "");
   const [authType, setAuthType] = useState<ExternalMcpAuthType>(preset?.authType ?? "oauth");
   const [credentialMode, setCredentialMode] = useState<ExternalMcpCredentialMode>("per_member");
+  const [exposeDirectly, setExposeDirectly] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [showOAuthClient, setShowOAuthClient] = useState(Boolean(preset?.requiresOAuthClient));
   const [oauthClientId, setOAuthClientId] = useState("");
@@ -2536,12 +2790,17 @@ function AddConnectionDialog({
   const [requirements, setRequirements] = useState<McpRequirementsDiscovery | null>(null);
   const [discoveryState, setDiscoveryState] = useState<"idle" | "waiting" | "checking" | "ready" | "error">("idle");
   const [discoveryError, setDiscoveryError] = useState<unknown>(null);
+  const [submissionError, setSubmissionError] = useState<unknown>(null);
   const [authorizationServerIssuer, setAuthorizationServerIssuer] = useState("");
   const [requestedScopes, setRequestedScopes] = useState<string[]>([]);
   const [accessMode, setAccessMode] = useState<AddConnectionAccessMode>("everyone");
   const [selectedTeamIds, setSelectedTeamIds] = useState<string[]>([]);
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
   const discoveryRequestId = useRef(0);
+  const authTypeEdited = useRef(false);
+  const activePreset = preset ?? resolution?.preset ?? null;
+  const authTypeOptions = presetAuthTypeOptions(activePreset);
+  const formError = error ?? submissionError;
 
   useEffect(() => {
     if (!open) return;
@@ -2556,7 +2815,9 @@ function AddConnectionDialog({
     setName(preset?.displayName ?? initialName ?? "");
     setUrl(preset?.url ?? initialUrl ?? "");
     setAuthType(preset?.authType ?? "oauth");
+    authTypeEdited.current = false;
     setCredentialMode("per_member");
+    setExposeDirectly(false);
     setApiKey("");
     setShowOAuthClient(Boolean(preset?.requiresOAuthClient));
     setOAuthClientId("");
@@ -2564,6 +2825,7 @@ function AddConnectionDialog({
     setRequirements(null);
     setDiscoveryState("idle");
     setDiscoveryError(null);
+    setSubmissionError(null);
     discoveryRequestId.current += 1;
     setAuthorizationServerIssuer("");
     setRequestedScopes([]);
@@ -2583,7 +2845,7 @@ function AddConnectionDialog({
     return list.includes(id) ? list.filter((entry) => entry !== id) : [...list, id];
   }
 
-  const showOAuthClientFields = authType === "oauth" && (Boolean(preset?.requiresOAuthClient) || showOAuthClient);
+  const showOAuthClientFields = authType === "oauth" && (Boolean(activePreset?.requiresOAuthClient) || showOAuthClient);
   const authorizationServers = requirements?.authentication.authorizationServers ?? [];
   const selectedAuthorizationServer = authorizationServers.find((server) => server.issuer === authorizationServerIssuer);
   const requiredScopes = requirements?.authentication.requiredScopes ?? [];
@@ -2599,12 +2861,18 @@ function AddConnectionDialog({
 
   function applyDiscoveredRequirements(result: McpRequirementsDiscovery) {
     setRequirements(result);
-    if (result.authentication.kind === "none") setAuthType("none");
-    else if (result.authentication.kind === "oauth") setAuthType("oauth");
+    // A curated preset's auth type stays authoritative over the live probe,
+    // matching the smart-add rule: an API-key server that also advertises
+    // OAuth metadata (or initializes anonymously) must not lose its key field.
+    if (!activePreset && !authTypeEdited.current) {
+      if (result.authentication.kind === "none") setAuthType("none");
+      else if (result.authentication.kind === "oauth") setAuthType("oauth");
+      else if (result.authentication.kind === "manual_bearer") setAuthType("apikey");
+    }
     const servers = result.authentication.authorizationServers;
     setAuthorizationServerIssuer(servers.length === 1 ? servers[0].issuer : "");
     setRequestedScopes(result.authentication.recommendedScopes);
-    setShowOAuthClient(Boolean(preset?.requiresOAuthClient) || result.authentication.recommendedRegistrationMethod === "pre_registered");
+    setShowOAuthClient(Boolean(activePreset?.requiresOAuthClient) || result.authentication.recommendedRegistrationMethod === "pre_registered");
   }
 
   async function discover(targetUrl: string, requestId: number) {
@@ -2698,7 +2966,9 @@ function AddConnectionDialog({
         ? ["This provider needs a pre-registered OAuth app."]
         : resolution?.preset?.authType === "apikey"
           ? ["This provider needs your org's API key."]
-          : []
+          : resolution?.preset && resolution.preset.authType !== smartPlan.input.authType
+            ? ["The server check differs from this provider's required authentication. Continue with the provider setup."]
+            : []
     : [];
   const smartOneClick = smartPlan?.readiness === "one_click" && smartBlockers.length === 0 ? smartPlan : null;
 
@@ -2729,12 +2999,13 @@ function AddConnectionDialog({
 
   async function submitSmart() {
     if (!smartOneClick) return;
+    setSubmissionError(null);
     try {
       await onSubmit(smartOneClick.input, {
         startOAuth: smartOneClick.input.authType === "oauth" && smartOneClick.input.credentialMode === "shared",
       });
-    } catch {
-      // The mutation's typed error is rendered by the dialog's error prop.
+    } catch (submitError) {
+      setSubmissionError(submitError);
     }
   }
 
@@ -2747,6 +3018,7 @@ function AddConnectionDialog({
   }
 
   async function submit() {
+    setSubmissionError(null);
     const trimmedClientId = oauthClientId.trim();
     const trimmedClientSecret = oauthClientSecret.trim();
     const input: CreateMcpConnectionInput = {
@@ -2754,6 +3026,7 @@ function AddConnectionDialog({
       url: url.trim(),
       authType,
       credentialMode: authType === "oauth" ? credentialMode : "shared",
+      exposeDirectly,
       apiKey: authType === "apikey" ? apiKey.trim() : undefined,
       oauthClient: showOAuthClientFields && trimmedClientId
         ? {
@@ -2771,10 +3044,8 @@ function AddConnectionDialog({
       await onSubmit(input, {
         startOAuth: authType === "oauth" && credentialMode === "shared" && !showOAuthClientFields,
       });
-    } catch {
-      // The mutation's typed error is rendered by the dialog's error prop.
-      // Consume the rejected promise so a clear validation failure does not
-      // also become an opaque browser-level unhandled rejection.
+    } catch (submitError) {
+      setSubmissionError(submitError);
     }
   }
 
@@ -2893,8 +3164,8 @@ function AddConnectionDialog({
               </div>
             ) : null}
 
-            {error ? (
-              <p className="mt-3 text-[13px] text-red-600">{error instanceof Error ? error.message : "Failed to add connection."}</p>
+            {formError ? (
+              <p role="alert" className="mt-3 text-[13px] text-red-600">{formError instanceof Error ? formError.message : "Failed to add connection."}</p>
             ) : null}
 
             <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -2934,7 +3205,7 @@ function AddConnectionDialog({
           </button>
         ) : null}
         <h2 className="text-[18px] font-semibold tracking-[-0.02em] text-gray-950">
-          {preset ? `Add ${preset.displayName}` : "Add a custom MCP server"}
+          {activePreset ? `Add ${activePreset.displayName}` : "Add a custom MCP server"}
         </h2>
 
         <div className="mt-5 space-y-4">
@@ -2956,7 +3227,7 @@ function AddConnectionDialog({
                 setDiscoveryError(null);
               }}
               placeholder="https://mcp.example.com/mcp"
-              disabled={Boolean(preset)}
+              disabled={Boolean(activePreset)}
             />
             {discoveryState === "waiting" || discoveryState === "checking" ? (
               <p className="mt-2 flex items-center gap-2 text-[12px] text-gray-500" role="status">
@@ -2972,14 +3243,25 @@ function AddConnectionDialog({
                 </button>
               </div>
             ) : null}
+            {discoveryState === "ready" && requirements && (requirements.status !== "ready" || requirements.server.initialize === "failed" || requirements.tools.visibility === "unavailable") ? (
+              <div className="mt-2 text-[12px] text-amber-800" role="alert">
+                <p>{requirements.server.initialize === "failed" || requirements.tools.visibility === "unavailable"
+                  ? "The server check did not verify usable tools. Review the requirements before adding it."
+                  : "The server needs additional setup before its tools can be used."}</p>
+                {requirements.manualRequirements.map((requirement) => <p key={requirement.code}>{requirement.label}: {requirement.reason}</p>)}
+                {requirements.warnings.map((warning) => <p key={warning.code}>{warning.message}</p>)}
+                <button type="button" className="mt-1 font-medium underline underline-offset-2" onClick={retryDiscovery}>Retry check</button>
+              </div>
+            ) : null}
           </div>
-          {!preset ? (
+          {authTypeOptions.length > 1 ? (
             <div>
               <label className="mb-1.5 block text-[12px] font-medium text-gray-700">Authentication</label>
               <SegmentedControl
-                options={AUTH_TYPE_OPTIONS}
+                options={authTypeOptions}
                 value={authType}
                 onChange={(option) => {
+                  authTypeEdited.current = true;
                   setAuthType(option);
                   if (option !== "oauth") setShowOAuthClient(false);
                 }}
@@ -2999,7 +3281,7 @@ function AddConnectionDialog({
             </div>
           ) : null}
 
-          {authType === "oauth" && !preset?.requiresOAuthClient && !showOAuthClient ? (
+          {authType === "oauth" && !activePreset?.requiresOAuthClient && !showOAuthClient ? (
             <button
               type="button"
               onClick={() => setShowOAuthClient(true)}
@@ -3079,11 +3361,11 @@ function AddConnectionDialog({
                     aria-checked={optionalScopeSelectionState === "some" ? "mixed" : optionalScopeSelectionState === "all"}
                     data-testid="toggle-all-optional-permissions"
                     onClick={() => setRequestedScopes((current) => toggleAllOptionalScopes(current, optionalScopes))}
-                    className="flex w-full items-center gap-2 border-b border-gray-200 pb-2 text-left font-medium text-gray-700 transition hover:text-gray-950 focus:outline-none focus:ring-2 focus:ring-gray-900/10"
+                    className="flex w-full items-center gap-2 border-b border-gray-200 pb-2 text-left font-medium text-gray-700 transition hover:text-gray-950 focus:outline-hidden focus:ring-2 focus:ring-gray-900/10"
                   >
                     <span
                       aria-hidden="true"
-                      className={`flex h-4 w-4 items-center justify-center rounded border transition ${
+                      className={`flex h-4 w-4 items-center justify-center rounded-sm border transition ${
                         optionalScopeSelectionState === "none"
                           ? "border-gray-300 bg-white"
                           : "border-blue-600 bg-blue-600 text-white"
@@ -3122,12 +3404,12 @@ function AddConnectionDialog({
               <label className="mb-1.5 block text-[12px] font-medium text-gray-700">Whose account does the AI use?</label>
               <SegmentedControl options={CREDENTIAL_MODE_OPTIONS} value={credentialMode} onChange={setCredentialMode} />
               <p className="mt-1.5 text-[12px] leading-5 text-gray-500">
-                {credentialMode === "per_member"
-                  ? "Each person signs in with their own account from Your Connections. Their AI acts as them, with their permissions."
-                  : "You sign in once with a single account — everyone granted access acts as it. Good for bot or service accounts."}
+                {credentialModeDescription(credentialMode)}
               </p>
             </div>
           ) : null}
+
+          <ExposeDirectlyField checked={exposeDirectly} onChange={setExposeDirectly} />
 
           <div>
             <label className="mb-1.5 block text-[12px] font-medium text-gray-700">Who can use this?</label>
@@ -3177,8 +3459,8 @@ function AddConnectionDialog({
           </div>
         </div>
 
-        {error ? (
-          <p className="mt-3 text-[13px] text-red-600">{error instanceof Error ? error.message : "Failed to add connection."}</p>
+        {formError ? (
+          <p role="alert" className="mt-3 text-[13px] text-red-600">{formError instanceof Error ? formError.message : "Failed to add connection."}</p>
         ) : null}
 
         <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">

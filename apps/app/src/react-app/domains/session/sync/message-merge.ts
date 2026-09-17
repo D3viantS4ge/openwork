@@ -1,86 +1,72 @@
 import type { UIMessage } from "ai";
 
-/**
- * Stable identity for a part so snapshot and live-cache copies of the same
- * part can be paired regardless of position.
- *
- * Matching by position is unsound: the live cache can legitimately hold parts
- * the snapshot does not yet (streaming text, a tool part deferred until its
- * input arrives) or expose them in a different order, and a positional pair
- * lets the snapshot silently drop longer live text (truncating the visible
- * thinking) or fail to settle an in-flight tool. Text/reasoning parts carry
- * their opencode part id on both sides; tool parts carry a stable tool call id.
- */
-function partMergeKey(part: UIMessage["parts"][number]): string | null {
-  if (part.type === "dynamic-tool") {
-    return typeof part.toolCallId === "string" ? `tool:${part.toolCallId}` : null;
-  }
-  if (!("providerMetadata" in part)) return null;
-  const metadata = part.providerMetadata?.opencode;
-  if (!metadata || typeof metadata !== "object") return null;
-  return "partId" in metadata && typeof metadata.partId === "string" ? `part:${metadata.partId}` : null;
+const mergedMessageCache = new WeakMap<UIMessage, WeakMap<UIMessage, UIMessage>>();
+const messageSignatureCache = new WeakMap<UIMessage, string>();
+
+function messageSignature(message: UIMessage) {
+  const cached = messageSignatureCache.get(message);
+  if (cached) return cached;
+  const signature = JSON.stringify(message);
+  messageSignatureCache.set(message, signature);
+  return signature;
 }
 
 function mergeMessageParts(snapshotMessage: UIMessage, cachedMessage: UIMessage) {
-  const cachedParts = cachedMessage.parts;
-  const cachedUsed = new Array<boolean>(cachedParts.length).fill(false);
-  const cachedByKey = new Map<string, number>();
-  cachedParts.forEach((part, index) => {
-    const key = partMergeKey(part);
-    if (key !== null && !cachedByKey.has(key)) cachedByKey.set(key, index);
+  const cachedTools = new Map(cachedMessage.parts.flatMap((part) =>
+    part.type === "dynamic-tool" ? [[part.toolCallId, part] as const] : []));
+  const snapshotToolIds = new Set(snapshotMessage.parts.flatMap((part) =>
+    part.type === "dynamic-tool" ? [part.toolCallId] : []));
+  const parts = snapshotMessage.parts.map((part, index) => {
+    if (part.type === "dynamic-tool") {
+      const cached = cachedTools.get(part.toolCallId);
+      // A call cannot return from a terminal result to streaming input. Keep
+      // snapshot authority for terminal-to-terminal updates and other calls.
+      if (cached?.toolName === part.toolName
+        && (cached.state === "output-available" || cached.state === "output-error")
+        && (part.state === "input-streaming" || part.state === "input-available")) return cached;
+      return part;
+    }
+    const cachedPart = cachedMessage.parts[index];
+    if (!cachedPart) return part;
+
+    if (
+      (part.type === "text" || part.type === "reasoning") &&
+      cachedPart.type === part.type &&
+      cachedPart.text.length > part.text.length
+    ) {
+      return { ...part, text: cachedPart.text };
+    }
+
+    return part;
   });
 
-  const parts: UIMessage["parts"] = [];
-  snapshotMessage.parts.forEach((snapshotPart, index) => {
-    const key = partMergeKey(snapshotPart);
-    // Keyless parts (live step-start markers carry no part id) pair
-    // positionally with a keyless cached part at the same index.
-    let candidate =
-      key !== null
-        ? cachedByKey.get(key)
-        : index < cachedParts.length && !cachedUsed[index] && partMergeKey(cachedParts[index]!) === null
-          ? index
-          : undefined;
-    // A keyed snapshot part with no keyed live match still pairs positionally
-    // with a same-shape cached part, so legacy live parts that carry no part
-    // id (e.g. older cached fixtures) merge instead of duplicating beside the
-    // snapshot's copy.
-    if (candidate === undefined && key !== null && index < cachedParts.length && !cachedUsed[index]) {
-      const positional = cachedParts[index]!;
-      if (positional.type === snapshotPart.type) candidate = index;
-    }
-    if (candidate !== undefined && !cachedUsed[candidate]) {
-      const cachedPart = cachedParts[candidate]!;
-      cachedUsed[candidate] = true;
-      if (
-        (snapshotPart.type === "text" || snapshotPart.type === "reasoning") &&
-        cachedPart.type === snapshotPart.type &&
-        cachedPart.text.length > snapshotPart.text.length
-      ) {
-        parts.push({ ...snapshotPart, text: cachedPart.text });
-        return;
-      }
-    }
-    parts.push(snapshotPart);
-  });
-
-  // Live-only parts (not present in the snapshot) keep their live state so
-  // nothing already rendered disappears mid-stream.
-  cachedParts.forEach((part, index) => {
-    if (!cachedUsed[index]) parts.push(part);
-  });
+  parts.push(...cachedMessage.parts.filter((part, index) => part.type === "dynamic-tool"
+    ? !snapshotToolIds.has(part.toolCallId)
+    : index >= snapshotMessage.parts.length));
 
   return parts;
 }
 
 function mergeSnapshotMessageWithCached(snapshotMessage: UIMessage, cachedMessage: UIMessage): UIMessage {
-  const metadata = snapshotMessage.metadata ?? cachedMessage.metadata;
+  const cachedMerges = mergedMessageCache.get(snapshotMessage);
+  const cachedMerge = cachedMerges?.get(cachedMessage);
+  if (cachedMerge) return cachedMerge;
 
-  return {
+  const metadata = snapshotMessage.metadata ?? cachedMessage.metadata;
+  const merged: UIMessage = {
     ...snapshotMessage,
     ...(metadata === undefined ? {} : { metadata }),
     parts: mergeMessageParts(snapshotMessage, cachedMessage),
   };
+  const result = messageSignature(merged) === messageSignature(cachedMessage)
+    ? cachedMessage
+    : merged;
+  if (cachedMerges) {
+    cachedMerges.set(cachedMessage, result);
+  } else {
+    mergedMessageCache.set(snapshotMessage, new WeakMap([[cachedMessage, result]]));
+  }
+  return result;
 }
 
 function messageCreated(message: UIMessage) {
@@ -138,6 +124,49 @@ function sortFullyTimestampedMessages(messages: UIMessage[]) {
     .map((item) => item.message);
 }
 
+function mergeMissingMessagesByChronology(messages: UIMessage[], missing: UIMessage[], sourceOrder: UIMessage[]) {
+  if (missing.length > 0) {
+    const byCreated = new Map<number, UIMessage>();
+    for (const message of [...messages, ...missing]) {
+      const created = messageCreated(message);
+      if (created === null || !Number.isFinite(created) || byCreated.has(created)) break;
+      byCreated.set(created, message);
+    }
+    // Unique finite timestamps make the final order independent of insertion order.
+    // Ties and missing/invalid timestamps must retain the source-neighbor insertion rules.
+    if (byCreated.size === messages.length + missing.length) {
+      return [...byCreated]
+        .sort(([a], [b]) => a - b)
+        .map(([, message]) => message);
+    }
+  }
+
+  for (const message of missing) insertMessageByChronology(messages, message, sourceOrder);
+  return sortFullyTimestampedMessages(messages);
+}
+
+export function upsertMessageByChronology(messages: UIMessage[], message: UIMessage) {
+  const sourceIndex = messages.findIndex((existing) => existing.id === message.id);
+  const result = messages.filter((existing) => existing.id !== message.id);
+  if (sourceIndex === -1) return mergeMissingMessagesByChronology(result, [message], messages);
+
+  let insertionIndex = sourceIndex;
+  const created = messageCreated(message);
+  if (created !== null) {
+    for (let index = 0; index < result.length; index += 1) {
+      const existingCreated = messageCreated(result[index]);
+      if (existingCreated === null) continue;
+      if (existingCreated < created) insertionIndex = Math.max(insertionIndex, index + 1);
+      if (existingCreated > created) {
+        insertionIndex = Math.min(insertionIndex, index);
+        break;
+      }
+    }
+  }
+  result.splice(insertionIndex, 0, message);
+  return result;
+}
+
 export function messageListContainsAll(container: UIMessage[], required: UIMessage[]) {
   if (required.length === 0) return true;
   const ids = new Set(container.map((message) => message.id));
@@ -159,13 +188,10 @@ export function mergeSnapshotAndLiveMessages(
     return liveMessage ? mergeSnapshotMessageWithCached(snapshotMessage, liveMessage) : snapshotMessage;
   });
 
-  if (options.appendLiveOnlyMessages) {
-    for (const liveMessage of liveMessages) {
-      if (!snapshotIds.has(liveMessage.id)) insertMessageByChronology(merged, liveMessage, liveMessages);
-    }
-  }
-
-  return sortFullyTimestampedMessages(merged);
+  const missing = options.appendLiveOnlyMessages
+    ? liveMessages.filter((message) => !snapshotIds.has(message.id))
+    : [];
+  return mergeMissingMessagesByChronology(merged, missing, liveMessages);
 }
 
 export function mergeSnapshotIntoCachedMessages(
@@ -199,11 +225,12 @@ export function mergeSnapshotIntoCachedMessages(
       : message;
   });
 
+  const missing: UIMessage[] = [];
   for (const message of cachedMessages) {
     if (seen.has(message.id)) continue;
     seen.add(message.id);
-    insertMessageByChronology(merged, message, cachedMessages);
+    missing.push(message);
   }
 
-  return sortFullyTimestampedMessages(merged);
+  return mergeMissingMessagesByChronology(merged, missing, cachedMessages);
 }

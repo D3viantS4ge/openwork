@@ -23,6 +23,7 @@
     "prepare": "tsup src/index.ts --format esm --dts --clean --external zod --target es2022"
   },
   "dependencies": {
+    "@opencode-ai/sdk": "^1.18.15",
     "zod": "^4.3.6"
   },
   "devDependencies": {

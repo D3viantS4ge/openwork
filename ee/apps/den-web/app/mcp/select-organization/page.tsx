@@ -2,7 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { TemporaryAuthNotice } from "../../(den)/_components/temporary-auth-notice";
+import { denApiCredentials, denBrowserEndpoint } from "../../(den)/_lib/den-api-origin";
+import { getRuntimeConfig } from "../../(den)/_lib/runtime-config";
 import { useOrgListWindow } from "../../(den)/_lib/use-org-list-window";
+import { McpConsentPermissions } from "../consent-permissions";
 
 type Organization = {
   id: string;
@@ -40,8 +44,10 @@ function getErrorMessage(payload: unknown, fallback: string) {
 }
 
 async function requestJson(path: string, init?: RequestInit) {
-  const response = await fetch(path, {
-    credentials: "include",
+  await getRuntimeConfig();
+  const endpoint = denBrowserEndpoint(path);
+  const response = await fetch(endpoint, {
+    credentials: denApiCredentials(endpoint),
     headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
     ...init,
   });
@@ -119,7 +125,7 @@ export default function McpSelectOrganizationPage() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const { response, payload } = await requestJson("/api/den/v1/me/orgs", {
+      const { response, payload } = await requestJson("/v1/me/orgs", {
         method: "GET",
       });
       if (cancelled) return;
@@ -226,7 +232,7 @@ export default function McpSelectOrganizationPage() {
           ? "Finishing authorization and sending you back to the MCP client now."
           : flowState === "submitting"
             ? "Authorizing the MCP client..."
-            : "The MCP client will only see data for the workspace you choose.";
+            : "Choose the workspace for this connection, then review the access you're authorizing below.";
 
   const primaryLabel =
     flowState === "submitting"
@@ -267,8 +273,8 @@ export default function McpSelectOrganizationPage() {
                   Pick the workspace this client can use.
                 </h1>
                 <p className="max-w-[34rem] text-[14px] leading-7 text-white/80">
-                  The MCP client only sees data and tools for the workspace you
-                  select here.
+                  This connection can only use the access you authorize for the
+                  workspace you select here.
                 </p>
               </div>
             </div>
@@ -284,6 +290,8 @@ export default function McpSelectOrganizationPage() {
               </h2>
               <p className="den-copy">{introCopy}</p>
             </div>
+
+            <TemporaryAuthNotice />
 
             {flowState === "loading" ? (
               <div className="h-2 overflow-hidden rounded-full bg-[var(--dls-hover)]">
@@ -317,7 +325,7 @@ export default function McpSelectOrganizationPage() {
                     value={orgQuery}
                     onChange={(event) => setOrgQuery(event.target.value)}
                     placeholder="Search organizations"
-                    className="rounded-2xl border border-[var(--dls-border)] px-4 py-3 text-[14px] text-[var(--dls-text-primary)] outline-none transition focus:border-[var(--dls-accent)]"
+                    className="rounded-2xl border border-[var(--dls-border)] px-4 py-3 text-[14px] text-[var(--dls-text-primary)] outline-hidden transition focus:border-[var(--dls-accent)]"
                   />
                 ) : null}
 
@@ -394,6 +402,10 @@ export default function McpSelectOrganizationPage() {
                   </div>
                 ) : null}
               </div>
+            ) : null}
+
+            {orgs.length > 0 && flowState !== "loading" && flowState !== "error" ? (
+              <McpConsentPermissions scope={requestedScope} />
             ) : null}
 
             {errorMessage ? (

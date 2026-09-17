@@ -1,15 +1,15 @@
 import { randomBytes } from "node:crypto"
 import { and, desc, eq, gt, isNull } from "@openwork-ee/den-db/drizzle"
-import { AuthSessionTable, AuthUserTable, DaytonaSandboxTable, DesktopHandoffGrantTable, WorkerTable } from "@openwork-ee/den-db/schema"
+import { AuthSessionTable, AuthUserTable, CloudRuntimeInstanceTable, DesktopHandoffGrantTable, WorkerTable } from "@openwork-ee/den-db/schema"
 import { normalizeDenTypeId } from "@openwork-ee/utils/typeid"
 import type { Hono } from "hono"
 import { describeRoute } from "hono-openapi"
 import { z } from "zod"
 import { memberFacingMcpConnectionsEnabled } from "../../capability-sources/external-mcp-rollout.js"
-import { authenticatedRoute, jsonValidator, publicRoute } from "../../middleware/index.js"
+import { jsonValidator, publicRoute, userSessionRoute } from "../../middleware/index.js"
 import { db } from "../../db.js"
 import { env, type DenOrgMode } from "../../env.js"
-import { resolveUserOrganizations } from "../../orgs.js"
+import { ensurePersonalOrganizationForUser, resolveUserOrganizations } from "../../orgs.js"
 import { denTypeIdSchema, invalidRequestSchema, jsonResponse, notFoundSchema, unauthorizedSchema } from "../../openapi.js"
 import type { AuthContextVariables } from "../../session.js"
 import { enforceRateLimit } from "../../utils/rate-limit.js"
@@ -17,7 +17,7 @@ import { CLOUD_INSTANCE_BACKEND } from "../../workers/cloud-constants.js"
 
 const createGrantSchema = z.object({
   next: z.string().trim().max(128).optional().describe("Optional continuation hint for handoff clients."),
-  desktopScheme: z.string().trim().max(32).optional().describe("Optional desktop URL scheme to use when building the OpenWork deep link."),
+  desktopScheme: z.literal("openwork").optional().describe("The registered OpenWork desktop URL scheme."),
   returnUrl: z.string().trim().max(2048).optional().describe("Optional HTTPS OpenWork Cloud web return URL. Accepted only for multi-organization Cloud instances after server-side origin validation."),
 }).meta({ ref: "DesktopHandoffGrantCreateBody" })
 
@@ -141,7 +141,7 @@ function withDenProxyPath(origin: string) {
 }
 
 function configuredDesktopDenBaseUrl() {
-  return env.desktopDenBaseUrl ?? withDenProxyPath(process.env.BETTER_AUTH_URL?.trim() || env.betterAuthUrl)
+  return env.desktopDenBaseUrl ?? withDenProxyPath(env.webUrl)
 }
 
 export function resolveDesktopDenBaseUrl(request: Request) {
@@ -186,15 +186,10 @@ export function resolveDesktopDenBaseUrl(request: Request) {
 }
 
 function buildOpenworkDeepLink(input: {
-  scheme?: string | null
   grant: string
   denBaseUrl: string
 }) {
-  const requestedScheme = input.scheme?.trim() || "openwork"
-  const scheme = /^[a-z][a-z0-9+.-]*$/i.test(requestedScheme)
-    ? requestedScheme
-    : "openwork"
-  const url = new URL(`${scheme}://den-auth`)
+  const url = new URL("openwork://den-auth")
   url.searchParams.set("grant", input.grant)
   url.searchParams.set("denBaseUrl", input.denBaseUrl)
   return url.toString()
@@ -348,9 +343,9 @@ export function approveWebHandoffReturnUrlForSignedPreviews(input: {
 
 async function getCloudSignedPreviewUrls(organizationId: WorkerOrgId) {
   const rows = await db
-    .select({ signedPreviewUrl: DaytonaSandboxTable.signed_preview_url })
+    .select({ signedPreviewUrl: CloudRuntimeInstanceTable.endpoint_url })
     .from(WorkerTable)
-    .innerJoin(DaytonaSandboxTable, eq(WorkerTable.id, DaytonaSandboxTable.worker_id))
+    .innerJoin(CloudRuntimeInstanceTable, eq(WorkerTable.id, CloudRuntimeInstanceTable.worker_id))
     .where(and(
       eq(WorkerTable.org_id, organizationId),
       eq(WorkerTable.destination, "cloud"),
@@ -401,6 +396,7 @@ export function registerDesktopAuthRoutes<T extends { Variables: AuthContextVari
     describeRoute({
       hide: true,
       tags: ["Authentication"],
+      security: [{ bearerAuth: [] }],
       summary: "Create desktop handoff grant",
       description: "Creates a short-lived handoff grant for a signed-in web user. Desktop clients receive an OpenWork deep link; approved Cloud web clients also receive a validated return URL.",
       responses: {
@@ -409,7 +405,7 @@ export function registerDesktopAuthRoutes<T extends { Variables: AuthContextVari
         401: jsonResponse("The caller must be signed in to create a desktop handoff grant.", unauthorizedSchema),
       },
     }),
-    authenticatedRoute(),
+    userSessionRoute(),
     jsonValidator(createGrantSchema),
     async (c) => {
     const user = c.get("user")
@@ -449,7 +445,6 @@ export function registerDesktopAuthRoutes<T extends { Variables: AuthContextVari
       grant,
       expiresAt: expiresAt.toISOString(),
       openworkUrl: buildOpenworkDeepLink({
-        scheme: input.desktopScheme || "openwork",
         grant,
         denBaseUrl,
       }),
@@ -463,6 +458,7 @@ export function registerDesktopAuthRoutes<T extends { Variables: AuthContextVari
     describeRoute({
       hide: true,
       tags: ["Authentication"],
+      security: [],
       summary: "Check desktop handoff grant status",
       description: "Returns whether a short-lived desktop handoff grant is still pending, has been consumed, or is no longer valid. It never returns session tokens or user details.",
       responses: {
@@ -504,6 +500,7 @@ export function registerDesktopAuthRoutes<T extends { Variables: AuthContextVari
     describeRoute({
       hide: true,
       tags: ["Authentication"],
+      security: [],
       summary: "Exchange desktop handoff grant",
       description: "Exchanges a one-time desktop handoff grant for the user's session token and basic profile so the desktop app can sign the user in.",
       responses: {
@@ -594,10 +591,20 @@ export function registerDesktopAuthRoutes<T extends { Variables: AuthContextVari
     let organization: { id: string; slug: string; name: string } | null = null
     let organizationMetadata: string | null = null
     try {
-      const resolved = await resolveUserOrganizations({
-        userId: normalizeDenTypeId("user", exchange.user.id),
+      const userId = normalizeDenTypeId("user", exchange.user.id)
+      let resolved = await resolveUserOrganizations({
+        userId,
         activeOrganizationId: exchange.activeOrganizationId,
       })
+      // Bootstrap only an authenticated desktop handoff, not browser onboarding
+      // or membership in a managed single-org deployment.
+      if (env.orgMode === "multi_org" && resolved.orgs.length === 0) {
+        const organizationId = await ensurePersonalOrganizationForUser(userId)
+        resolved = await resolveUserOrganizations({
+          userId,
+          activeOrganizationId: organizationId,
+        })
+      }
       const activeOrg = resolved.orgs.find((org) => org.id === resolved.activeOrgId) ?? null
       organization = activeOrg ? { id: activeOrg.id, slug: activeOrg.slug, name: activeOrg.name } : null
       organizationMetadata = activeOrg?.metadata ?? null

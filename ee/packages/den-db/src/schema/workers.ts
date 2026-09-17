@@ -18,6 +18,10 @@ export const WorkerTable = mysqlTable(
     image_version: varchar("image_version", { length: 128 }),
     workspace_path: varchar("workspace_path", { length: 1024 }),
     sandbox_backend: varchar("sandbox_backend", { length: 64 }),
+    cloud_failure_code: varchar("cloud_failure_code", { length: 64 }),
+    cloud_failure_stage: varchar("cloud_failure_stage", { length: 32 }),
+    cloud_failure_reference: varchar("cloud_failure_reference", { length: 64 }),
+    cloud_failure_at: timestamp("cloud_failure_at", { fsp: 3 }),
     last_heartbeat_at: timestamp("last_heartbeat_at", { fsp: 3 }),
     last_active_at: timestamp("last_active_at", { fsp: 3 }),
     ...timestamps,
@@ -62,6 +66,32 @@ export const DaytonaSandboxTable = mysqlTable(
   (table) => [
     uniqueIndex("daytona_sandbox_worker_id").on(table.worker_id),
     uniqueIndex("daytona_sandbox_sandbox_id").on(table.sandbox_id),
+  ],
+)
+
+/**
+ * Provider-neutral record of the host instance behind a Cloud worker. The
+ * provider reference is opaque JSON owned by the provider that created it.
+ * `daytona_sandbox` stays dual-written until every deployment reads from here.
+ */
+export const CloudRuntimeInstanceTable = mysqlTable(
+  "cloud_runtime_instance",
+  {
+    id: denTypeIdColumn("cloudRuntimeInstance", "id").notNull().primaryKey(),
+    worker_id: denTypeIdColumn("worker", "worker_id").notNull(),
+    provider_id: varchar("provider_id", { length: 64 }).notNull(),
+    provider_ref: json("provider_ref").$type<Record<string, string>>().notNull(),
+    workspace_volume_id: varchar("workspace_volume_id", { length: 128 }).notNull(),
+    data_volume_id: varchar("data_volume_id", { length: 128 }).notNull(),
+    endpoint_url: varchar("endpoint_url", { length: 2048 }).notNull(),
+    endpoint_expires_at: timestamp("endpoint_expires_at", { fsp: 3 }).notNull(),
+    endpoint_kind: varchar("endpoint_kind", { length: 32 }).notNull(),
+    region: varchar("region", { length: 64 }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("cloud_runtime_instance_worker_id").on(table.worker_id),
+    index("cloud_runtime_instance_provider").on(table.provider_id),
   ],
 )
 

@@ -484,6 +484,25 @@ test("authenticated /mcp/agent malformed JSON-RPC is rejected before transport",
   })
 })
 
+test("authenticated standalone GET /mcp/agent returns 405 after token verification", async () => {
+  jwtPayload = validMcpJwtPayload({ resource: "http://127.0.0.1:8790/mcp/agent" })
+  selectActiveSessionAndMembership()
+  const app = buildMcpRouteApp("req_agent_standalone_get")
+  registerAgentMcpRoutes(app)
+
+  const response = await app.request("http://127.0.0.1:8790/mcp/agent", {
+    method: "GET",
+    headers: {
+      accept: "text/event-stream",
+      authorization: "Bearer header.payload.signature",
+    },
+  })
+
+  expect(response.status).toBe(405)
+  expect(response.headers.get("allow")).toBe("POST")
+  expect(await response.text()).toBe("")
+})
+
 test("authenticated /mcp/admin malformed JSON-RPC is rejected for admins before transport", async () => {
   platformAdmin = true
   try {

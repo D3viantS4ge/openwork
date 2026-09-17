@@ -98,9 +98,11 @@ export type ComposerPart =
   | { type: "text"; text: string }
   | { type: "agent"; name: string }
   | { type: "skill"; name: string }
+  | { type: "connect-skill"; slug: string; name: string; marketplace: string; capability: string }
   | { type: "file"; path: string; label?: string }
   /** A macOS app targeted via Computer Use (composer "@App" mention). */
   | { type: "app"; name: string }
+  | { type: "computer"; target: "cloud" | "desktop" }
   | { type: "paste"; id: string; label: string; text: string; lines: number };
 
 export type ComposerAttachment = {
@@ -121,6 +123,8 @@ export type SlashCommandOption = {
 };
 
 export type ComposerDraft = {
+  /** Client identity for reconciling the pending user turn with server events. */
+  messageId?: string;
   mode: PromptMode;
   parts: ComposerPart[];
   attachments: ComposerAttachment[];
@@ -182,6 +186,7 @@ export type OnboardingStep = "welcome" | "local" | "server" | "connecting";
 export const SETTINGS_TAB_VALUES = [
   "general",
   "ai",
+  "ollama",
   "preferences",
   "permissions",
   "cloud-account",
@@ -189,7 +194,6 @@ export const SETTINGS_TAB_VALUES = [
   "cloud-marketplaces",
   "cloud-providers",
   "skills",
-  "memory",
   "extensions",
   "environment",
   "advanced",
@@ -391,6 +395,8 @@ export type PendingPermission = Omit<ApiPermissionRequest, "always"> & {
   receivedAt: number;
   protocol: "legacy" | "v2";
   v2?: Pick<PermissionV2Request, "action" | "resources" | "save">;
+  /** Development-only deterministic UI proof request; never comes from OpenCode. */
+  evaluation?: true;
 };
 
 export type PendingQuestion = QuestionRequest & {

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Menu, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { OpenWorkMark } from "./openwork-mark";
+import { DownloadLink } from "./download-link";
 
 type ActivePage =
   | "home"
@@ -12,13 +13,13 @@ type ActivePage =
   | "enterprise"
   | "connect"
   | "cloud"
+  | "dashboard"
   | "docs"
   | "roadmap";
 
 type Props = {
   stars: string;
   callUrl?: string;
-  downloadHref?: string;
   mobilePrimaryHref?: string;
   mobilePrimaryLabel?: string;
   active?: ActivePage;
@@ -47,8 +48,6 @@ export function SiteNav(props: Props) {
   const mobilePrimaryLabel = props.mobilePrimaryLabel || "Get Started for free";
   const callExternal = /^https?:\/\//.test(callHref);
   const mobilePrimaryExternal = /^https?:\/\//.test(mobilePrimaryHref);
-  const downloadHref = props.downloadHref || "/download";
-  const downloadExternal = /^https?:\/\//.test(downloadHref);
   const navItems: NavItem[] = [
     { href: "/#product", label: "Product", key: "home" },
     { href: "/connect", label: "Connect", key: "connect" },
@@ -69,19 +68,17 @@ export function SiteNav(props: Props) {
   return (
     <header className={`sticky top-0 z-20 w-full transition-all duration-300 ${scrolled ? "bg-white/80 shadow-sm backdrop-blur-md" : ""}`}>
       <div className="mx-auto flex w-full max-w-[1176px] flex-col px-6">
-        <div className="grid grid-cols-[auto_1fr_auto] items-center py-4">
+        <div className="grid min-h-[97px] grid-cols-[auto_1fr_auto] items-center py-4">
           <Link
             href="/"
-            className="group inline-flex items-center gap-1.5"
+            aria-label="OpenWork"
+            className="group inline-flex items-center"
             onClick={() => setMobileOpen(false)}
           >
             <OpenWorkMark className="h-[30px] w-[38px] transition-opacity group-hover:opacity-80" />
-            <span className="text-[1.2rem] font-semibold tracking-tight text-[#011627] md:text-[1.3rem]">
-              OpenWork
-            </span>
           </Link>
 
-          <nav className="hidden items-center justify-center gap-7 text-[14px] font-normal lg:flex">
+          <nav className="hidden items-center justify-start gap-7 pl-10 text-[14px] font-normal lg:flex">
             {navItems.map(item => (
               <Link
                 key={item.key}
@@ -112,14 +109,11 @@ export function SiteNav(props: Props) {
               </svg>
               {props.stars}
             </a>
-            <a
-              href={downloadHref}
-              target={downloadExternal ? "_blank" : undefined}
-              rel={downloadExternal ? "noreferrer" : undefined}
+            <DownloadLink
               className="lp-pill-primary lp-pill-sm !hidden lg:!inline-flex"
             >
               Download
-            </a>
+            </DownloadLink>
             <button
               type="button"
               className="rounded-full p-2 text-[#011627] transition-colors hover:bg-white/70 lg:hidden"

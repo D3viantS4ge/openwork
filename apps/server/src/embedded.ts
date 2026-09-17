@@ -6,6 +6,7 @@
  * of owning the process lifecycle.
  */
 import { randomUUID } from "node:crypto";
+import { stopTaskRecovery } from "./task-recovery.js";
 import { mkdir } from "node:fs/promises";
 import { resolveServerConfig, type CliArgs } from "./config.js";
 import {
@@ -34,7 +35,8 @@ import {
 import { ensureLocalWorkspaceFiles } from "./workspace-init.js";
 import { findManagedEngineWorkspace } from "./workspaces.js";
 import { keepOpenworkRuntimeConfigFileFresh, writeOpenworkRuntimeConfigFile } from "./openwork-runtime-config.js";
-import { sweepLegacyOpenCodeConfig } from "./legacy-config-sweep.js";
+import { migrateOpenworkCloudMcpRuntimeConfig } from "./cloud-mcp-health.js";
+import { migrateWorkspaceRuntimeConfigToEngineGlobal } from "./runtime-opencode-config-store.js";
 import { resolveOpencodeModelsUrl } from "./opencode-models-url.js";
 import type { ServeResult } from "./serve-node.js";
 import type { LocalManagedMcpVaultKeyProvider, ServerConfig } from "./types.js";
@@ -48,6 +50,7 @@ export type EmbeddedServerOptions = CliArgs & {
   opencodeCwd?: string;
   /** Secure key custody for the local managed MCP credential vault. */
   localManagedMcpVaultKey?: LocalManagedMcpVaultKeyProvider;
+  resumeInterruptedTasks?: boolean;
 };
 
 export type EmbeddedServerHandle = {
@@ -70,6 +73,7 @@ export type EmbeddedServerHandle = {
 export async function startEmbeddedServer(options: EmbeddedServerOptions): Promise<EmbeddedServerHandle> {
   const config = await resolveServerConfig(options);
   config.localManagedMcpVaultKey = options.localManagedMcpVaultKey;
+  config.resumeInterruptedTasks = options.resumeInterruptedTasks === true && options.manageOpencode === true && !config.opencodeBaseUrl;
   const logger = createServerLogger(config);
 
   // Spawn managed OpenCode if requested and no explicit base URL was provided.
@@ -84,6 +88,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
 
   const releaseResources = async (): Promise<void> => {
     const errors: unknown[] = [];
+    try { await stopTaskRecovery(config); } catch (error) { errors.push(error); }
 
     const identity = managedOpencodeIdentity;
     managedOpencodeIdentity = null;
@@ -173,6 +178,8 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
 
   if (!config.readOnly) {
     await ensureLocalWorkspaceFiles(config.workspaces);
+    await migrateOpenworkCloudMcpRuntimeConfig(config);
+    await migrateWorkspaceRuntimeConfigToEngineGlobal(config);
   }
 
   // Bind the HTTP server before spawning the engine: serve-node may fall back
@@ -194,13 +201,12 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       // Server-managed config file: the engine re-reads it from disk on every
       // instance rebuild, and keepOpenworkRuntimeConfigFileFresh synchronizes it
       // on every runtime-DB write — so disposes always pick up current state.
-      const { path: runtimeConfigPath } = await writeOpenworkRuntimeConfigFile(config, workspace.id);
-      stopRuntimeConfigFileRefresh = keepOpenworkRuntimeConfigFileFresh(config, workspace.id);
+      const { path: runtimeConfigPath } = await writeOpenworkRuntimeConfigFile(config);
+      stopRuntimeConfigFileRefresh = keepOpenworkRuntimeConfigFileFresh(config);
       const cwd = options.opencodeCwd
         || process.env.OPENWORK_MANAGED_OPENCODE_CWD?.trim()
         || workspace.path;
       await duringStartup(() => mkdir(cwd, { recursive: true }));
-      await sweepLegacyOpenCodeConfig(config).catch(() => undefined);
       const opencodeModelsUrl = await duringStartup(() => resolveOpencodeModelsUrl());
 
       const opencodeBin = options.opencodeBin || process.env.OPENWORK_OPENCODE_BIN;

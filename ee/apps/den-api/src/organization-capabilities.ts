@@ -11,7 +11,7 @@ import { z } from "zod"
  * Storage rides the existing organization metadata JSON column — the same
  * home as `limits`, `plan`, and `requireSso` — so no schema change is needed.
  */
-export const ORGANIZATION_CAPABILITY_KEYS = ["installLinks", "mcpConnections", "workflows", "remoteMcpApps", "cloud"] as const
+export const ORGANIZATION_CAPABILITY_KEYS = ["installLinks", "mcpConnections", "modelsAnalytics", "gatewayDashboard"] as const
 
 export const organizationCapabilityKeySchema = z.enum(ORGANIZATION_CAPABILITY_KEYS)
 
@@ -50,9 +50,8 @@ export function normalizeOrganizationCapabilities(metadata: MetadataInput): Orga
   return {
     installLinks: raw.installLinks === true,
     mcpConnections: raw.mcpConnections === true,
-    workflows: (Object.hasOwn(raw, "workflows") ? raw.workflows : raw.codemodeScripts) === true,
-    remoteMcpApps: raw.remoteMcpApps === true,
-    cloud: raw.cloud === true,
+    modelsAnalytics: raw.modelsAnalytics === true,
+    gatewayDashboard: raw.gatewayDashboard === true,
   }
 }
 
@@ -68,19 +67,9 @@ export function readOrganizationCapabilityOverrides(metadata: MetadataInput): Pa
   if (typeof raw.mcpConnections === "boolean") {
     capabilities.mcpConnections = raw.mcpConnections
   }
-  if (Object.hasOwn(raw, "workflows")) {
-    if (typeof raw.workflows === "boolean") {
-      capabilities.workflows = raw.workflows
-    }
-  } else if (typeof raw.codemodeScripts === "boolean") {
-    capabilities.workflows = raw.codemodeScripts
-  }
-  if (typeof raw.remoteMcpApps === "boolean") {
-    capabilities.remoteMcpApps = raw.remoteMcpApps
-  }
-  if (typeof raw.cloud === "boolean") {
-    capabilities.cloud = raw.cloud
-  }
+
+  if (typeof raw.modelsAnalytics === "boolean") capabilities.modelsAnalytics = raw.modelsAnalytics
+  if (typeof raw.gatewayDashboard === "boolean") capabilities.gatewayDashboard = raw.gatewayDashboard
 
   return capabilities
 }
