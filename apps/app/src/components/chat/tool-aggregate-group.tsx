@@ -34,7 +34,7 @@ function ShellMetadataOutput({ output }: { output: string }) {
         </div>
       ) : null}
       {parsed.body ? (
-        <pre className="max-h-40 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] opacity-70">
+        <pre className="max-h-80 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] opacity-70">
           {parsed.body}
         </pre>
       ) : null}
@@ -179,11 +179,11 @@ export function ToolAggregateGroup({ parts, className }: ToolAggregateGroupProps
                 {isEditToolPart(part) || isApplyPatchToolPart(part) ? (
                   (() => {
                     const diff = getToolInputDiff(part.input, part.metadata)
-                    return diff ? <DiffView key="diff" diff={diff} className="mt-1 max-h-40 overflow-auto rounded-md font-mono leading-relaxed" /> : null
+                    return diff ? <DiffView key="diff" diff={diff} className="mt-1 max-h-80 overflow-auto rounded-md font-mono leading-relaxed" /> : null
                   })()
                 ) : null}
                 {isWriteToolPart(part) ? (
-                  <pre className="mt-0.5 max-h-40 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] opacity-70">
+                  <pre className="mt-0.5 max-h-80 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] opacity-70">
                     {part.input.content}
                   </pre>
                 ) : null}
