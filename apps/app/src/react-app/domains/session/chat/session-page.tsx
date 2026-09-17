@@ -541,11 +541,15 @@ export function SessionPage(props: SessionPageProps) {
     setCurrentSidePanel("panel");
   }, [setCurrentSidePanel]);
   const openBrowserRailPane = useCallback(() => {
-    if (!hasBrowserTabs) return;
     // Opening the browser pane should land on a usable page, not an empty
-    // panel that forces the user to click "+".
+    // panel that forces the user to click "+". If no browser tab exists yet,
+    // create one (defaults to the new-tab URL in the main process).
+    const opening = !panelRailActive;
+    if (opening && isElectronRuntime() && !hasBrowserTabs) {
+      void window.__OPENWORK_ELECTRON__?.browser?.createTab?.();
+    }
     toggleCurrentSidePanel("panel");
-  }, [hasBrowserTabs, toggleCurrentSidePanel]);
+  }, [hasBrowserTabs, panelRailActive, toggleCurrentSidePanel]);
   const openBrowserUrlControlAction = useMemo<OpenworkControlAction>(() => ({
     id: "browser.open_url",
     label: "Open URL in built-in browser",
@@ -1557,14 +1561,13 @@ export function SessionPage(props: SessionPageProps) {
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
-                  "rounded-xl transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
-                  panelRailActive && hasBrowserTabs && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
+                  "rounded-xl transition-colors hover:bg-muted hover:text-foreground",
+                  panelRailActive && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
                 )}
                 onClick={openBrowserRailPane}
-                title={hasBrowserTabs ? "Browser" : "Browser opens when a page is available"}
-                aria-label={hasBrowserTabs ? "Browser" : "Browser opens when a page is available"}
-                aria-pressed={panelRailActive && hasBrowserTabs}
-                disabled={!hasBrowserTabs}
+                title="Browser"
+                aria-label="Browser"
+                aria-pressed={panelRailActive}
               >
                 <Globe size={15} />
               </Button>
