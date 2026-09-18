@@ -3166,17 +3166,24 @@ export function SessionRoute() {
     searchText: "developer dev mode debug diagnostics toggle enable disable",
     action: () => {
       setCommandPaletteOpen(false);
-      setDeveloperMode((current) => {
-        const next = !current;
-        try { window.localStorage.setItem("openwork.developerMode", next ? "1" : "0"); } catch {}
-        if (client) {
-          client.setDebugProviderEnabled(next).catch((error) => {
+      const next = !developerMode;
+      try { window.localStorage.setItem("openwork.developerMode", next ? "1" : "0"); } catch {}
+      setDeveloperMode(next);
+      if (client) {
+        client.setDebugProviderEnabled(next)
+          .then(() => {
+            // Refresh only after the server has written the runtime config,
+            // then re-check once more once the engine has applied its (async)
+            // reload so a freshly enabled debug/echo provider appears.
+            void refreshProviderListQueries(getReactQueryClient());
+            window.setTimeout(() => {
+              void refreshProviderListQueries(getReactQueryClient());
+            }, 1500);
+          })
+          .catch((error) => {
             console.warn("[debug-provider] Failed to toggle debug provider:", error);
           });
-        }
-        void refreshProviderListQueries(getReactQueryClient());
-        return next;
-      });
+      }
     },
   }), [developerMode]);
 

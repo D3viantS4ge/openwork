@@ -548,18 +548,24 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     return window.localStorage.getItem("openwork.developerMode") === "1";
   });
   const toggleDeveloperMode = useCallback(() => {
-    setDeveloperMode((current) => {
-      const next = !current;
-      try { window.localStorage.setItem("openwork.developerMode", next ? "1" : "0"); } catch {}
-      if (openworkClient) {
-        openworkClient.setDebugProviderEnabled(next).catch((error) => {
-          console.warn("[debug-provider] Failed to toggle debug provider:", error);
-        });
-      }
-      void refreshProviderListQueries(getReactQueryClient());
-      return next;
-    });
-  }, [openworkClient]);
+    const next = !developerMode;
+    try { window.localStorage.setItem("openwork.developerMode", next ? "1" : "0"); } catch {}
+    setDeveloperMode(next);
+    if (!openworkClient) return;
+    openworkClient.setDebugProviderEnabled(next)
+      .then(() => {
+        // Refresh only after the server has written the runtime config, then
+        // re-check once more once the engine has applied its (async) reload so
+        // a freshly enabled debug/echo provider appears in the model picker.
+        void refreshProviderListQueries(getReactQueryClient());
+        window.setTimeout(() => {
+          void refreshProviderListQueries(getReactQueryClient());
+        }, 1500);
+      })
+      .catch((error) => {
+        console.warn("[debug-provider] Failed to toggle debug provider:", error);
+      });
+  }, [developerMode, openworkClient]);
   const [themeMode, setThemeModeState] = useState<ThemeMode>(getInitialThemeMode);
   const [hideTitlebar, setHideTitlebar] = useState(() => readStoredBoolean(SETTINGS_HIDE_TITLEBAR_KEY, false));
   const [configActionStatus, setConfigActionStatus] = useState<string | null>(null);
