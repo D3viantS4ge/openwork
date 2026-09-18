@@ -22,9 +22,11 @@ import {
 } from "./openwork-extensions-preview-steering.js";
 import {
   buildOpenworkProviderContributions,
+  sessionArchiveArgsSchema,
   sessionCreateArgsSchema,
   sessionModelArgSchema,
   sessionReadArgsSchema,
+  sessionRenameArgsSchema,
   sessionSearchArgsSchema,
   sessionSendArgsSchema,
   sessionTimestampMs,
@@ -80,18 +82,6 @@ const connectSkillsEnvelopeSchema = z.object({
   skills: z.array(connectSkillDescriptorSchema),
 }).passthrough();
 
-const sessionRenameArgsSchema = z.object({
-  sessionId: z.string().trim().min(1).optional().describe("OpenWork/OpenCode session ID returned by session.search. Defaults to the current session when omitted."),
-  title: z.string().trim().min(1).max(120).describe("New session title."),
-  workspaceId: z.string().trim().optional().describe("Optional OpenWork workspace id/name. Omit to resolve the session across all workspaces."),
-});
-
-const sessionArchiveArgsSchema = z.object({
-  sessionId: z.string().trim().min(1).optional().describe("OpenWork/OpenCode session ID returned by session.search. Defaults to the current session when omitted."),
-  archived: z.boolean().describe("true to archive, false to unarchive."),
-  workspaceId: z.string().trim().optional().describe("Optional OpenWork workspace id/name. Omit to resolve the session across all workspaces."),
-});
-
 const workspaceSchema = z.object({
   id: z.string(),
   name: z.string().optional(),
@@ -125,10 +115,6 @@ const sessionInfoSchema = z.object({
   parentID: z.string().nullish(),
   time: sessionTimeSchema.optional(),
   model: engineSessionModelSchema.nullish(),
-}).passthrough();
-
-const sessionEnvelopeSchema = z.object({
-  item: sessionInfoSchema,
 }).passthrough();
 
 const sessionPartSchema = z.object({
@@ -1251,15 +1237,15 @@ async function renameOpenWorkSession(rawArgs: unknown, context: OpenCodeContext)
     return { ok: false, error: "sessionId is required when there is no current session context" };
   }
   const workspace = await resolveSessionWorkspace(sessionId, args.workspaceId);
-  const payload = sessionEnvelopeSchema.parse(await patchJson(
-    `/workspace/${encodeURIComponent(workspace.id)}/sessions/${encodeURIComponent(sessionId)}`,
+  const session = sessionInfoSchema.parse(await patchJson(
+    `/workspace/${encodeURIComponent(workspace.id)}/opencode/session/${encodeURIComponent(sessionId)}`,
     { title: args.title },
   ));
   return {
     ok: true,
-    sessionId: payload.item.id,
+    sessionId: session.id,
     workspaceId: workspace.id,
-    title: payload.item.title?.trim() || args.title,
+    title: sessionTitle(session),
   };
 }
 
@@ -1270,13 +1256,13 @@ async function archiveOpenWorkSession(rawArgs: unknown, context: OpenCodeContext
     return { ok: false, error: "sessionId is required when there is no current session context" };
   }
   const workspace = await resolveSessionWorkspace(sessionId, args.workspaceId);
-  const payload = sessionEnvelopeSchema.parse(await patchJson(
-    `/workspace/${encodeURIComponent(workspace.id)}/sessions/${encodeURIComponent(sessionId)}`,
-    { archived: args.archived },
+  const session = sessionInfoSchema.parse(await patchJson(
+    `/workspace/${encodeURIComponent(workspace.id)}/opencode/session/${encodeURIComponent(sessionId)}`,
+    { time: { archived: args.archived ? Date.now() : 0 } },
   ));
   return {
     ok: true,
-    sessionId: payload.item.id,
+    sessionId: session.id,
     workspaceId: workspace.id,
     archived: args.archived,
   };

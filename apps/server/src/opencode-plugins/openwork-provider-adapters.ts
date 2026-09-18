@@ -63,12 +63,26 @@ export const sessionSendArgsSchema = z.object({
   reveal: z.boolean().optional().describe("true to also open that session in the person's focused pane after sending. Defaults to false: nothing on screen changes."),
 });
 
+export const sessionRenameArgsSchema = z.object({
+  sessionId: z.string().trim().min(1).optional().describe("OpenWork/OpenCode session ID returned by session.search. Defaults to the current session when omitted."),
+  title: z.string().trim().min(1).max(120).describe("New session title."),
+  workspaceId: z.string().trim().optional().describe("Optional OpenWork workspace id/name. Omit to resolve the session across all workspaces."),
+});
+
+export const sessionArchiveArgsSchema = z.object({
+  sessionId: z.string().trim().min(1).optional().describe("OpenWork/OpenCode session ID returned by session.search. Defaults to the current session when omitted."),
+  archived: z.boolean().describe("true to archive, false to unarchive."),
+  workspaceId: z.string().trim().optional().describe("Optional OpenWork workspace id/name. Omit to resolve the session across all workspaces."),
+});
+
 /** Argument schemas by affordance id; sessionContribution must advertise exactly these keys. */
 export const sessionAffordanceArgsSchemas = {
   "session.search": sessionSearchArgsSchema,
   "session.read": sessionReadArgsSchema,
   "session.create": sessionCreateArgsSchema,
   "session.send": sessionSendArgsSchema,
+  "session.rename": sessionRenameArgsSchema,
+  "session.archive": sessionArchiveArgsSchema,
 };
 
 export type ConnectSkillDescriptor = {
@@ -209,7 +223,7 @@ function sessionContribution(): OpenworkFeatureContribution {
         provider,
         arguments: [
           argument("sessionId", "string", false, "Session id returned by session.search. Defaults to the current session when omitted."),
-          argument("title", "string", true, "New session title."),
+          argument("title", "string", true, "New session title (≤120 chars, longer is clipped)."),
           argument("workspaceId", "string", false, "Optional workspace id or name."),
         ],
         effects: writeEffects,

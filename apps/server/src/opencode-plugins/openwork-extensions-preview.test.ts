@@ -235,24 +235,20 @@ function startFakeOpenWorkServer(options: {
         return Response.json([sessionArchive]);
       }
 
-      if (url.pathname === "/workspace/ws_1/sessions/ses_alpha" && request.method === "PATCH") {
+      if (url.pathname === "/workspace/ws_1/opencode/session/ses_alpha" && request.method === "PATCH") {
         const body = z.object({ title: z.string().optional() }).parse(record.body);
         return Response.json({
-          item: {
-            id: "ses_alpha",
-            title: body.title ?? sessionAlpha.title,
-            time: { created: 100, updated: 400 },
-          },
+          id: "ses_alpha",
+          title: body.title ?? sessionAlpha.title,
+          time: { created: 100, updated: 400 },
         });
       }
-      if (url.pathname === "/workspace/ws_2/sessions/ses_archive" && request.method === "PATCH") {
-        const body = z.object({ archived: z.boolean().optional() }).parse(record.body);
+      if (url.pathname === "/workspace/ws_2/opencode/session/ses_archive" && request.method === "PATCH") {
+        const body = z.object({ time: z.object({ archived: z.number() }).optional() }).parse(record.body);
         return Response.json({
-          item: {
-            id: "ses_archive",
-            title: sessionArchive.title,
-            time: { created: 10, updated: 100, ...(body.archived !== undefined ? { archived: body.archived ? 400 : 0 } : {}) },
-          },
+          id: "ses_archive",
+          title: sessionArchive.title,
+          time: { created: 10, updated: 100, ...(body.time?.archived !== undefined ? { archived: body.time.archived } : {}) },
         });
       }
 
@@ -1462,7 +1458,7 @@ describe("OpenWorkExtensionsPreview session tools", () => {
       workspaceId: "ws_1",
       title: "Renamed alpha",
     });
-    const patchRequest = fake.requests.find((request) => request.pathname === "/workspace/ws_1/sessions/ses_alpha" && request.method === "PATCH");
+    const patchRequest = fake.requests.find((request) => request.pathname === "/workspace/ws_1/opencode/session/ses_alpha" && request.method === "PATCH");
     expect(patchRequest?.body).toEqual({ title: "Renamed alpha" });
     expect(patchRequest?.authorization).toBe("Bearer test-token");
   });
@@ -1501,10 +1497,10 @@ describe("OpenWorkExtensionsPreview session tools", () => {
 
     expect(unarchived.result.archived).toBe(false);
 
-    const patchRequests = fake.requests.filter((request) => request.pathname === "/workspace/ws_2/sessions/ses_archive" && request.method === "PATCH");
+    const patchRequests = fake.requests.filter((request) => request.pathname === "/workspace/ws_2/opencode/session/ses_archive" && request.method === "PATCH");
     expect(patchRequests.map((request) => request.body)).toEqual([
-      { archived: true },
-      { archived: false },
+      { time: { archived: expect.any(Number) } },
+      { time: { archived: 0 } },
     ]);
   });
 
@@ -1524,7 +1520,7 @@ describe("OpenWorkExtensionsPreview session tools", () => {
     }).passthrough()).parse(JSON.parse(output));
 
     expect(parsed.result).toMatchObject({ sessionId: "ses_alpha", workspaceId: "ws_1", title: "Renamed via context" });
-    const patchRequest = fake.requests.find((request) => request.pathname === "/workspace/ws_1/sessions/ses_alpha" && request.method === "PATCH");
+    const patchRequest = fake.requests.find((request) => request.pathname === "/workspace/ws_1/opencode/session/ses_alpha" && request.method === "PATCH");
     expect(patchRequest?.body).toEqual({ title: "Renamed via context" });
   });
 
