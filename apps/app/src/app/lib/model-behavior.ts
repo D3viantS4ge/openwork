@@ -162,7 +162,10 @@ export const getModelBehaviorOptions = (
 ): ModelBehaviorOption[] => {
   const variantKeys = sortVariantKeys(getVariantKeys(model));
   const hasFast = variantKeys.includes(FAST_DEFAULT_VARIANT);
-  return [defaultBehaviorOption(), ...variantKeys.map((key) => {
+  const keys = variantKeys.length > 0 && !variantKeys.includes("none")
+    ? ["none", ...variantKeys]
+    : variantKeys;
+  return [defaultBehaviorOption(), ...keys.map((key) => {
     const baseKey = hasFast ? [null, ...variantKeys.filter((entry) => !entry.startsWith(FAST_VARIANT_PREFIX))]
       .find((entry) => fastVariantId(entry) === key) : undefined;
     if (baseKey !== undefined) {

@@ -94,12 +94,12 @@ describe("model behavior options", () => {
     expect(stale.toggleValue).toBeUndefined();
     expect(getModelBehaviorSummary("lpr_synthetic", native, "retired-custom").value).toBe("retired-custom");
     const legacy = getModelBehaviorOptions("lpr_synthetic", { ...model, variants: { high: {}, [CATALOG_FAST_VARIANT]: { disabled: true } } });
-    expect(legacy.map((entry) => entry.value)).toEqual([null, "high"]);
+    expect(legacy.map((entry) => entry.value)).toEqual([null, "none", "high"]);
     expect(getModelBehaviorControls(legacy, "high").hasFast).toBe(false);
   });
   test("preserves opaque variant IDs through selection and saved-value normalization", () => {
     const custom = { ...model, variants: { CustomExact: {}, default: {}, high: {} } };
-    expect(getModelBehaviorOptions("openai", custom).map((option) => option.value)).toEqual([null, "high", "CustomExact", "default"]);
+    expect(getModelBehaviorOptions("openai", custom).map((option) => option.value)).toEqual([null, "none", "high", "CustomExact", "default"]);
     for (const value of ["CustomExact", "default"]) {
       const restored = normalizeModelBehaviorValue(value);
       expect(restored).toBe(value);
@@ -157,7 +157,7 @@ describe("model behavior options", () => {
       expect(summary.options.filter((option) => option.value === value)).toHaveLength(1);
     }
     const single = getModelBehaviorOptions("openwork", { ...model, variants: { high: {} } });
-    expect(nextModelBehaviorValue(single, null)).toBe("high");
+    expect(nextModelBehaviorValue(single, null)).toBe("none");
     expect(nextModelBehaviorValue(single, "high")).toBeNull();
   });
 
@@ -183,10 +183,10 @@ describe("model behavior options", () => {
       expect(sanitizeModelBehaviorValue(provider, target, null)).toBeNull();
       expect(sanitizeModelBehaviorValue(provider, target, "low")).toBe("low");
       expect(sanitizeModelBehaviorValue(provider, target, "CustomEffort")).toBe("CustomEffort");
-      expect(getModelBehaviorOptions(provider, target).map((option) => option.value)).toEqual([null, "low", "CustomEffort"]);
+      expect(getModelBehaviorOptions(provider, target).map((option) => option.value)).toEqual([null, "none", "low", "CustomEffort"]);
     }
     expect(sanitizeModelBehaviorValue("openwork", { ...model, variants: {} }, "high")).toBeNull();
     expect(getModelBehaviorOptions("openwork", { ...model, id: "future-model", variants: { newEffort: {} } })
-      .map((option) => option.value)).toEqual([null, "newEffort"]);
+      .map((option) => option.value)).toEqual([null, "none", "newEffort"]);
   });
 });
