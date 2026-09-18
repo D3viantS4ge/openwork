@@ -309,7 +309,10 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
   // raw text (plus the chip it created so placeholder and part labels match)
   // and the serialized draft it produced. Register the part and adopt the
   // serialized draft so the pill renders at the caret — appending here would
-  // dump the pill at the end of the last line regardless of caret position.
+  // dump the pill at the end of the last line regardless of caret position
+  // and would not replace any selected text. When no serialized draft is
+  // reported, the editor already holds the pill node at the caret and the
+  // draft round-trip keeps them in sync.
   const handlePasteText = (text: string, _placeholder?: string, chip?: Pick<PastedTextChip, "id" | "label" | "lines" | "text">, serializedAfterInsert?: string) => {
     const pasted = chip ?? createPastedTextChip(text);
     updatePasteParts([
@@ -318,8 +321,6 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
     ]);
     if (serializedAfterInsert) {
       updateDraft(serializedAfterInsert);
-    } else {
-      updateDraft(`${continuationHolderRef.current.state.draft}[pasted text ${pasted.label}]`);
     }
   };
 
