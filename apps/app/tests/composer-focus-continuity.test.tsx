@@ -509,6 +509,18 @@ test.each([
           expect(queued?.at(-1)?.draft.attachments).toEqual(withAttachment ? [queuedAttachment] : []);
           expect(sentDrafts).toHaveLength(0);
           expect(revokePreview).not.toHaveBeenCalledWith(previewUrl);
+          // A stale editor OnChange can echo the just-queued text back after
+          // the clear (real-browser async timing). It must not re-seed the
+          // composer: the draft store has to stay empty.
+          await act(async () => lexicalEditor.update(() => {
+            $getRoot().clear();
+            $getRoot().selectEnd().insertText(composerText);
+          }, { discrete: true }));
+          expect(useComposerStateStore.getState().sessions[sessionId]?.draft ?? "").toBe("");
+          // Reset the synthetic editor state so the next step starts empty.
+          await act(async () => lexicalEditor.update(() => {
+            $getRoot().clear();
+          }, { discrete: true }));
           await act(async () => lexicalEditor.update(() => {
             $getRoot().selectEnd().insertText("Newer typing after queue");
           }, { discrete: true }));

@@ -2205,7 +2205,19 @@ export function SessionSurface(props: SessionSurfaceProps) {
     };
   }, [mentions, pasteParts, props.sessionId]);
 
+  // A stale Lexical OnChange can arrive after the composer is cleared (for
+  // example the Enter keydown that queued a prompt while the agent is busy):
+  // the editor's async state change is delivered after the store session was
+  // deleted, and re-applying it would resurrect the just-queued text in the
+  // composer. Record the cleared text + time so a draft change echoing it
+  // back within a short window is dropped.
+  const clearedComposerTextRef = useRef<{ text: string; at: number } | null>(null);
+
   const handleComposerDraftChange = useCallback((value: string) => {
+    const cleared = clearedComposerTextRef.current;
+    if (cleared && value === cleared.text && Date.now() - cleared.at < 1000) {
+      return;
+    }
     setComposerDraft(props.sessionId, value);
     const idsInDraft = new Set(
       [...value.matchAll(/\[attachment ([^\]]+)\]/g)].map((match) => match[1]).filter((id): id is string => Boolean(id)),
@@ -2311,10 +2323,11 @@ export function SessionSurface(props: SessionSurfaceProps) {
   }, [archived, archiveStateKnown, opencodeClient, openingHistory.readSendHistory, props.onSendDraft, props.opencodeBaseUrl, props.selectedAgent, props.sessionId, props.workspaceId, props.workspaceRoot, removeQueuedDraftFromStore, renderedMessages.length, sessionOwner, setError]);
 
   const clearComposer = useCallback(() => {
+    clearedComposerTextRef.current = draft.trim() ? { text: draft.trim(), at: Date.now() } : null;
     clearPersistedDraft();
     clearComposerSession(props.sessionId);
     props.onDraftChange(buildDraft("", []));
-  }, [buildDraft, clearComposerSession, clearPersistedDraft, props.onDraftChange, props.sessionId]);
+  }, [buildDraft, clearComposerSession, clearPersistedDraft, draft, props.onDraftChange, props.sessionId]);
 
   // Initial send (agent idle) and explicit "Steer" follow-up (agent busy)
   // share the same immediate path.
