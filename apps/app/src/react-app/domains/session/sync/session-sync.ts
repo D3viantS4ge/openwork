@@ -1561,7 +1561,11 @@ function applySessionRunStatus(
     const shouldConvergeTerminal = shouldRecordTerminal || options.terminalEvent === true;
     if (shouldConvergeTerminal) void reconcileSessionPermissions(entry, sessionId);
     if (tracked && shouldConvergeTerminal) void refreshSessionTodos(workspaceId, sessionId);
-    if (tracked && shouldConvergeTerminal) {
+    // Reconcile the transcript from the durable snapshot when a run ends even
+    // for untracked sessions: the SSE stream can end before the final part
+    // events reach the renderer, so a session that finished in the background
+    // would otherwise keep stale in-flight tool parts until it is reopened.
+    if (shouldConvergeTerminal) {
       flushSessionDeltas(entry, workspaceId, sessionId);
       void getReactQueryClient().invalidateQueries({
         queryKey: snapshotKey(workspaceId, sessionId),
