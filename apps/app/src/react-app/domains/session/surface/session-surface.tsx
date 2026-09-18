@@ -3287,6 +3287,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
 
   const branchAction = useSessionBranchAction(sessionOwner);
   const forkingMessageId = branchAction?.status === "pending" ? branchAction.messageId : undefined;
+  const editingMessageId = useComposerStateStore((state) => getComposerRevertMessageId(state, props.sessionId));
   useEffect(() => {
     if (branchAction?.status === "failed") setError(parseSessionError(branchAction.error));
   }, [branchAction, setError]);
@@ -3529,6 +3530,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
                       onRevertToUserMessage={handleRevertToUserMessage}
                       onForkAtMessage={handleForkAtMessage}
                       forkingMessageId={forkingMessageId}
+                      editingMessageId={editingMessageId}
                       onEditUserMessage={handleEditUserMessage}
                       onOpenSubagentSession={props.onOpenSubagentSession}
                       onResumeInterrupted={archived ? undefined : handleResumeInterrupted}

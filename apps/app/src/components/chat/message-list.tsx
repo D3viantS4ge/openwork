@@ -686,8 +686,9 @@ function renderUserTextWithSkillChips(text: string, highlightQuery: string | und
 
 const UserMessage = React.memo(
   ({ message, isStreaming }: UserMessageProps) => {
-    const { onRevertToUserMessage, onForkAtMessage, forkingMessageId, onEditUserMessage, highlightQuery, readOnly } = useMessageList()
+    const { onRevertToUserMessage, onForkAtMessage, forkingMessageId, editingMessageId, onEditUserMessage, highlightQuery, readOnly } = useMessageList()
     const branching = forkingMessageId === message.id
+    const editing = editingMessageId === message.id
     const { onOpenTarget } = useOpenTargets()
     const openLink = (event: React.MouseEvent) => {
       if (!onOpenTarget || !(event.target instanceof Element)) return
@@ -732,7 +733,10 @@ const UserMessage = React.memo(
               >
                 {hasContent ? (
                   <MessageContent
-                    className="bg-muted text-foreground max-w-[85%] rounded-3xl px-4 py-2.5 leading-6 sm:max-w-[75%] !select-text not-prose"
+                    className={cn(
+                      "bg-muted text-foreground max-w-[85%] rounded-3xl px-4 py-2.5 leading-6 sm:max-w-[75%] !select-text not-prose",
+                      editing && "ring-2 ring-amber-500/80",
+                    )}
                     style={{ userSelect: "text" }}
                     onClick={openLink}
                   >

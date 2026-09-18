@@ -34,6 +34,7 @@ interface MessageListContextValue {
   onRevertToUserMessage: (messageId: string) => void
   onForkAtMessage: (messageId: string) => void | Promise<void>
   forkingMessageId?: string
+  editingMessageId?: string | null
   onEditUserMessage: (messageId: string, text: string) => void
   /** Open a sub-agent (child) session in the main chat surface. */
   onOpenSubagentSession?: (sessionId: string) => void
@@ -63,6 +64,7 @@ interface MessageListProviderProps {
   onRevertToUserMessage: (messageId: string) => void
   onForkAtMessage: (messageId: string) => void | Promise<void>
   forkingMessageId?: string
+  editingMessageId?: string | null
   onEditUserMessage: (messageId: string, text: string) => void
   onOpenSubagentSession?: (sessionId: string) => void
   onResumeInterrupted?: (recoveryPrompt: string) => void
@@ -106,6 +108,7 @@ export function MessageListProvider({
   onRevertToUserMessage,
   onForkAtMessage,
   forkingMessageId,
+  editingMessageId,
   onEditUserMessage,
   onOpenSubagentSession,
   onResumeInterrupted,
@@ -183,6 +186,7 @@ export function MessageListProvider({
       showThinking,
       highlightQuery,
       forkingMessageId,
+      editingMessageId,
       developerMode,
       displaySuggestions,
       providerConnectedCount,
@@ -205,6 +209,7 @@ export function MessageListProvider({
       showThinking,
       highlightQuery,
       forkingMessageId,
+      editingMessageId,
       developerMode,
       displaySuggestions,
       providerConnectedCount,
