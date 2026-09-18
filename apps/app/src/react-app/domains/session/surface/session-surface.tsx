@@ -2494,6 +2494,15 @@ export function SessionSurface(props: SessionSurfaceProps) {
     if (!claimQueuedSend(props.sessionId, item.id, true)) return;
     const generation = getQueuedSendGeneration(props.sessionId);
     try {
+      // Launching a queued prompt immediately should take over from the
+      // current run: stop the running turn first so the new prompt is not
+      // steered into a loop that keeps going above it. `stop_confirmed`
+      // preserves the just-claimed send slot through the interrupt.
+      if (liveStatus.type !== "idle") {
+        await interruptSessionTurn(props.opencodeBaseUrl, opencodeClient, props.sessionId,
+          props.workspaceRoot.trim() || undefined,
+          { onStopped: () => dispatchQueuedDrain(props.sessionId, { type: "stop_confirmed" }) });
+      }
       const result = await sendDraft(target, item.id, undefined, { consumeQueuedItem: true });
       if (result.outcome === "blocked" || result.outcome === "cancelled" || result.outcome === "unknown") {
         return;
@@ -2508,8 +2517,11 @@ export function SessionSurface(props: SessionSurfaceProps) {
   }, [
     archived,
     archiveStateKnown,
+    liveStatus.type,
+    opencodeClient,
     props.opencodeBaseUrl,
     props.sessionId,
+    props.workspaceRoot,
     sendDraft,
     sendingQueued,
   ]);
