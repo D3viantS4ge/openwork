@@ -208,9 +208,11 @@ test("send now shares the current claim with the idle drain and every split pane
   expect(claimQueuedSend(sessionId, "item-3", true)).toBe(false);
   dispatchQueuedDrain(sessionId, { type: "send_error", itemId: "item-2" });
   expect(claimQueuedSend(sessionId, "item-2")).toBe(false);
-  expect(claimQueuedSend(sessionId, "item-3", true)).toBe(false);
-  // Explicit Send now can retry a definite rejection, never an unknown POST.
-  expect(claimQueuedSend(sessionId, "item-2", true)).toBe(true);
+  // A definite failure halts the slot, but an explicit Send now may recover it
+  // for ANY queued item (a terminal rejection never raced a real admission).
+  expect(claimQueuedSend(sessionId, "item-3", true)).toBe(true);
+  // The recovered slot is now held by item-3, so the failed item cannot steal it.
+  expect(claimQueuedSend(sessionId, "item-2", true)).toBe(false);
   resetQueuedDrainForTests();
 });
 
