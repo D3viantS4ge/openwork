@@ -3178,7 +3178,7 @@ export function SessionRoute() {
             void refreshProviderListQueries(getReactQueryClient());
             window.setTimeout(() => {
               void refreshProviderListQueries(getReactQueryClient());
-            }, 1500);
+            }, 2500);
           })
           .catch((error) => {
             console.warn("[debug-provider] Failed to toggle debug provider:", error);
