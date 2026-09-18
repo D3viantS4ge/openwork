@@ -3,11 +3,11 @@ import { describe, expect, test } from "bun:test";
 import type { SidebarSessionItem, WorkspaceSessionGroup } from "../src/app/types";
 import {
   buildGlobalPinnedSessions,
+  buildSessionTreeState,
   collectSessionDescendants,
   directChildPresenceBySessionId,
   flattenSessionRows,
   getSessionDescendantIds,
-  groupSessionRows,
   orderArchivedSessions,
   partitionArchivedSessions,
   sessionsNewlyWithChildren,
@@ -18,6 +18,9 @@ const sessions: SidebarSessionItem[] = [
   { id: "session-a-child", title: "Sub-agent child", parentID: "session-a" },
   { id: "session-b", title: "Regular root" },
 ];
+
+const NO_EXPANDED = new Set<string>();
+const buildTree = (input: SidebarSessionItem[]) => buildSessionTreeState(input, undefined);
 
 describe("sidebar session rows", () => {
   test("finds nested sub-agent sessions without including unrelated roots", () => {
@@ -34,16 +37,29 @@ describe("sidebar session rows", () => {
     ]);
   });
 
-  test("never emits sub-agent (child) sessions", () => {
-    const rows = flattenSessionRows(sessions, Number.MAX_SAFE_INTEGER);
-
+  test("emits sub-agent children only when their parent row is expanded", () => {
+    const rows = flattenSessionRows(sessions, Number.MAX_SAFE_INTEGER, buildTree(sessions), NO_EXPANDED, NO_EXPANDED);
     expect(rows.map((row) => row.session.id)).toEqual(["session-a", "session-b"]);
+    expect(rows.map((row) => row.depth)).toEqual([0, 0]);
+
+    const expanded = flattenSessionRows(
+      sessions,
+      Number.MAX_SAFE_INTEGER,
+      buildTree(sessions),
+      new Set(["session-a"]),
+      NO_EXPANDED,
+    );
+    expect(expanded.map((row) => row.session.id)).toEqual(["session-a", "session-a-child", "session-b"]);
+    expect(expanded.map((row) => row.depth)).toEqual([0, 1, 0]);
   });
 
   test("selects a pinned root without its descendants", () => {
     const rows = flattenSessionRows(
       sessions,
       1,
+      buildTree(sessions),
+      NO_EXPANDED,
+      NO_EXPANDED,
       new Set(["session-a"]),
       [],
       { include: new Set(["session-a"]) },
@@ -56,6 +72,9 @@ describe("sidebar session rows", () => {
     const rows = flattenSessionRows(
       sessions,
       1,
+      buildTree(sessions),
+      NO_EXPANDED,
+      NO_EXPANDED,
       new Set(),
       [],
       { exclude: new Set(["session-a"]) },
@@ -76,8 +95,9 @@ describe("sidebar session rows", () => {
       { id: "child", title: "Child", parentID: pinned.id },
       ...inventory,
     ];
-    const rows = flattenSessionRows(input, 6, new Set(), [ordered.id], { exclude: pinnedIds });
-    const pinnedRows = flattenSessionRows(input, 1, pinnedIds, [], { include: pinnedIds });
+    const tree = buildTree(input);
+    const rows = flattenSessionRows(input, 6, tree, NO_EXPANDED, NO_EXPANDED, new Set(), [ordered.id], { exclude: pinnedIds });
+    const pinnedRows = flattenSessionRows(input, 1, tree, NO_EXPANDED, NO_EXPANDED, pinnedIds, [], { include: pinnedIds });
 
     expect(rows).toHaveLength(6);
     expect(rows.map((row) => row.session.id)).toEqual([ordered.id, ...inventory.slice(0, 5).map((session) => session.id)]);
@@ -85,7 +105,7 @@ describe("sidebar session rows", () => {
     expect(rows[1]!.session).toBe(inventory[0]);
     expect(pinnedRows).toHaveLength(1);
     expect(pinnedRows[0]!.session).toBe(pinned);
-    const expanded = flattenSessionRows(input, Number.MAX_SAFE_INTEGER, new Set(), [ordered.id], { exclude: pinnedIds });
+    const expanded = flattenSessionRows(input, Number.MAX_SAFE_INTEGER, tree, NO_EXPANDED, NO_EXPANDED, new Set(), [ordered.id], { exclude: pinnedIds });
     expect(expanded).toHaveLength(inventory.length - 1);
     expect(expanded.slice(0, rows.length)).toEqual(rows);
     expect(expanded.at(-1)!.session).toBe(inventory[9_997]);
@@ -111,10 +131,18 @@ describe("sidebar session rows", () => {
     expect(entries[0].session).toBe(inventory[999]);
     expect(entries[1].session).toBe(inventory[0]);
     expect(entries.every((entry) => entry.group === group)).toBe(true);
+    const tree = buildTree(group.sessions);
     for (const entry of entries) {
-      expect(entry.session).toBe(flattenSessionRows(group.sessions, 1, new Set(pins), [], {
-        include: new Set([entry.session.id]),
-      })[0].session);
+      expect(entry.session).toBe(flattenSessionRows(
+        group.sessions,
+        1,
+        tree,
+        NO_EXPANDED,
+        NO_EXPANDED,
+        new Set(pins),
+        [],
+        { include: new Set([entry.session.id]) },
+      )[0].session);
     }
     const other: WorkspaceSessionGroup = {
       ...group,
@@ -126,32 +154,13 @@ describe("sidebar session rows", () => {
     expect(shared[0].session).toBe(other.sessions[0]);
   });
 
-  test("group buckets preserve manual order, row identity, empty groups, and unknown assignments", () => {
-    const inventory = Array.from({ length: 9 }, (_, index) => ({ id: `root-${index}`, title: `Root ${index}` }));
-    const rows = flattenSessionRows(inventory, Number.MAX_SAFE_INTEGER, new Set(), ["root-7", "root-2"]);
-    const groups = [{ id: "group-b" }, { id: "empty-group" }, { id: "group-a" }];
-    const assignments = Object.fromEntries(inventory.slice(0, 8).map((session) => [session.id, "group-a"]));
-    assignments["root-8"] = "removed-group";
-    const grouped = groupSessionRows(rows, groups, assignments);
-    expect(grouped.groupIds).toEqual(["group-b", "empty-group", "group-a"]);
-    expect(grouped.rootRowsByGroup.get("empty-group")).toBeUndefined();
-    const assigned = grouped.rootRowsByGroup.get("group-a");
-    expect(assigned).toHaveLength(8);
-    expect(assigned?.slice(0, 6).map((row) => row.session.id)).toEqual(["root-7", "root-2", "root-0", "root-1", "root-3", "root-4"]);
-    expect(assigned?.[0]).toBe(rows[0]);
-    expect(grouped.ungroupedRows).toEqual([rows[8]]);
-    const moved = groupSessionRows(rows, groups, { ...assignments, "root-7": "group-b" });
-    expect(moved.rootRowsByGroup.get("group-b")).toEqual([rows[0]]);
-    expect(moved.rootRowsByGroup.get("group-a")).toHaveLength(7);
-  });
-
   test("hides a child even when its parent is archived or outside the list", () => {
     const orphaned: SidebarSessionItem[] = [
       { id: "session-c", title: "Orphan child", parentID: "missing-parent" },
       { id: "session-d", title: "Archived parent", time: { archived: 1 } },
       { id: "session-d-child", title: "Child of archived", parentID: "session-d" },
     ];
-    const rows = flattenSessionRows(orphaned, Number.MAX_SAFE_INTEGER);
+    const rows = flattenSessionRows(orphaned, Number.MAX_SAFE_INTEGER, buildTree(orphaned), NO_EXPANDED, NO_EXPANDED);
 
     expect(rows).toEqual([]);
   });

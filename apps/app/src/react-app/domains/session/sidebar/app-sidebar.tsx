@@ -116,18 +116,20 @@ import {
   MAX_SESSIONS_PREVIEW,
   buildGlobalArchivedSessions,
   buildGlobalPinnedSessions,
+  buildSessionTreeState,
+  directChildPresenceBySessionId,
   flattenSessionRows,
   formatSessionRelativeTime,
   getRootSessions,
-  groupSessionRows,
   isActiveWorkSessionStatus,
   isNeedsAttentionSessionStatus,
   isSessionArchived,
   partitionArchivedSessions,
+  sessionsNewlyWithChildren,
   workspaceKindLabel,
   workspaceLabel,
 } from "./utils";
-import type { FlattenedSessionRow, GlobalArchivedSessionEntry, GlobalPinnedSessionEntry, SessionListItem } from "./utils";
+import type { FlattenedSessionRow, GlobalArchivedSessionEntry, GlobalPinnedSessionEntry, SessionListItem, SessionTreeState } from "./utils";
 import {
   useSessionManagementStore,
   usePinnedSessionIds,
@@ -846,6 +848,53 @@ export function AppSidebar(props: AppSidebarProps) {
     [expandedWorkspaceIdList],
   );
   const [previewCountByWorkspaceId, setPreviewCountByWorkspaceId] = React.useState<Record<string, number>>({});
+  const [expandedSessionIds, setExpandedSessionIds] = React.useState<Set<string>>(() => new Set());
+
+  // Which sessions currently have at least one direct, non-archived child,
+  // computed across every workspace. Used to unfold a session the moment its
+  // first subsession appears (e.g. a spawned subagent) without disturbing
+  // trees that were already folded.
+  const directChildPresence = React.useMemo(
+    () => directChildPresenceBySessionId(
+      props.workspaceSessionGroups.flatMap((group) => group.sessions),
+    ),
+    [props.workspaceSessionGroups],
+  );
+
+  // Auto-unfold a session only when it crosses from "no children" to "has
+  // children". The ref records the prior snapshot so that pre-existing
+  // subsessions (present on first load) and additional children on an
+  // already-parented session leave the folded/unfolded state untouched.
+  const previousDirectChildPresenceRef = React.useRef<Map<string, boolean> | null>(null);
+  React.useEffect(() => {
+    const previous = previousDirectChildPresenceRef.current;
+    previousDirectChildPresenceRef.current = directChildPresence;
+    if (previous === null) return;
+    const newlyWithChildren = sessionsNewlyWithChildren(previous, directChildPresence);
+    if (newlyWithChildren.length === 0) return;
+    setExpandedSessionIds((current) => {
+      let changed = false;
+      const next = new Set(current);
+      for (const id of newlyWithChildren) {
+        if (!next.has(id)) {
+          next.add(id);
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [directChildPresence]);
+
+  const toggleSessionExpanded = React.useCallback((sessionId: string) => {
+    const id = sessionId.trim();
+    if (!id) return;
+    setExpandedSessionIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
   const previousSessionStatusRef = React.useRef<Record<string, string>>({});
   // Subscribed directly to the shortcuts store: holding Ctrl/Cmd only
   // re-renders this sidebar, never the session surface (a bare modifier
@@ -932,6 +981,8 @@ export function AppSidebar(props: AppSidebarProps) {
     expandWorkspace,
     toggleWorkspaceExpanded,
     expandedWorkspaceIds,
+    toggleSessionExpanded,
+    expandedSessionIds,
     sessionNumberShortcutOs,
     sessionNumberShortcutByTarget,
   };
@@ -1156,13 +1207,7 @@ function GlobalPinnedSessions({ entries }: { entries: GlobalPinnedSessionEntry[]
           <SidebarMenuItem>
             <SidebarMenuSub>
               {entries.map((entry) => (
-                <SessionMenuItem
-                  key={`${entry.group.workspace.id}:${entry.session.id}`}
-                  session={entry.session}
-                  workspaceId={entry.group.workspace.id}
-                  isPinned
-                  workspaceName={workspaceLabel(entry.group.workspace)}
-                />
+                <GlobalPinnedSessionTree key={`${entry.group.workspace.id}:${entry.session.id}`} group={entry.group} sessionId={entry.session.id} />
               ))}
             </SidebarMenuSub>
           </SidebarMenuItem>
@@ -1170,6 +1215,47 @@ function GlobalPinnedSessions({ entries }: { entries: GlobalPinnedSessionEntry[]
       </SidebarGroupContent>
     </SidebarGroup>
   );
+}
+
+function GlobalPinnedSessionTree({ group, sessionId }: { group: WorkspaceSessionGroup; sessionId: string }) {
+  const ctx = useSidebarContext();
+  const pinnedIds = usePinnedSessionIds();
+  const tree = React.useMemo(
+    () => buildSessionTreeState(group.sessions, ctx.sessionStatusById),
+    [ctx.sessionStatusById, group.sessions],
+  );
+  const forcedExpandedSessionIds = React.useMemo(
+    () => new Set(
+      ctx.selectedSessionId
+        ? tree.ancestorIdsBySessionId.get(ctx.selectedSessionId) ?? []
+        : [],
+    ),
+    [ctx.selectedSessionId, tree.ancestorIdsBySessionId],
+  );
+  const rootIds = React.useMemo(() => new Set([sessionId]), [sessionId]);
+  const rows = flattenSessionRows(
+    group.sessions,
+    1,
+    tree,
+    ctx.expandedSessionIds,
+    forcedExpandedSessionIds,
+    pinnedIds,
+    [],
+    { include: rootIds },
+  );
+
+  return rows.map((row) => (
+    <SessionMenuItem
+      key={row.session.id}
+      session={row.session}
+      depth={row.depth}
+      tree={tree}
+      workspaceId={group.workspace.id}
+      forcedExpandedSessionIds={forcedExpandedSessionIds}
+      isPinned
+      workspaceName={row.depth === 0 ? workspaceLabel(group.workspace) : undefined}
+    />
+  ));
 }
 
 function GlobalArchivedSessions({ entries }: { entries: GlobalArchivedSessionEntry[] }) {
@@ -1218,12 +1304,28 @@ function GlobalArchivedSessions({ entries }: { entries: GlobalArchivedSessionEnt
 }
 
 function GlobalArchivedSessionItem({ group, session }: GlobalArchivedSessionEntry) {
+  const ctx = useSidebarContext();
   const pinnedIds = usePinnedSessionIds();
+  const tree = React.useMemo(
+    () => buildSessionTreeState(group.sessions, ctx.sessionStatusById),
+    [ctx.sessionStatusById, group.sessions],
+  );
+  const forcedExpandedSessionIds = React.useMemo(
+    () => new Set(
+      ctx.selectedSessionId
+        ? tree.ancestorIdsBySessionId.get(ctx.selectedSessionId) ?? []
+        : [],
+    ),
+    [ctx.selectedSessionId, tree.ancestorIdsBySessionId],
+  );
 
   return (
     <SessionMenuItem
       session={session}
+      depth={0}
+      tree={tree}
       workspaceId={group.workspace.id}
+      forcedExpandedSessionIds={forcedExpandedSessionIds}
       isPinned={pinnedIds.has(session.id)}
       workspaceName={workspaceLabel(group.workspace)}
     />
@@ -1356,6 +1458,18 @@ function WorkspaceSidebarGroup({
 }: WorkspaceSidebarGroupProps) {
   const ctx = useSidebarContext();
   const workspace = group.workspace;
+  const tree = React.useMemo(
+    () => buildSessionTreeState(group.sessions, ctx.sessionStatusById),
+    [ctx.sessionStatusById, group.sessions],
+  );
+  const forcedExpandedSessionIds = React.useMemo(
+    () => new Set(
+      ctx.selectedSessionId
+        ? tree.ancestorIdsBySessionId.get(ctx.selectedSessionId) ?? []
+        : [],
+    ),
+    [ctx.selectedSessionId, tree.ancestorIdsBySessionId],
+  );
 
   const isConnecting = ctx.connectingWorkspaceId === workspace.id;
   const connectionState: WorkspaceConnectionState = ctx.workspaceConnectionStateById[workspace.id] ?? {
@@ -1400,12 +1514,15 @@ function WorkspaceSidebarGroup({
   const sessionRows = React.useMemo(() => flattenSessionRows(
     group.sessions,
     wsGroups.length > 0 ? Number.MAX_SAFE_INTEGER : previewCount,
+    tree,
+    ctx.expandedSessionIds,
+    forcedExpandedSessionIds,
     EMPTY_PINNED_IDS,
     orderIds,
     { exclude: pinnedIds },
-  ), [group.sessions, orderIds, pinnedIds, previewCount, wsGroups.length]);
+  ), [ctx.expandedSessionIds, forcedExpandedSessionIds, group.sessions, orderIds, pinnedIds, previewCount, tree, wsGroups.length]);
   const visibleRootIds = React.useMemo(
-    () => sessionRows.map((row) => row.session.id),
+    () => sessionRows.flatMap((row) => (row.depth === 0 ? [row.session.id] : [])),
     [sessionRows],
   );
   const activeRootCount = React.useMemo(
@@ -1503,7 +1620,9 @@ function WorkspaceSidebarGroup({
                         groups={wsGroups}
                         assignments={wsAssignments}
                         pinnedIds={pinnedIds}
+                        tree={tree}
                         workspaceId={workspace.id}
+                        forcedExpandedSessionIds={forcedExpandedSessionIds}
                         store={store}
                       />
                     ) : (
@@ -1523,9 +1642,12 @@ function WorkspaceSidebarGroup({
                           <SessionMenuItem
                             key={row.session.id}
                             session={row.session}
+                            depth={row.depth}
+                            tree={tree}
                             workspaceId={workspace.id}
+                            forcedExpandedSessionIds={forcedExpandedSessionIds}
                             isPinned={pinnedIds.has(row.session.id)}
-                            draggable
+                            draggable={row.depth === 0}
                           />
                         ))}
                       </Reorder.Group>
@@ -1836,12 +1958,14 @@ function GroupDropZone({ groupId, workspaceId, children }: {
 }
 
 /** Renders sessions partitioned by group. Empty groups always show. Ungrouped sessions render at the end. */
-function GroupedSessionList({ sessionRows, groups, assignments, pinnedIds, workspaceId, store }: {
+function GroupedSessionList({ sessionRows, groups, assignments, pinnedIds, tree, workspaceId, forcedExpandedSessionIds, store }: {
   sessionRows: FlattenedSessionRow[];
   groups: SessionGroupDefinition[];
   assignments: Record<string, string>;
   pinnedIds: Set<string>;
+  tree: SessionTreeState;
   workspaceId: string;
+  forcedExpandedSessionIds: Set<string>;
   store: typeof useSessionManagementStore;
 }) {
   const [previewCountByGroup, setPreviewCountByGroup] = React.useState<Record<string, number>>({});
@@ -1859,18 +1983,61 @@ function GroupedSessionList({ sessionRows, groups, assignments, pinnedIds, works
     }));
   }, []);
 
-  const { groupIds, rootRowsByGroup, ungroupedRows } = React.useMemo(
-    () => groupSessionRows(sessionRows, groups, assignments),
-    [sessionRows, groups, assignments],
-  );
+  // Partition root rows into per-group buckets + ungrouped; child rows follow
+  // their parent regardless of group so a sub-agent stays nested under it.
+  const { groupIds, rootRowsByGroup, ungroupedRows, childrenByParent } = React.useMemo(() => {
+    const rootRowsByGroup = new Map<string, FlattenedSessionRow[]>();
+    const ungroupedRows: FlattenedSessionRow[] = [];
+    const childrenByParent = new Map<string, FlattenedSessionRow[]>();
+    const rowIndexById = new Map(sessionRows.map((row, index) => [row.session.id, index]));
+
+    for (const row of sessionRows) {
+      if (row.depth > 0) {
+        const rowIndex = rowIndexById.get(row.session.id);
+        if (rowIndex === undefined) continue;
+        let parentId: string | null = null;
+        for (let j = rowIndex - 1; j >= 0; j -= 1) {
+          if (sessionRows[j].depth < row.depth) {
+            parentId = sessionRows[j].session.id;
+            break;
+          }
+        }
+        if (parentId) {
+          const kids = childrenByParent.get(parentId) ?? [];
+          kids.push(row);
+          childrenByParent.set(parentId, kids);
+        }
+        continue;
+      }
+      const groupId = assignments[row.session.id];
+      if (groupId && groups.some((group) => group.id === groupId)) {
+        const bucket = rootRowsByGroup.get(groupId) ?? [];
+        bucket.push(row);
+        rootRowsByGroup.set(groupId, bucket);
+      } else {
+        ungroupedRows.push(row);
+      }
+    }
+    return {
+      groupIds: groups.map((group) => group.id),
+      rootRowsByGroup,
+      ungroupedRows,
+      childrenByParent,
+    };
+  }, [assignments, groups, sessionRows]);
 
   const renderRow = (row: FlattenedSessionRow) => (
-    <SessionMenuItem
-      key={row.session.id}
-      session={row.session}
-      workspaceId={workspaceId}
-      isPinned={pinnedIds.has(row.session.id)}
-    />
+    <React.Fragment key={row.session.id}>
+      <SessionMenuItem
+        session={row.session}
+        depth={row.depth}
+        tree={tree}
+        workspaceId={workspaceId}
+        forcedExpandedSessionIds={forcedExpandedSessionIds}
+        isPinned={pinnedIds.has(row.session.id)}
+      />
+      {(childrenByParent.get(row.session.id) ?? []).map(renderRow)}
+    </React.Fragment>
   );
 
   const renderGroup = (group: SessionGroupDefinition) => {
@@ -1939,13 +2106,18 @@ function GroupedSessionList({ sessionRows, groups, assignments, pinnedIds, works
                 className="flex flex-col gap-0.5"
               >
                 {visibleUngroupedRows.map((row) => (
-                  <SessionMenuItem
-                    key={row.session.id}
-                    session={row.session}
-                    workspaceId={workspaceId}
-                    isPinned={pinnedIds.has(row.session.id)}
-                    draggable
-                  />
+                  <React.Fragment key={row.session.id}>
+                    <SessionMenuItem
+                      session={row.session}
+                      depth={row.depth}
+                      tree={tree}
+                      workspaceId={workspaceId}
+                      forcedExpandedSessionIds={forcedExpandedSessionIds}
+                      isPinned={pinnedIds.has(row.session.id)}
+                      draggable
+                    />
+                    {(childrenByParent.get(row.session.id) ?? []).map(renderRow)}
+                  </React.Fragment>
                 ))}
               </Reorder.Group>
               {ungroupedRemaining > 0 ? (
@@ -2029,7 +2201,10 @@ function SessionGroupSection({ group, rows, expanded, workspaceId, store, render
 
 type SessionMenuItemProps = {
   session: SessionListItem;
+  depth: number;
+  tree: SessionTreeState;
   workspaceId: string;
+  forcedExpandedSessionIds: Set<string>;
   isPinned?: boolean;
   draggable?: boolean;
   workspaceName?: string;
@@ -2062,7 +2237,10 @@ function SessionNumberShortcutSlot({ digit }: { digit: number | undefined }) {
 
 function SessionMenuItem({
   session,
+  tree,
   workspaceId,
+  forcedExpandedSessionIds,
+  depth,
   isPinned = false,
   draggable = false,
   workspaceName,
@@ -2088,6 +2266,8 @@ function SessionMenuItem({
   const ariaKeyShortcuts = shortcutDigit === undefined
     ? undefined
     : sessionNumberAriaKeyShortcut(ctx.sessionNumberShortcutOs, shortcutDigit);
+  const hasChildren = (tree.descendantCountBySessionId.get(session.id) ?? 0) > 0;
+  const isExpanded = ctx.expandedSessionIds.has(session.id) || forcedExpandedSessionIds.has(session.id);
 
   const openSession = () => {
     commitPrefetch();
@@ -2134,7 +2314,7 @@ function SessionMenuItem({
     "relative h-8 rounded-md transition-[padding,background-color] duration-75 pe-2.5 group-hover/menu-sub-item:pe-18 group-has-data-popup-open/menu-sub-item:pe-18 max-lg:pe-18 pointer-coarse:pe-18 group-hover/menu-sub-item:bg-black/[0.05] dark:group-hover/menu-sub-item:bg-white/[0.09] data-active:bg-black/[0.07] dark:data-active:bg-white/[0.12] text-[13px] text-sidebar-foreground/80 data-active:text-sidebar-foreground",
   );
   const rowButtonStyle = {
-    paddingInlineStart: sidebarRowPaddingInlineStart(0),
+    paddingInlineStart: sidebarRowPaddingInlineStart(depth),
   } as const;
 
   // Pinned/archived rows identify their workspace via the tooltip title
@@ -2160,12 +2340,13 @@ function SessionMenuItem({
     </>
   );
 
-  const item = (
+  const row = (
     <SidebarMenuSubItem
       {...dragProps}
       className="flex items-center"
       data-sidebar-session-id={session.id}
       data-sidebar-session-workspace-id={workspaceId}
+      data-sidebar-nest-depth={depth}
     >
       <SessionContextMenu
         sessionId={session.id}
@@ -2198,6 +2379,15 @@ function SessionMenuItem({
             {leading}
             <SessionTitle intent={titleIntent} title={displayTitle} tooltip={itemTitle} />
             <SessionNumberShortcutSlot digit={shortcutDigit} />
+            {hasChildren ? (
+              <CollapsibleTrigger
+                className="flex size-6 shrink-0 items-center justify-center"
+                aria-label={isExpanded ? t("sidebar.collapse") : t("sidebar.expand")}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <ChevronRight className="size-4 text-muted-foreground transition-transform duration-200 group-data-open/session-collapsible:rotate-90 hover:text-foreground" />
+              </CollapsibleTrigger>
+            ) : null}
           </SidebarMenuSubButton>
           {trailing}
         </div>
@@ -2205,6 +2395,16 @@ function SessionMenuItem({
       <SessionSideChatControl workspaceId={workspaceId} sessionId={session.id} title={displayTitle} />
     </SidebarMenuSubItem>
   );
+
+  const item = hasChildren ? (
+    <Collapsible
+      open={isExpanded}
+      onOpenChange={() => ctx.toggleSessionExpanded(session.id)}
+      className="group/session-collapsible"
+    >
+      {row}
+    </Collapsible>
+  ) : row;
 
   if (attachedAsSideChat && !isSelected) return null;
   if (!draggable) return item;

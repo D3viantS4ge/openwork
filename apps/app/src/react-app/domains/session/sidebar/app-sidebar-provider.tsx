@@ -35,6 +35,9 @@ export type SidebarContextValue = {
   expandWorkspace: (workspaceId: string) => void;
   toggleWorkspaceExpanded: (workspaceId: string) => void;
   expandedWorkspaceIds: Set<string>;
+  /** Which session rows are expanded to show their sub-agent children. */
+  toggleSessionExpanded: (sessionId: string) => void;
+  expandedSessionIds: Set<string>;
   sessionNumberShortcutOs: SessionNumberShortcutOs;
   sessionNumberShortcutByTarget: ReadonlyMap<string, number>;
 };

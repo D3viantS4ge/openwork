@@ -6,7 +6,7 @@ import { t } from "../../../../i18n";
 export const MAX_SESSIONS_PREVIEW = 6;
 
 export type SessionListItem = WorkspaceSessionGroup["sessions"][number];
-export type FlattenedSessionRow = { session: SessionListItem };
+export type FlattenedSessionRow = { session: SessionListItem; depth: number };
 export type GlobalPinnedSessionEntry = {
   group: WorkspaceSessionGroup;
   session: SessionListItem;
@@ -64,7 +64,8 @@ const normalizeSessionParentID = (session: SessionListItem) => {
 /**
  * A session with a parentID is a sub-agent child, whether or not its parent is
  * in the loaded page (the parent may be archived, deleted, or beyond the list
- * limit). Children are only reached from the task card in their parent.
+ * limit). Root sessions are those without a parentID; children render under
+ * an existing parent via the session tree.
  */
 export const getRootSessions = (sessions: WorkspaceSessionGroup["sessions"]) =>
   sessions.filter((session) => !normalizeSessionParentID(session));
@@ -128,28 +129,6 @@ export function buildGlobalPinnedSessions(groups: WorkspaceSessionGroup[], pinne
   });
 }
 
-export function groupSessionRows(
-  sessionRows: FlattenedSessionRow[],
-  groups: readonly { id: string }[],
-  assignments: Readonly<Record<string, string>>,
-) {
-  const groupIds = groups.map((group) => group.id);
-  const knownGroupIds = new Set(groupIds);
-  const rootRowsByGroup = new Map<string, FlattenedSessionRow[]>();
-  const ungroupedRows: FlattenedSessionRow[] = [];
-  for (const row of sessionRows) {
-    const groupId = assignments[row.session.id];
-    if (groupId && knownGroupIds.has(groupId)) {
-      const bucket = rootRowsByGroup.get(groupId) ?? [];
-      bucket.push(row);
-      rootRowsByGroup.set(groupId, bucket);
-    } else {
-      ungroupedRows.push(row);
-    }
-  }
-  return { groupIds, rootRowsByGroup, ungroupedRows };
-}
-
 export function buildGlobalArchivedSessions(groups: WorkspaceSessionGroup[]): GlobalArchivedSessionEntry[] {
   const entries: GlobalArchivedSessionEntry[] = [];
   for (const group of groups) {
@@ -211,9 +190,10 @@ export const orderRootSessions = (
 };
 
 /**
- * Sub-agent (child) sessions never render in the sidebar: they are reached
- * through the task card in their parent's transcript. Only root sessions
- * become rows.
+ * Build the active session tree: sub-agent (child) sessions nest under an
+ * existing, non-archived parent so they can render as indented rows that are
+ * reached from the parent. Children whose parent is archived or absent from
+ * the loaded list are not linked (and stay hidden).
  */
 export const buildSessionTreeState = (
   sessions: WorkspaceSessionGroup["sessions"],
@@ -349,18 +329,39 @@ export const sessionsNewlyWithChildren = (
 export const flattenSessionRows = (
   sessions: WorkspaceSessionGroup["sessions"],
   rootLimit: number,
+  tree: SessionTreeState,
+  expandedSessionIds: Set<string>,
+  forcedExpandedSessionIds: Set<string>,
   pinnedIds: Set<string> = EMPTY_SET,
   orderIds: string[] = EMPTY_ARRAY,
   rootFilter?: { include?: Set<string>; exclude?: Set<string> },
 ): FlattenedSessionRow[] => {
   const { active } = partitionArchivedSessions(sessions);
-  return orderRootSessions(getRootSessions(active), pinnedIds, orderIds)
+  const orderedRoots = orderRootSessions(getRootSessions(active), pinnedIds, orderIds)
     .filter((root) => (
       (!rootFilter?.include || rootFilter.include.has(root.id)) &&
       !rootFilter?.exclude?.has(root.id)
     ))
-    .slice(0, rootLimit)
-    .map((session) => ({ session }));
+    .slice(0, rootLimit);
+  const rows: FlattenedSessionRow[] = [];
+  const visited = new Set<string>();
+
+  // Walk the session tree emitting parent rows followed by their (expanded)
+  // children, so sub-agent subsessions render as indented rows under their
+  // parent. Children are only reached under an existing parent in the list.
+  const walk = (session: SessionListItem, depth: number) => {
+    if (visited.has(session.id)) return;
+    visited.add(session.id);
+    rows.push({ session, depth });
+    const children = tree.childrenByParent.get(session.id) ?? [];
+    if (!children.length) return;
+    const expanded = expandedSessionIds.has(session.id) || forcedExpandedSessionIds.has(session.id);
+    if (!expanded) return;
+    children.forEach((child) => walk(child, depth + 1));
+  };
+
+  orderedRoots.forEach((root) => walk(root, 0));
+  return rows;
 };
 
 const EMPTY_SET: Set<string> = new Set();
