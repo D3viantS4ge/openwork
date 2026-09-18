@@ -16,7 +16,6 @@ import {
   slugifyLibraryItemName,
   type ComposerSettingsSection,
 } from "@/react-app/domains/settings/library";
-import { ModelBehaviorSelect } from "@/components/model-behavior-select";
 import { ModelSelect } from "@/components/model-select";
 import { ImageLightbox } from "@/components/chat/image-lightbox";
 import { LexicalPromptEditor, syncAttachmentChipStatus, type ComposerAttachmentToken, type LexicalPromptEditorHandle } from "./editor";
@@ -1795,20 +1794,11 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
                   fallbackOptions={props.modelOptions}
                   behaviorValue={props.modelVariant}
                   behaviorLabel={props.modelVariantLabel}
-                  behaviorOptions={props.modelBehaviorOptions}
-                  onBehaviorChange={(value) => {
-                    if (!props.steering) props.onModelVariantChange(value);
-                  }}
-                />
-                <ModelBehaviorSelect
-                  value={props.modelVariant}
-                  label={props.modelVariantLabel}
-                  options={props.modelBehaviorOptions}
-                  onChange={(value) => {
-                    if (!props.steering) props.onModelVariantChange(value);
-                  }}
-                  disabled={props.steering}
-                />
+                   behaviorOptions={props.modelBehaviorOptions}
+                   onBehaviorChange={(value) => {
+                     if (!props.steering) props.onModelVariantChange(value);
+                   }}
+                 />
                 {props.modelUnavailable ? props.onRefreshOrganizationModels ? (
                   <button
                     type="button"
