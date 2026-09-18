@@ -21,6 +21,8 @@ interface MessageListContextValue {
   showThinking: boolean
   highlightQuery?: string
   developerMode: boolean
+  expandToolResults: boolean
+  expandReasoning: boolean
   displaySuggestions: boolean
   providerConnectedCount: number
   connectorIdentities: ConnectorToolIdentity[]
@@ -61,6 +63,8 @@ interface MessageListProviderProps {
   showThinking: boolean
   highlightQuery?: string
   developerMode: boolean
+  expandToolResults: boolean
+  expandReasoning: boolean
   onRevertToUserMessage: (messageId: string) => void
   onForkAtMessage: (messageId: string) => void | Promise<void>
   forkingMessageId?: string
@@ -99,6 +103,8 @@ export function MessageListProvider({
   showThinking,
   highlightQuery,
   developerMode,
+  expandToolResults = false,
+  expandReasoning = false,
   displaySuggestions,
   providerConnectedCount,
   connectorIdentities = [],
@@ -188,6 +194,8 @@ export function MessageListProvider({
       forkingMessageId,
       editingMessageId,
       developerMode,
+      expandToolResults,
+      expandReasoning,
       displaySuggestions,
       providerConnectedCount,
       connectorIdentities,
@@ -211,6 +219,8 @@ export function MessageListProvider({
       forkingMessageId,
       editingMessageId,
       developerMode,
+      expandToolResults,
+      expandReasoning,
       displaySuggestions,
       providerConnectedCount,
       connectorIdentities,

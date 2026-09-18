@@ -48,6 +48,10 @@ export type PreferencesViewProps = {
   busy: boolean;
   showThinking: boolean;
   onToggleShowThinking: () => void;
+  expandReasoning: boolean;
+  onToggleExpandReasoning: () => void;
+  expandToolResults: boolean;
+  onToggleExpandToolResults: () => void;
   autoCompactContext: boolean;
   autoCompactContextBusy: boolean;
   onToggleAutoCompactContext: () => void;
@@ -221,6 +225,38 @@ export function PreferencesView(props: PreferencesViewProps) {
                 checked={props.showThinking}
                 disabled={props.busy}
                 onCheckedChange={props.onToggleShowThinking}
+              />
+            </LayoutSectionItemHeaderActions>
+          </LayoutSectionItemHeader>
+        </LayoutSectionItem>
+
+        {/* Expand reasoning by default */}
+        <LayoutSectionItem>
+          <LayoutSectionItemHeader>
+            <LayoutSectionItemTitle>{t("settings.expand_reasoning")}</LayoutSectionItemTitle>
+            <LayoutSectionItemDescription>{t("settings.expand_reasoning_desc")}</LayoutSectionItemDescription>
+            <LayoutSectionItemHeaderActions>
+              <Switch
+                aria-label={t("settings.expand_reasoning")}
+                checked={props.expandReasoning}
+                disabled={props.busy}
+                onCheckedChange={props.onToggleExpandReasoning}
+              />
+            </LayoutSectionItemHeaderActions>
+          </LayoutSectionItemHeader>
+        </LayoutSectionItem>
+
+        {/* Expand tool results by default */}
+        <LayoutSectionItem>
+          <LayoutSectionItemHeader>
+            <LayoutSectionItemTitle>{t("settings.expand_tool_results")}</LayoutSectionItemTitle>
+            <LayoutSectionItemDescription>{t("settings.expand_tool_results_desc")}</LayoutSectionItemDescription>
+            <LayoutSectionItemHeaderActions>
+              <Switch
+                aria-label={t("settings.expand_tool_results")}
+                checked={props.expandToolResults}
+                disabled={props.busy}
+                onCheckedChange={props.onToggleExpandToolResults}
               />
             </LayoutSectionItemHeaderActions>
           </LayoutSectionItemHeader>

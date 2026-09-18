@@ -9,6 +9,7 @@ import { parseShellMetadata } from "@/app/lib/shell-metadata"
 import { ShellCommandText } from "@/components/chat/shell-command-text"
 import { ReasoningBlock } from "@/components/chat/reasoning-block"
 import { useWorkbenchDisclosure } from "@/react-app/domains/session/chat/workbench-ui-state"
+import { useOptionalMessageList } from "@/components/chat/message-list-provider"
 import { useCurrentToolLifecycleResolver } from "@/components/chat/current-tool-lifecycle-context"
 import { Button } from "@/components/ui/button"
 import {
@@ -219,7 +220,8 @@ export function ToolAggregateGroup({ parts, messageId, thoughts = [], className 
   const groupKey = parts[0]?.toolCallId ?? "aggregate"
   const latestToolCallId = parts.at(-1)?.toolCallId ?? groupKey
   const keyFor = (id: string, detail: string) => messageId ? JSON.stringify(["tool", messageId, id, detail]) : undefined
-  const [expanded, setExpanded] = useWorkbenchDisclosure(keyFor(groupKey, "expanded"))
+  const expandByDefault = useOptionalMessageList()?.expandToolResults ?? false
+  const [expanded, setExpanded] = useWorkbenchDisclosure(keyFor(groupKey, "expanded"), expandByDefault)
   const [showAll, setShowAll] = useWorkbenchDisclosure(keyFor(groupKey, "show-all"))
   const resolveLifecycle = useCurrentToolLifecycleResolver()
 

@@ -77,6 +77,16 @@ export type LocalPreferences = {
    * without showing an OS popup. Off by default.
    */
   notificationSounds: NotificationSoundPreferences;
+  /**
+   * Seed tool-result (aggregate) rows expanded by default. When false they
+   * start collapsed (upstream default); the person can still expand any row.
+   */
+  expandToolResults: boolean;
+  /**
+   * Seed reasoning/thinking blocks expanded by default. When false they start
+   * collapsed (upstream default); the person can still open any block.
+   */
+  expandReasoning: boolean;
 };
 
 type LocalContextValue = {
@@ -104,6 +114,8 @@ const INITIAL_PREFS: LocalPreferences = {
   analyticsEnabled: true,
   desktopNotifications: DEFAULT_DESKTOP_NOTIFICATION_PREFERENCE,
   notificationSounds: DEFAULT_NOTIFICATION_SOUND_PREFERENCES,
+  expandToolResults: false,
+  expandReasoning: false,
 };
 
 function readPersisted<T>(key: string, fallback: T): T {

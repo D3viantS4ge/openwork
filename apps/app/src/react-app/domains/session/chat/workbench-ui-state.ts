@@ -38,12 +38,12 @@ export const useWorkbenchUiState = create<{
   },
 }));
 
-export function useWorkbenchDisclosure(detail: string | undefined): [boolean, (open: boolean) => void] {
+export function useWorkbenchDisclosure(detail: string | undefined, defaultOpen = false): [boolean, (open: boolean) => void] {
   const context = useOptionalMessageList();
   const owner = context?.uiStateOwner;
   const key = owner && detail ? JSON.stringify([owner, detail]) : null;
   const localKey = JSON.stringify([context?.workspaceId, context?.sessionId, owner, detail]);
-  const saved = key ? useWorkbenchUiState.getState().disclosures.get(key) ?? false : false;
+  const saved = key ? useWorkbenchUiState.getState().disclosures.get(key) ?? defaultOpen : defaultOpen;
   const [local, setLocal] = useState({ key: localKey, open: saved });
   if (local.key !== localKey) setLocal({ key: localKey, open: saved });
   useLayoutEffect(() => {

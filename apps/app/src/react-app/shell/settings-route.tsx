@@ -2487,6 +2487,14 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
             onToggleShowThinking={() => {
               local.setPrefs((previous) => ({ ...previous, showThinking: !previous.showThinking }));
             }}
+            expandReasoning={local.prefs.expandReasoning}
+            onToggleExpandReasoning={() => {
+              local.setPrefs((previous) => ({ ...previous, expandReasoning: !previous.expandReasoning }));
+            }}
+            expandToolResults={local.prefs.expandToolResults}
+            onToggleExpandToolResults={() => {
+              local.setPrefs((previous) => ({ ...previous, expandToolResults: !previous.expandToolResults }));
+            }}
             autoCompactContext={autoCompactContext}
             autoCompactContextBusy={autoCompactContextBusy}
             onToggleAutoCompactContext={toggleAutoCompactContext}

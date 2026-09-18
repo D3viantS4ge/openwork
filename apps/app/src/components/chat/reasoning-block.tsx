@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef } from "react"
 import { useWorkbenchDisclosure } from "@/react-app/domains/session/chat/workbench-ui-state"
+import { useOptionalMessageList } from "@/components/chat/message-list-provider"
 import { ChevronDown } from "lucide-react"
 
 import {
@@ -36,7 +37,7 @@ const THOUGHT_GESTURE_WINDOW_MS = 600
  * key via the workbench UI state.
  */
 export function ReasoningBlock({ text, isStreaming, className, disclosureKey }: ReasoningBlockProps) {
-  const [open, setOpen] = useWorkbenchDisclosure(disclosureKey)
+  const [open, setOpen] = useWorkbenchDisclosure(disclosureKey, useOptionalMessageList()?.expandReasoning ?? false)
   const contentRef = useRef<HTMLDivElement>(null)
   const atBottomRef = useRef(true)
   const gestureAtRef = useRef(0)
