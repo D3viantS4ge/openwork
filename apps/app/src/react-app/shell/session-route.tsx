@@ -3196,6 +3196,7 @@ export function SessionRoute() {
             console.warn("[debug-provider] Failed to toggle debug provider:", error);
           });
         }
+        void refreshProviderListQueries(getReactQueryClient());
         return next;
       });
     },
