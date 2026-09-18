@@ -2477,7 +2477,6 @@ export function SessionRoute() {
       prompt: string,
       attachments?: ComposerAttachment[],
       overrides?: RunPromptOverrides,
-      archive?: boolean,
     ): Promise<string | null> => {
       const workspace = workspaces.find((item) => item.id === workspaceId);
       if (!workspace) return null;
@@ -2515,13 +2514,6 @@ export function SessionRoute() {
         rememberPendingCreatedSession(workspaceId, session.id);
         applyLastUsedModelToSession(session.id);
         if (overrides) applyRunPromptOverrides(session.id, overrides);
-        if (archive) {
-          // Fire-and-forget server update; a failure should not block the session.
-          setSessionArchived(workspaceClient, session.id, true, workspace.path?.trim() || undefined).catch(() => {});
-          // Stamp the local session so the sidebar filters it into Archived
-          // immediately, without waiting for a server round-trip.
-          session = { ...session, time: { ...session.time, archived: Date.now() } };
-        }
         setSessionsByWorkspaceId((current) => ({
           ...current,
           [workspaceId]: [session, ...(current[workspaceId] ?? [])],
@@ -2564,7 +2556,7 @@ export function SessionRoute() {
     if (!request) return;
     runPromptHandledUrlRef.current = handledKey;
 
-    const { message, overrides, archive } = request;
+    const { message, overrides } = request;
     const hasOverrides = Boolean(overrides.model || overrides.variant || overrides.agent);
 
     if (selectedSessionId) {
@@ -2580,22 +2572,8 @@ export function SessionRoute() {
       };
       useComposerStateStore.getState().appendQueuedDraft(selectedSessionId, draft);
       navigateToWorkspaceSession(selectedWorkspaceId, selectedSessionId, { replace: true });
-      if (archive) {
-        const workspace = workspaces.find((item) => item.id === selectedWorkspaceId);
-        if (workspace) {
-          const endpoint = endpointForWorkspace(workspace);
-          if (endpoint?.token) {
-            const client = createClient(
-              endpoint.opencodeBaseUrl,
-              workspace.path?.trim() || undefined,
-              { token: endpoint.token, mode: "openwork" },
-            );
-            setSessionArchived(client, selectedSessionId, true, workspace.path?.trim() || undefined).catch(() => {});
-          }
-        }
-      }
     } else {
-      void createTaskWithPrompt(selectedWorkspaceId, message, undefined, hasOverrides ? overrides : undefined, archive);
+      void createTaskWithPrompt(selectedWorkspaceId, message, undefined, hasOverrides ? overrides : undefined);
     }
   }, [
     createTaskWithPrompt,
