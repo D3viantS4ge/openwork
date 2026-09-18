@@ -2078,7 +2078,12 @@ export const LexicalPromptEditor = forwardRef<LexicalPromptEditorHandle, EditorP
       onError(error: Error) {
         throw error;
       },
-      editable: !props.submitDisabled,
+      // The editor is always editable: a composer can mount while the session
+      // is still resolving (e.g. right after a refresh or session switch while
+      // an agent is working) and editability captured at mount from a stale
+      // `disabled` would freeze typing forever. Submission is gated separately
+      // by SubmitPlugin and the disabled send button.
+      editable: true,
       nodes: [ComposerMentionNode, ComposerSlashCommandNode, ComposerSkillNode, ComposerConnectorNode, ComposerPastedTextNode, ComposerAttachmentNode, ComposerCaretAnchorNode],
       editorState: () => {
         setPrompt(props.value, props.mentions, props.pastedText, props.attachments);
