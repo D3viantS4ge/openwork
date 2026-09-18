@@ -97,4 +97,52 @@ describe("mergeSnapshotAndLiveMessages part pairing", () => {
     expect((parts[0] as { text?: string }).text).toBe("ABCD");
     expect((parts[1] as { text?: string }).text).toBe("streaming answer");
   });
+
+  test("keeps the full live streamed text when a deferred tool reorders parts after a switch-back", () => {
+    // A session switched away mid-stream has a stale snapshot whose text was
+    // captured before more text streamed in. On return the live cache holds
+    // the longer text, and the running tool is deferred so its declaration
+    // lands after the text in the live cache (snapshot order differs).
+    // The merged transcript must keep the FULL live text, not truncate it to
+    // the snapshot's older shorter text (the switch-back cut-off regression).
+    const snapshot: UIMessage = {
+      id: "msg-a",
+      role: "assistant",
+      parts: [
+        { type: "text", text: "OLD tail", state: "done", providerMetadata: { opencode: { partId: "prt-t1" } } },
+        {
+          type: "dynamic-tool",
+          toolName: "bash",
+          toolCallId: "call-bash",
+          state: "output-available",
+          input: { command: "ls", description: "List files" },
+          output: "file1",
+          metadata: { exit: 0 },
+          callProviderMetadata: { opencode: { partId: "prt-bash" } },
+        } as never,
+      ],
+    };
+    const live: UIMessage = {
+      id: "msg-a",
+      role: "assistant",
+      parts: [
+        { type: "text", text: "OLD tail + NEWLY STREAMED TEXT", state: "streaming", providerMetadata: { opencode: { partId: "prt-t1" } } },
+        {
+          type: "dynamic-tool",
+          toolName: "bash",
+          toolCallId: "call-bash",
+          state: "input-streaming",
+          input: { command: "ls", description: "List files" },
+          callProviderMetadata: { opencode: { partId: "prt-bash" } },
+        } as never,
+      ],
+    };
+
+    const merged = mergeSnapshotAndLiveMessages([snapshot], [live], { appendLiveOnlyMessages: true });
+    const text = merged[0]?.parts.find((part) => part.type === "text");
+    const bash = merged[0]?.parts.find((part) => part.type === "dynamic-tool");
+
+    expect((text as { text?: string }).text).toBe("OLD tail + NEWLY STREAMED TEXT");
+    expect((bash as { state?: string }).state).toBe("output-available");
+  });
 });

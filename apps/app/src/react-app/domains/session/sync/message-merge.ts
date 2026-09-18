@@ -11,38 +11,87 @@ function messageSignature(message: UIMessage) {
   return signature;
 }
 
+/**
+ * Stable identity for a part so snapshot and live-cache copies of the same
+ * part can be paired regardless of position.
+ *
+ * Matching by position is unsound: the live cache can legitimately hold parts
+ * the snapshot does not yet (streaming text, a tool part deferred until its
+ * input arrives) or expose them in a different order, and a positional pair
+ * lets the snapshot silently drop longer live text (truncating the visible
+ * thinking or cutting off streamed output on a session switch) or fail to
+ * settle an in-flight tool. Text/reasoning parts carry their opencode part id
+ * on both sides; tool parts carry a stable tool call id.
+ */
+function partMergeKey(part: UIMessage["parts"][number]): string | null {
+  if (part.type === "dynamic-tool") {
+    return typeof part.toolCallId === "string" ? `tool:${part.toolCallId}` : null;
+  }
+  if (!("providerMetadata" in part)) return null;
+  const metadata = part.providerMetadata?.opencode;
+  if (!metadata || typeof metadata !== "object") return null;
+  return "partId" in metadata && typeof metadata.partId === "string" ? `part:${metadata.partId}` : null;
+}
+
 function mergeMessageParts(snapshotMessage: UIMessage, cachedMessage: UIMessage) {
-  const cachedTools = new Map(cachedMessage.parts.flatMap((part) =>
-    part.type === "dynamic-tool" ? [[part.toolCallId, part] as const] : []));
-  const snapshotToolIds = new Set(snapshotMessage.parts.flatMap((part) =>
-    part.type === "dynamic-tool" ? [part.toolCallId] : []));
-  const parts = snapshotMessage.parts.map((part, index) => {
-    if (part.type === "dynamic-tool") {
-      const cached = cachedTools.get(part.toolCallId);
-      // A call cannot return from a terminal result to streaming input. Keep
-      // snapshot authority for terminal-to-terminal updates and other calls.
-      if (cached?.toolName === part.toolName
-        && (cached.state === "output-available" || cached.state === "output-error")
-        && (part.state === "input-streaming" || part.state === "input-available")) return cached;
-      return part;
-    }
-    const cachedPart = cachedMessage.parts[index];
-    if (!cachedPart) return part;
-
-    if (
-      (part.type === "text" || part.type === "reasoning") &&
-      cachedPart.type === part.type &&
-      cachedPart.text.length > part.text.length
-    ) {
-      return { ...part, text: cachedPart.text };
-    }
-
-    return part;
+  const cachedParts = cachedMessage.parts;
+  const cachedUsed = new Array<boolean>(cachedParts.length).fill(false);
+  const cachedByKey = new Map<string, number>();
+  cachedParts.forEach((part, index) => {
+    const key = partMergeKey(part);
+    if (key !== null && !cachedByKey.has(key)) cachedByKey.set(key, index);
   });
 
-  parts.push(...cachedMessage.parts.filter((part, index) => part.type === "dynamic-tool"
-    ? !snapshotToolIds.has(part.toolCallId)
-    : index >= snapshotMessage.parts.length));
+  const parts: UIMessage["parts"] = [];
+  snapshotMessage.parts.forEach((snapshotPart, index) => {
+    const key = partMergeKey(snapshotPart);
+    // Keyless parts (live step-start markers carry no part id) pair
+    // positionally with a keyless cached part at the same index.
+    let candidate =
+      key !== null
+        ? cachedByKey.get(key)
+        : index < cachedParts.length && !cachedUsed[index] && partMergeKey(cachedParts[index]!) === null
+          ? index
+          : undefined;
+    // A keyed snapshot part with no keyed live match still pairs positionally
+    // with a same-shape cached part, so legacy live parts that carry no part
+    // id (e.g. older cached fixtures) merge instead of duplicating beside the
+    // snapshot's copy. Tool parts never fall back positionally: their tool
+    // call id is always present, so a positional match could pair a different
+    // tool call and swallow the live terminal state.
+    if (candidate === undefined && key !== null && snapshotPart.type !== "dynamic-tool"
+      && index < cachedParts.length && !cachedUsed[index]) {
+      const positional = cachedParts[index]!;
+      if (positional.type === snapshotPart.type) candidate = index;
+    }
+    if (candidate !== undefined && !cachedUsed[candidate]) {
+      const cachedPart = cachedParts[candidate]!;
+      cachedUsed[candidate] = true;
+      if (snapshotPart.type === "dynamic-tool" && cachedPart.type === "dynamic-tool") {
+        // A call cannot return from a terminal result to streaming input. Keep
+        // snapshot authority for terminal-to-terminal updates and other calls.
+        if ((cachedPart.state === "output-available" || cachedPart.state === "output-error")
+          && (snapshotPart.state === "input-streaming" || snapshotPart.state === "input-available")) {
+          parts.push(cachedPart);
+          return;
+        }
+      } else if (
+        (snapshotPart.type === "text" || snapshotPart.type === "reasoning") &&
+        cachedPart.type === snapshotPart.type &&
+        cachedPart.text.length > snapshotPart.text.length
+      ) {
+        parts.push({ ...snapshotPart, text: cachedPart.text });
+        return;
+      }
+    }
+    parts.push(snapshotPart);
+  });
+
+  // Live-only parts (not present in the snapshot) keep their live state so
+  // nothing already rendered disappears mid-stream.
+  cachedParts.forEach((part, index) => {
+    if (!cachedUsed[index]) parts.push(part);
+  });
 
   return parts;
 }

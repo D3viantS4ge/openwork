@@ -103,7 +103,18 @@ function sameHistoryValue(left: unknown, right: unknown) {
 }
 
 function historyPartKey(part: UIMessage["parts"][number], index: number) {
-  return part.type === "dynamic-tool" ? `tool:${part.toolCallId}` : `${part.type}:${index}`;
+  if (part.type === "dynamic-tool") return `tool:${part.toolCallId}`;
+  // Text/reasoning parts carry their opencode part id on both the snapshot and
+  // the live cache; key by it so a reordered live message does not pair a
+  // stale snapshot part with a newer one at the same index (truncating
+  // streamed output). Keyless parts fall back to a positional key.
+  if ("providerMetadata" in part) {
+    const metadata = part.providerMetadata?.opencode;
+    if (metadata && typeof metadata === "object" && "partId" in metadata && typeof metadata.partId === "string") {
+      return `part:${metadata.partId}`;
+    }
+  }
+  return `${part.type}:${index}`;
 }
 
 export function mergeHistoryWindow(history: UIMessage[], updates: UIMessage[]): UIMessage[] {
