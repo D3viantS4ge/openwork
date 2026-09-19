@@ -1484,6 +1484,45 @@ describe("OpenCode v2 client compatibility", () => {
     }
   });
 
+  test("maps a session's recorded agent and model (with variant) from the runtime info", async () => {
+    const originalFetch = globalThis.fetch;
+    const created = 1_788_548_737_221;
+    const time = { created, updated: created + 100 };
+    const sessions = [
+      { id: "ses_general", parentID: "ses_parent", agent: "general", model: { id: "deepseek-ai/DeepSeek-V4-Flash-0731", providerID: "deepinfra", variant: "max" }, title: "Subagent run", time },
+      { id: "ses_plain", title: "Plain run", time },
+    ];
+    globalThis.fetch = async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (request.method === "GET" && request.url.endsWith("/api/session")) {
+        return jsonResponse({ data: sessions });
+      }
+      const session = sessions.find((item) => request.url.endsWith(`/api/session/${item.id}`));
+      if (request.method === "GET" && session) return jsonResponse({ data: session });
+      throw new Error(`Unexpected request: ${request.method} ${request.url}`);
+    };
+
+    try {
+      const client = createClientV2("http://opencode.test/opencode2", "/workspace", {});
+      const result = await client.session.list();
+      const subagent = result.data?.[0];
+      expect(subagent?.parentID).toBe("ses_parent");
+      expect(subagent?.agent).toBe("general");
+      expect(subagent?.model).toEqual({
+        id: "deepseek-ai/DeepSeek-V4-Flash-0731",
+        providerID: "deepinfra",
+        variant: "max",
+      });
+      const fetched = await client.session.get({ sessionID: "ses_general" });
+      expect(fetched.data).toEqual(subagent);
+      // Sessions without recorded agent/model stay free of those fields.
+      expect(result.data?.[1]?.agent).toBeUndefined();
+      expect(result.data?.[1]?.model).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test.each([undefined, "", "Named session", "Untitled session"])("forwards only the provided title %j when creating a session", async (title) => {
     const originalFetch = globalThis.fetch;
     const bodies: unknown[] = [];

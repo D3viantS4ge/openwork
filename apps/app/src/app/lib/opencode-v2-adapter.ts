@@ -372,6 +372,14 @@ function mapV2Session(value: unknown, directory: string | undefined, eventCreate
   const updated = readNumber(time, "updated") ?? readNumber(source, "updated") ?? created;
   const archived = readNumber(time, "archived");
   const parentID = readString(source, "parentID");
+  // The runtime records what actually ran on the session (a spawned
+  // subagent's own agent and model), which the per-session selection
+  // reconciliation seeds from when opening a session.
+  const agent = readString(source, "agent");
+  const rawModel = readRecord(source, "model");
+  const modelID = readString(rawModel, "id");
+  const modelProviderID = readString(rawModel, "providerID");
+  const modelVariant = readString(rawModel, "variant");
   const mapped: Session = {
     id,
     slug: readString(source, "slug") ?? id,
@@ -386,6 +394,10 @@ function mapV2Session(value: unknown, directory: string | undefined, eventCreate
       ...(archived === undefined ? {} : { archived }),
     },
     ...(parentID ? { parentID } : {}),
+    ...(agent?.trim() ? { agent } : {}),
+    ...(modelID && modelProviderID
+      ? { model: { id: modelID, providerID: modelProviderID, ...(modelVariant === undefined ? {} : { variant: modelVariant }) } }
+      : {}),
   };
   return mapped;
 }

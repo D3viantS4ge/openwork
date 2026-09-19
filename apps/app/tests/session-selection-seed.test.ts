@@ -3,7 +3,7 @@ import type { Session } from "@opencode-ai/sdk/v2/client";
 
 import type { OpenworkSessionSnapshot } from "../src/app/lib/openwork-server";
 import { getReactQueryClient } from "../src/react-app/infra/query-client";
-import { getSessionAgent, useSessionAgentStore } from "../src/react-app/domains/session/surface/session-agent-store";
+import { getSessionAgent, useSessionAgentStore } from "../src/react-app/domains/session/surface/session-mode-memory";
 import {
   getSessionModelSelection,
   useSessionModelStore,

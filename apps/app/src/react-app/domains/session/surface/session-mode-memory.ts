@@ -55,6 +55,15 @@ export function getSessionAgentSelection(sessionId: string, fallbackAgent: strin
   return Object.hasOwn(selections, sessionId) ? selections[sessionId] : fallbackAgent;
 }
 
+/**
+ * Remembered agent for a session. Returns `undefined` when the session has no
+ * memory (so callers can fall back or seed), otherwise the agent name or
+ * `null` for the default agent.
+ */
+export function getSessionAgent(sessionId: string): string | null | undefined {
+  return useSessionAgentStore.getState().bySessionId[sessionId];
+}
+
 export function useSessionAgentSelection(input: {
   sessionId: string | null;
   fallbackAgent: string | null;

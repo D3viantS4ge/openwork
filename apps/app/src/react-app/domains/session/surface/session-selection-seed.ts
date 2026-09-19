@@ -19,7 +19,7 @@ import type { Session } from "@opencode-ai/sdk/v2/client";
 
 import { DEFAULT_AGENT_NAME } from "@/app/constants";
 
-import { getSessionAgent, useSessionAgentStore } from "./session-agent-store";
+import { getSessionAgent, useSessionAgentStore } from "./session-mode-memory";
 import {
   getSessionModelSelection,
   useSessionModelStore,
