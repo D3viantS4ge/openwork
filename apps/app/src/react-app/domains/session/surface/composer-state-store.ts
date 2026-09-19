@@ -51,7 +51,7 @@ export type ComposerStateStore = {
   queuedDrafts: Record<string, QueuedComposerItem[]>;
   setDraft: (sessionId: string, draft: string) => void;
   replaceDraft: (sessionId: string, draft: string, revertMessageId?: string | null) => void;
-  hydrateDraft: (sessionId: string, draft: string) => void;
+  hydrateDraft: (sessionId: string, draft: string, preserveState?: boolean) => void;
   clearRevertTarget: (sessionId: string) => void;
   setAttachments: (sessionId: string, attachments: ComposerAttachment[]) => void;
   setMentions: (sessionId: string, mentions: Record<string, ComposerMentionKind>) => void;
@@ -131,13 +131,23 @@ export const useComposerStateStore = create<ComposerStateStore>((set) => ({
     if (current.draft === draft && current.revertMessageId === target) return state;
     return { sessions: { ...state.sessions, [sessionId]: { ...current, draft, revertMessageId: target } } };
   }),
-  hydrateDraft: (sessionId, draft) => set((state) => {
+  hydrateDraft: (sessionId, draft, preserveState = false) => set((state) => {
     const current = state.sessions[sessionId];
     if (!draft) {
       if (!current) return state;
       const sessions = { ...state.sessions };
       delete sessions[sessionId];
       return { sessions };
+    }
+    if (current && preserveState) {
+      // Same-scope re-sync of the persisted draft: keep the live in-session
+      // state (revertMessageId for the edit highlight, attachments, mentions,
+      // pasteParts) instead of rebuilding from scratch. Rebuilding would drop
+      // the edit target before the browser paints, hiding the edited-message
+      // highlight. Sending still clears via clearSession; clearing the draft
+      // still nulls revertMessageId via setDraft.
+      if (current.draft === draft) return state;
+      return { sessions: { ...state.sessions, [sessionId]: { ...current, draft } } };
     }
     if (
       current?.draft === draft

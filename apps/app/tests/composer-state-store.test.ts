@@ -203,3 +203,54 @@ describe("composer state store", () => {
     expect(hasComposerAutoSend("scoped-session")).toBe(false);
   });
 });
+
+describe("hydrateDraft preserveState", () => {
+  test("same-scope hydration keeps the live revert target and in-session state", () => {
+    const { replaceDraft, setAttachments, setMentions, setPasteParts, hydrateDraft } = useComposerStateStore.getState();
+    replaceDraft("session-a", "edited prompt", "msg_edit");
+    const attachment = { id: "att-1", name: "a.png", mimeType: "image/png", size: 1, kind: "image", file: new File(["x"], "a.png", { type: "image/png" }) } as ComposerAttachment;
+    setAttachments("session-a", [attachment]);
+    setMentions("session-a", { foo: "file" });
+    setPasteParts("session-a", [{ id: "p-1", label: "L", lines: 1, text: "paste" }]);
+
+    hydrateDraft("session-a", "edited prompt", true);
+
+    const session = useComposerStateStore.getState().sessions["session-a"];
+    expect(session?.draft).toBe("edited prompt");
+    expect(session?.revertMessageId).toBe("msg_edit");
+    expect(session?.attachments).toEqual([attachment]);
+    expect(session?.mentions).toEqual({ foo: "file" });
+    expect(session?.pasteParts).toEqual([{ id: "p-1", label: "L", lines: 1, text: "paste" }]);
+  });
+
+  test("same-scope hydration updates the draft text without touching the revert target", () => {
+    const { replaceDraft, hydrateDraft } = useComposerStateStore.getState();
+    replaceDraft("session-a", "first draft", "msg_edit");
+    hydrateDraft("session-a", "second draft", true);
+
+    const session = useComposerStateStore.getState().sessions["session-a"];
+    expect(session?.draft).toBe("second draft");
+    expect(session?.revertMessageId).toBe("msg_edit");
+  });
+
+  test("scope-change hydration rebuilds a clean session (revert target dropped)", () => {
+    const { replaceDraft, setAttachments, hydrateDraft } = useComposerStateStore.getState();
+    replaceDraft("session-a", "edited prompt", "msg_edit");
+    const attachment = { id: "att-1", name: "a.png", mimeType: "image/png", size: 1, kind: "image", file: new File(["x"], "a.png", { type: "image/png" }) } as ComposerAttachment;
+    setAttachments("session-a", [attachment]);
+
+    hydrateDraft("session-a", "persisted text", false);
+
+    const session = useComposerStateStore.getState().sessions["session-a"];
+    expect(session?.draft).toBe("persisted text");
+    expect(session?.revertMessageId).toBeNull();
+    expect(session?.attachments).toEqual([]);
+  });
+
+  test("sending (clearSession) still clears the session including the revert target", () => {
+    const { replaceDraft, clearSession } = useComposerStateStore.getState();
+    replaceDraft("session-a", "edited prompt", "msg_edit");
+    clearSession("session-a");
+    expect(useComposerStateStore.getState().sessions["session-a"]).toBeUndefined();
+  });
+});

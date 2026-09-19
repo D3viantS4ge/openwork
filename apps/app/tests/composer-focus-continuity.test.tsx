@@ -91,7 +91,8 @@ test.each([
   { name: "new thread keeps the prompt before early assistant output through late native acknowledgement and settlement", orderingRegression: "empty" },
   { name: "follow-up keeps history before the prompt and early assistant output through settlement", orderingRegression: "history" },
   { name: "multiple identical pending prompts keep submission order as native siblings settle", orderingRegression: "siblings" },
-])("$name", async ({ queueRegression, modeRegression, orderingRegression }) => {
+  { name: "editing a message highlights the bubble and keeps the edit target through hydration", editHighlight: true },
+])("$name", async ({ queueRegression, modeRegression, orderingRegression, editHighlight }) => {
   const sessionId = `session-focus-continuity${orderingRegression ? `-${orderingRegression}` : ""}`;
   window.localStorage.clear();
   const require = createRequire(import.meta.url);
@@ -468,6 +469,35 @@ test.each([
     if (!editor) throw new Error("Expected the Lexical editor");
     editor.focus();
     expect(document.activeElement).toBe(editor);
+
+    if (editHighlight) {
+      // Re-render idle so the transcript (with its message actions) renders.
+      queryClient.setQueryData(snapshotKey(workspaceId, sessionId), createSnapshot({ type: "idle" }, 2));
+      queryClient.setQueryData(statusKey(workspaceId, sessionId), { type: "idle" });
+      await act(async () => renderSurface());
+      await waitFor(
+        () => container.querySelector('[data-message-role="user"]') !== null,
+        "the user message bubble",
+      );
+      const editButton = container.querySelector<HTMLButtonElement>('button[aria-label="Edit message"]');
+      if (!editButton) throw new Error("Expected the Edit message button");
+      await act(async () => editButton.click());
+      await waitFor(
+        () => container.querySelector('[data-message-role="user"] [class*="ring-amber-500"]') !== null,
+        "the edited-message highlight",
+      );
+      expect(useComposerStateStore.getState().sessions[sessionId]?.revertMessageId).toBe("existing-user-message");
+
+      // The draft-persistence -> hydration re-sync must not rebuild the
+      // composer session from scratch: that would drop the edit target and
+      // hide the highlight. A same-scope hydration re-syncing a different
+      // draft text must keep the live revertMessageId.
+      await act(async () => useComposerStateStore.getState().hydrateDraft(sessionId, "resynced text", true));
+      expect(useComposerStateStore.getState().sessions[sessionId]?.draft).toBe("resynced text");
+      expect(useComposerStateStore.getState().sessions[sessionId]?.revertMessageId).toBe("existing-user-message");
+      expect(container.querySelector('[data-message-role="user"] [class*="ring-amber-500"]')).not.toBeNull();
+      return;
+    }
 
     if (queueRegression) {
       const { getSessionDraft } = await import("../src/react-app/domains/session/sync/draft-store");

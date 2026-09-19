@@ -1091,7 +1091,11 @@ export function SessionSurface(props: SessionSurfaceProps) {
       for (const attachment of getComposerAttachments(currentState, props.sessionId)) {
         revokeAttachmentPreview(attachment);
       }
-      hydrateComposerDraft(props.sessionId, nextDraft);
+      // Same-scope hydrations (e.g. the persist -> hydrate cycle right after an
+      // edit) must not rebuild the composer session from scratch: that would
+      // drop the live revertMessageId (the edited-message highlight) before the
+      // browser paints. A scope change or first mount keeps the clean rebuild.
+      hydrateComposerDraft(props.sessionId, nextDraft, claimedScopeKey === persistedDraftKey);
     }
     setHydratedDraftScopeKey(persistedDraftKey);
   }, [hydrateComposerDraft, persistDraft, persistedDraftKey, persistedDraftSnapshot, props.sessionId]);
