@@ -25,7 +25,10 @@ import {
   useSessionModelStore,
 } from "./session-model-store";
 
-export function seedSessionSelectionFromRuntime(session: Session): void {
+export function seedSessionSelectionFromRuntime(
+  session: Session,
+  fallbackAgent?: string | null,
+): void {
   const sessionId = session.id;
 
   if (session.model?.providerID && session.model.id) {
@@ -42,7 +45,14 @@ export function seedSessionSelectionFromRuntime(session: Session): void {
   // what an empty memory falls back to, so seeding it would surface "Openwork"
   // instead of the user's "Default agent" selection.
   if (session.agent?.trim() && session.agent !== DEFAULT_AGENT_NAME) {
-    if (getSessionAgent(sessionId) === undefined) {
+    const remembered = getSessionAgent(sessionId);
+    // A session without memory adopts the fallback agent on open; that
+    // auto-adopted value is not a deliberate override, so the runtime truth
+    // still wins and opening a subsession shows the subagent that ran.
+    const fallbackAdopted = fallbackAgent !== undefined
+      && remembered !== undefined
+      && remembered === fallbackAgent;
+    if (remembered === undefined || fallbackAdopted) {
       useSessionAgentStore.getState().setAgent(sessionId, session.agent);
     }
   }

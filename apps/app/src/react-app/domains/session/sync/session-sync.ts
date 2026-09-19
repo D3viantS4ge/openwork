@@ -1962,7 +1962,11 @@ async function refreshSessionTodos(workspaceId: string, sessionId: string) {
   await queryClient.invalidateQueries({ queryKey });
 }
 
-export function seedSessionState(workspaceId: string, snapshot: OpenworkSessionHistory, options: { preview?: boolean } = {}) {
+export function seedSessionState(
+  workspaceId: string,
+  snapshot: OpenworkSessionHistory,
+  options: { preview?: boolean; fallbackAgent?: string | null } = {},
+) {
   // A reverted window cannot establish which messages are still visible.
   if (options.preview && snapshot.session.revert?.messageID) return;
   const queryClient = getReactQueryClient();
@@ -2056,8 +2060,9 @@ export function seedSessionState(workspaceId: string, snapshot: OpenworkSessionH
   // agent/model/variant so opening any session shows (and continues to send
   // with) what actually ran there — subagent subsessions, CLI-created
   // sessions, sessions continued elsewhere — instead of the global default.
-  // No-op when the user already has a remembered override.
-  seedSessionSelectionFromRuntime(snapshot.session);
+  // No-op when the user already has a remembered override; an auto-adopted
+  // fallback is treated as no override so the runtime truth wins.
+  seedSessionSelectionFromRuntime(snapshot.session, options.fallbackAgent);
 }
 
 /**

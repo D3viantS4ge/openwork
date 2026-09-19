@@ -78,6 +78,42 @@ describe("seedSessionSelectionFromRuntime", () => {
     expect(getSessionAgent(sessionId)).toBe("build");
   });
 
+  test("overwrites an auto-adopted fallback agent with the agent that actually ran", () => {
+    useSessionAgentStore.getState().setAgent(sessionId, "plan");
+
+    seedSessionSelectionFromRuntime(createSession({
+      parentID: "parent-session",
+      agent: "general",
+      model: { providerID: "openai", id: "gpt-5" },
+    }), "plan");
+
+    expect(getSessionAgent(sessionId)).toBe("general");
+  });
+
+  test("keeps an override that differs from the fallback agent", () => {
+    useSessionAgentStore.getState().setAgent(sessionId, "build");
+
+    seedSessionSelectionFromRuntime(createSession({
+      parentID: "parent-session",
+      agent: "general",
+      model: { providerID: "openai", id: "gpt-5" },
+    }), "plan");
+
+    expect(getSessionAgent(sessionId)).toBe("build");
+  });
+
+  test("does not overwrite the auto-adopted fallback when the runtime recorded the default agent", () => {
+    useSessionAgentStore.getState().setAgent(sessionId, "plan");
+
+    seedSessionSelectionFromRuntime(createSession({
+      parentID: "parent-session",
+      agent: "openwork",
+      model: { providerID: "openai", id: "gpt-5" },
+    }), "plan");
+
+    expect(getSessionAgent(sessionId)).toBe("plan");
+  });
+
   test("keeps the model override while seeding the missing agent", () => {
     useSessionModelStore.getState().setModel(sessionId, { providerID: "anthropic", modelID: "claude" }, null);
 
