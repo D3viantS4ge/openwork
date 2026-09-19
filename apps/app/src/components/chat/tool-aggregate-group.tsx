@@ -1,10 +1,10 @@
 "use client"
 
-import { Fragment, useState } from "react"
+import { Fragment, type ReactNode, useState } from "react"
 import { AlertTriangle, Check, ChevronUp, CircleHelp, CirclePause, Copy, MoreHorizontal } from "lucide-react"
 
 import { FileChip } from "@/components/chat/file-chip"
-import { DiffView, getToolInputDiff } from "@/components/ui/diff-view"
+import { DiffView, getToolInputDiff, isDiffText } from "@/components/ui/diff-view"
 import { parseShellMetadata } from "@/app/lib/shell-metadata"
 import { ShellCommandText } from "@/components/chat/shell-command-text"
 import { ReasoningBlock } from "@/components/chat/reasoning-block"
@@ -52,6 +52,18 @@ function ShellMetadataOutput({ output }: { output: string }) {
   )
 }
 
+/** Edit/apply-patch result text, rendered like the standalone Tool: diff output as DiffView, otherwise plain. */
+function ToolResultText({ output }: { output: string }) {
+  if (isDiffText(output)) {
+    return <DiffView diff={output} className="max-h-80 overflow-auto rounded-md font-mono leading-relaxed" />
+  }
+  return (
+    <pre className="max-h-60 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] opacity-70">
+      {output}
+    </pre>
+  )
+}
+
 type ToolAggregateGroupProps = {
   parts: AnyToolPart[]
   messageId?: string
@@ -73,10 +85,12 @@ function failureText(part: AnyToolPart): string | null {
 }
 
 type DetailBoxProps = {
-  kind: "command" | "pattern" | "error"
+  kind: "command" | "pattern" | "error" | "diff" | "write"
   text: string
   expanded: boolean
   onToggle: () => void
+  /** Extra content rendered inside the box, below the header row, when expanded. */
+  children?: ReactNode
 }
 
 function CopyCommandButton({ command }: { command: string }) {
@@ -95,7 +109,7 @@ function CopyCommandButton({ command }: { command: string }) {
       type="button"
       variant="ghost"
       size="icon-xs"
-      className="mr-1.5 mt-1.5 shrink-0 text-muted-foreground/70"
+      className="mr-1.5 shrink-0 text-muted-foreground/70"
       data-tool-aggregate-copy=""
       title={copied ? "Copied" : "Copy command"}
       aria-label={copied ? "Command copied" : "Copy command"}
@@ -107,61 +121,81 @@ function CopyCommandButton({ command }: { command: string }) {
 }
 
 /**
- * Monospace detail (a command, a search pattern, an error) shown as one
- * clipped line; clicking reveals the whole text, wrapped inside a bounded
- * scroll box, so nothing in an expanded tool group is ever unreadable and
- * a long script never swallows the thread. A full command can be copied.
+ * Monospace detail (a command, a search pattern, an error, a diff, a file's
+ * content) shown as one clipped line; clicking reveals the whole text (and,
+ * for commands, a copy button and any body such as the command output)
+ * wrapped inside a bounded scroll box, so nothing in an expanded tool group
+ * is ever unreadable and a long script never swallows the thread.
  */
-export function DetailBox({ kind, text, expanded, onToggle }: DetailBoxProps) {
-  const noun = kind === "command" ? "command" : kind === "pattern" ? "search pattern" : "error"
+export function DetailBox({ kind, text, expanded, onToggle, children }: DetailBoxProps) {
+  const noun =
+    kind === "command" ? "command"
+      : kind === "pattern" ? "search pattern"
+        : kind === "diff" ? "diff"
+          : kind === "write" ? "file content"
+            : "error"
+  const scrollableText = kind === "command" || kind === "pattern" || kind === "error"
   const textClassName = cn(
     "min-w-0 flex-1 break-all",
-    expanded ? "max-h-60 overflow-y-auto whitespace-pre-wrap" : "line-clamp-1",
+    scrollableText
+      ? expanded ? "max-h-60 overflow-y-auto whitespace-pre-wrap" : "line-clamp-1"
+      : "line-clamp-1",
   )
+  const labelVerb = kind === "diff" || kind === "write"
+    ? expanded ? "Hide" : "Show"
+    : expanded ? "Collapse" : "Show full"
   return (
     <div
       className={cn(
-        "flex min-w-0 max-w-full rounded-xl border font-mono transition-colors",
-        expanded ? "items-start" : "items-center",
+        "min-w-0 max-w-full rounded-xl border font-mono transition-colors",
         kind === "error"
           ? "border-destructive/30 bg-destructive/5 text-xs text-destructive hover:border-destructive/50"
           : "border-border/70 bg-gray-2/60 text-sm hover:border-border hover:bg-gray-3/60",
       )}
     >
-      <button
-        type="button"
-        data-tool-aggregate-detail={kind}
-        data-tool-aggregate-command={kind === "command" ? "" : undefined}
-        data-command-expanded={expanded ? "true" : "false"}
-        aria-expanded={expanded}
-        aria-label={expanded ? `Collapse ${noun}` : `Show full ${noun}`}
-        onClick={onToggle}
-        className={cn(
-          "flex min-w-0 flex-1 cursor-pointer gap-2 rounded-xl px-3 py-2 text-start",
-          expanded ? "items-start [&>svg]:mt-0.5" : "items-center",
-        )}
-      >
-        {kind === "command" ? (
-          <>
-            <span className="shrink-0 text-muted-foreground/60">$</span>
-            <ShellCommandText command={text} className={textClassName} />
-          </>
-        ) : (
-          <code className={textClassName}>{text}</code>
-        )}
-        {expanded ? (
-          <ChevronUp aria-hidden="true" className="size-4 shrink-0 text-muted-foreground/70" />
-        ) : (
-          <MoreHorizontal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground/70" />
-        )}
-      </button>
-      {expanded && kind === "command" ? <CopyCommandButton command={text} /> : null}
+      <div className="flex min-w-0 items-center">
+        <button
+          type="button"
+          data-tool-aggregate-detail={kind}
+          data-tool-aggregate-command={kind === "command" ? "" : undefined}
+          data-command-expanded={expanded ? "true" : "false"}
+          aria-expanded={expanded}
+          aria-label={`${labelVerb} ${noun}`}
+          onClick={onToggle}
+          className={cn(
+            "flex min-w-0 flex-1 cursor-pointer gap-2 rounded-xl px-3 py-2 text-start",
+            expanded ? "items-start [&>svg]:mt-0.5" : "items-center",
+          )}
+        >
+          {kind === "command" ? (
+            <>
+              <span className="shrink-0 text-muted-foreground/60">$</span>
+              <ShellCommandText command={text} className={textClassName} />
+            </>
+          ) : (
+            <code className={textClassName}>{text}</code>
+          )}
+          {expanded ? (
+            <ChevronUp aria-hidden="true" className="size-4 shrink-0 text-muted-foreground/70" />
+          ) : (
+            <MoreHorizontal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground/70" />
+          )}
+        </button>
+        {expanded && kind === "command" ? <CopyCommandButton command={text} /> : null}
+      </div>
+      {expanded && children ? (
+        <div className="border-t border-border/60 px-3 py-2">{children}</div>
+      ) : null}
     </div>
   )
 }
 
-function RetainedDetailBox({ disclosureKey, ...props }: Pick<DetailBoxProps, "kind" | "text"> & { disclosureKey?: string }) {
-  const [expanded, setExpanded] = useWorkbenchDisclosure(disclosureKey)
+function RetainedDetailBox({
+  disclosureKey,
+  defaultOpen = false,
+  ...props
+}: Pick<DetailBoxProps, "kind" | "text" | "children"> & { disclosureKey?: string; defaultOpen?: boolean }) {
+  const [expanded, setExpanded] = useWorkbenchDisclosure(disclosureKey, defaultOpen)
   return <DetailBox {...props} expanded={expanded} onToggle={() => setExpanded(!expanded)} />
 }
 
@@ -225,13 +259,16 @@ export function ToolAggregateGroup({ parts, messageId, thoughts = [], className 
   const [showAll, setShowAll] = useWorkbenchDisclosure(keyFor(groupKey, "show-all"))
   const resolveLifecycle = useCurrentToolLifecycleResolver()
 
-  const detailBox = (kind: DetailBoxProps["kind"], toolCallId: string, text: string) => {
+  const detailBox = (kind: DetailBoxProps["kind"], toolCallId: string, text: string, children?: ReactNode) => {
     return (
       <RetainedDetailBox
         disclosureKey={keyFor(toolCallId, kind)}
+        defaultOpen={expandByDefault}
         kind={kind}
         text={text}
-      />
+      >
+        {children}
+      </RetainedDetailBox>
     )
   }
 
@@ -282,6 +319,9 @@ export function ToolAggregateGroup({ parts, messageId, thoughts = [], className 
   if (soloRow && soloFile) {
     const status = currentLifecycle ?? persistedRowStatus(soloRow.part)
     const failure = failureText(soloRow.part)
+    const soloDiff = isEditToolPart(soloRow.part) || isApplyPatchToolPart(soloRow.part)
+      ? getToolInputDiff(soloRow.part.input, soloRow.part.metadata)
+      : null
     return (
       <div
         className={className}
@@ -318,6 +358,35 @@ export function ToolAggregateGroup({ parts, messageId, thoughts = [], className 
         ) : null}
         {failure ? (
           <div className="mt-1.5">{detailBox("error", soloRow.part.toolCallId, failure)}</div>
+        ) : null}
+        {soloDiff ? (
+          <div className="mt-1.5">
+            {detailBox(
+              "diff",
+              soloRow.part.toolCallId,
+              soloDiff,
+              <>
+                <DiffView key="diff" diff={soloDiff} className="max-h-80 overflow-auto rounded-md font-mono leading-relaxed" />
+                {(isEditToolPart(soloRow.part) || isApplyPatchToolPart(soloRow.part)) && soloRow.part.state === "output-available" && soloRow.part.output
+                  ? <ToolResultText output={soloRow.part.output} />
+                  : null}
+              </>,
+            )}
+          </div>
+        ) : null}
+        {isWriteToolPart(soloRow.part) && soloRow.part.input.content ? (
+          <div className="mt-1.5">
+            <RetainedDetailBox
+              disclosureKey={keyFor(soloRow.part.toolCallId, "write")}
+              defaultOpen={expandByDefault}
+              kind="write"
+              text={soloRow.part.input.filePath || "file content"}
+            >
+              <pre className="max-h-80 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] opacity-70">
+                {soloRow.part.input.content}
+              </pre>
+            </RetainedDetailBox>
+          </div>
         ) : null}
       </div>
     )
@@ -480,20 +549,44 @@ export function ToolAggregateGroup({ parts, messageId, thoughts = [], className 
                   ) : null}
                 </div>
                 ) : null}
-                {bash && command ? detailBox("command", part.toolCallId, command) : null}
-                {bash && part.state === "output-available" && part.output ? (
-                  <ShellMetadataOutput output={part.output} />
+                {bash && command ? (
+                  detailBox(
+                    "command",
+                    part.toolCallId,
+                    command,
+                    bash && part.state === "output-available" && part.output
+                      ? <ShellMetadataOutput output={part.output} />
+                      : undefined,
+                  )
                 ) : null}
                 {isEditToolPart(part) || isApplyPatchToolPart(part) ? (
                   (() => {
                     const diff = getToolInputDiff(part.input, part.metadata)
-                    return diff ? <DiffView key="diff" diff={diff} className="mt-1 max-h-80 overflow-auto rounded-md font-mono leading-relaxed" /> : null
+                    const output = part.state === "output-available" && part.output ? part.output : null
+                    if (diff) {
+                      return detailBox(
+                        "diff",
+                        part.toolCallId,
+                        diff,
+                        <>
+                          <DiffView key="diff" diff={diff} className="max-h-80 overflow-auto rounded-md font-mono leading-relaxed" />
+                          {output ? <ToolResultText output={output} /> : null}
+                        </>,
+                      )
+                    }
+                    // No parseable diff but a result string: keep the result visible.
+                    return output ? <ToolResultText output={output} /> : null
                   })()
                 ) : null}
-                {isWriteToolPart(part) ? (
-                  <pre className="mt-0.5 max-h-80 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] opacity-70">
-                    {part.input.content}
-                  </pre>
+                {isWriteToolPart(part) && part.input.content ? (
+                  detailBox(
+                    "write",
+                    part.toolCallId,
+                    part.input.filePath || "file content",
+                    <pre className="max-h-80 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] opacity-70">
+                      {part.input.content}
+                    </pre>,
+                  )
                 ) : null}
                 {search ? detailBox("pattern", part.toolCallId, search.pattern) : null}
                 {failure ? detailBox("error", part.toolCallId, failure) : null}

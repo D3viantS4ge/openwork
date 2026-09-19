@@ -33,6 +33,26 @@ const failedCommand: DynamicToolUIPart = {
   errorText: "Process exited with code 2",
 };
 
+/** Renders inside a happy-dom document, cleaning up the root afterwards. */
+async function withRoot(fn: (container: HTMLDivElement, root: ReturnType<typeof createRoot>) => Promise<void>) {
+  const registeredDom = typeof globalThis.window === "undefined" || typeof globalThis.document === "undefined";
+  if (registeredDom) GlobalRegistrator.register();
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+  });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await fn(container, root);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    if (registeredDom) await GlobalRegistrator.unregister();
+  }
+}
+
 describe("tool aggregate running feedback", () => {
   test("classifies only lifecycle facts the aggregate can prove", () => {
     expect(getToolAggregateLifecycle([runningCommand], "running")).toBe("running");
@@ -379,17 +399,7 @@ describe("tool aggregate long details", () => {
   });
 
   test("a completed command renders as the copyable command block once expanded", async () => {
-    const registeredDom = typeof globalThis.window === "undefined" || typeof globalThis.document === "undefined";
-    if (registeredDom) GlobalRegistrator.register();
-    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
-      configurable: true,
-      value: true,
-    });
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
-
-    try {
+    await withRoot(async (container, root) => {
       await act(async () => root.render(<ToolAggregateGroup parts={[completedCommand]} />));
       // Collapsed: the command stays hidden behind the aggregate summary.
       expect(container.querySelector("[data-tool-aggregate-command]")).toBeNull();
@@ -407,10 +417,78 @@ describe("tool aggregate long details", () => {
       await act(async () => toggle.click());
       // Expanded: the command box reveals a copy action.
       expect(container.querySelector("[data-tool-aggregate-copy]")).not.toBeNull();
-    } finally {
-      await act(async () => root.unmount());
-      container.remove();
-      if (registeredDom) await GlobalRegistrator.unregister();
-    }
+    });
+  });
+
+  test("a completed command's output stays inside the block and only shows when the block is expanded", async () => {
+    await withRoot(async (container, root) => {
+      await act(async () => root.render(<ToolAggregateGroup parts={[completedCommand]} />));
+      const header = container.querySelector<HTMLButtonElement>("[data-tool-aggregate] > button");
+      if (!header) throw new Error("Expected the aggregate summary button");
+      await act(async () => header.click());
+
+      const toggle = container.querySelector<HTMLButtonElement>("[data-tool-aggregate-command]");
+      if (!toggle) throw new Error("Expected the command block");
+      // The output is not shown until the command block itself is expanded.
+      expect(container.textContent).not.toContain("clean");
+
+      await act(async () => toggle.click());
+      // Expanded: the output renders inside the same bordered block.
+      expect(container.textContent).toContain("clean");
+    });
+  });
+
+  test("an edit diff renders as a collapsible block with the colored diff inside", async () => {
+    const editPart: DynamicToolUIPart = {
+      type: "dynamic-tool",
+      toolName: "edit",
+      toolCallId: "edit-1",
+      state: "output-available",
+      input: { filePath: "/repo/a.ts", oldString: "foo", newString: "bar" },
+      metadata: { diff: "--- a/repo/a.ts\n+++ b/repo/a.ts\n@@ -1 +1 @@\n-foo\n+bar\n" },
+      output: "Updated a.ts",
+    };
+
+    await withRoot(async (container, root) => {
+      await act(async () => root.render(<ToolAggregateGroup parts={[editPart]} />));
+      // A solo edit renders its compact row with the diff block attached.
+      expect(container.textContent).toContain("Edited");
+      const toggle = container.querySelector<HTMLButtonElement>("[data-tool-aggregate-detail=diff]");
+      if (!toggle) throw new Error("Expected the diff block");
+      // The colored diff and the edit output are not rendered until the block is expanded.
+      expect(container.querySelectorAll("[class*='bg-green-1']").length).toBe(0);
+      expect(container.textContent).not.toContain("Updated a.ts");
+
+      await act(async () => toggle.click());
+      // Expanded: the colored DiffView and the edit output appear inside the block.
+      expect(container.querySelectorAll("[class*='bg-green-1']").length).toBeGreaterThan(0);
+      expect(container.textContent).toContain("Updated a.ts");
+    });
+  });
+
+  test("a solo write shows its content in a collapsible block", async () => {
+    const writePart: DynamicToolUIPart = {
+      type: "dynamic-tool",
+      toolName: "write",
+      toolCallId: "write-1",
+      state: "output-available",
+      input: { filePath: "/repo/notes.md", content: "# Notes\n\nhello world" },
+      output: "ok",
+    };
+
+    await withRoot(async (container, root) => {
+      await act(async () => root.render(<ToolAggregateGroup parts={[writePart]} />));
+      // The compact solo row still names the file…
+      expect(container.textContent).toContain("Wrote");
+      expect(container.textContent).toContain("notes.md");
+      // …and its content is only inside the collapsed write block.
+      expect(container.querySelector("[data-tool-aggregate-detail=write]")).not.toBeNull();
+      expect(container.textContent).not.toContain("hello world");
+
+      const toggle = container.querySelector<HTMLButtonElement>("[data-tool-aggregate-detail=write]");
+      if (!toggle) throw new Error("Expected the write block");
+      await act(async () => toggle.click());
+      expect(container.textContent).toContain("hello world");
+    });
   });
 });
