@@ -377,4 +377,40 @@ describe("tool aggregate long details", () => {
     expect(markup).toContain("hint: use &#x27;git fetch origin release/2026.09&#x27; first");
     expect(markup).not.toContain("failed —");
   });
+
+  test("a completed command renders as the copyable command block once expanded", async () => {
+    const registeredDom = typeof globalThis.window === "undefined" || typeof globalThis.document === "undefined";
+    if (registeredDom) GlobalRegistrator.register();
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+      configurable: true,
+      value: true,
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+
+    try {
+      await act(async () => root.render(<ToolAggregateGroup parts={[completedCommand]} />));
+      // Collapsed: the command stays hidden behind the aggregate summary.
+      expect(container.querySelector("[data-tool-aggregate-command]")).toBeNull();
+      const header = container.querySelector<HTMLButtonElement>("[data-tool-aggregate] > button");
+      if (!header) throw new Error("Expected the aggregate summary button");
+      await act(async () => header.click());
+
+      const toggle = container.querySelector<HTMLButtonElement>("[data-tool-aggregate-command]");
+      if (!toggle) throw new Error("Expected the command block");
+      // The block names the command with the $ prompt, clipped to one line.
+      expect(toggle.textContent).toContain("$");
+      expect(toggle.textContent).toContain("git status");
+      expect(container.querySelector("[data-tool-aggregate-copy]")).toBeNull();
+
+      await act(async () => toggle.click());
+      // Expanded: the command box reveals a copy action.
+      expect(container.querySelector("[data-tool-aggregate-copy]")).not.toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      if (registeredDom) await GlobalRegistrator.unregister();
+    }
+  });
 });

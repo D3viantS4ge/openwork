@@ -480,15 +480,9 @@ export function ToolAggregateGroup({ parts, messageId, thoughts = [], className 
                   ) : null}
                 </div>
                 ) : null}
-                {isBashToolPart(part) ? (
-                  <div className="mt-0.5 flex flex-col gap-0.5">
-                    <pre className="whitespace-pre-wrap wrap-break-word font-mono text-[11px]">
-                      $ {part.input.command}
-                    </pre>
-                    {part.state === "output-available" && part.output ? (
-                      <ShellMetadataOutput output={part.output} />
-                    ) : null}
-                  </div>
+                {bash && command ? detailBox("command", part.toolCallId, command) : null}
+                {bash && part.state === "output-available" && part.output ? (
+                  <ShellMetadataOutput output={part.output} />
                 ) : null}
                 {isEditToolPart(part) || isApplyPatchToolPart(part) ? (
                   (() => {
