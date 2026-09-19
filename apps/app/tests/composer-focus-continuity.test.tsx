@@ -483,7 +483,7 @@ test.each([
       if (!editButton) throw new Error("Expected the Edit message button");
       await act(async () => editButton.click());
       await waitFor(
-        () => container.querySelector('[data-message-role="user"] [class*="ring-amber-500"]') !== null,
+        () => container.querySelector('[data-message-role="user"] [class*="ring-sky-500"]') !== null,
         "the edited-message highlight",
       );
       expect(useComposerStateStore.getState().sessions[sessionId]?.revertMessageId).toBe("existing-user-message");
@@ -495,7 +495,7 @@ test.each([
       await act(async () => useComposerStateStore.getState().hydrateDraft(sessionId, "resynced text", true));
       expect(useComposerStateStore.getState().sessions[sessionId]?.draft).toBe("resynced text");
       expect(useComposerStateStore.getState().sessions[sessionId]?.revertMessageId).toBe("existing-user-message");
-      expect(container.querySelector('[data-message-role="user"] [class*="ring-amber-500"]')).not.toBeNull();
+      expect(container.querySelector('[data-message-role="user"] [class*="ring-sky-500"]')).not.toBeNull();
       return;
     }
 

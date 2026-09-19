@@ -735,7 +735,7 @@ const UserMessage = React.memo(
                   <MessageContent
                     className={cn(
                       "bg-muted text-foreground max-w-[85%] rounded-3xl px-4 py-2.5 leading-6 sm:max-w-[75%] !select-text not-prose",
-                      editing && "ring-2 ring-amber-500/80",
+                      editing && "ring-2 ring-sky-500/80",
                     )}
                     style={{ userSelect: "text" }}
                     onClick={openLink}
