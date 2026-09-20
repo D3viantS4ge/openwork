@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { WorkspaceSessionGroup } from "../src/app/types.ts";
 import {
   buildGlobalArchivedSessions,
+  buildSessionTreeState,
   flattenSessionRows,
   partitionArchivedSessions,
   type SessionListItem,
@@ -96,7 +97,7 @@ test("Archived preserves membership including children without mutating inputs o
   expect(entries[0]?.group).toBe(groups[0]);
   expect(groups).toEqual(before);
   expect(partitionArchivedSessions(first.sessions).active).toEqual(active);
-  expect(flattenSessionRows(first.sessions, 10, new Set(["pinned"]), ["manual", "active"])
+  expect(flattenSessionRows(first.sessions, 10, buildSessionTreeState(first.sessions, undefined), new Set(), new Set(), new Set(["pinned"]), ["manual", "active"])
     .map(({ session }) => session.id)).toEqual(["pinned", "manual", "active", "negative"]);
   expect(buildGlobalArchivedSessions([])).toEqual([]);
   expect(buildGlobalArchivedSessions([group("empty", active)])).toEqual([]);
