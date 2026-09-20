@@ -37,11 +37,18 @@ export function reconcileTranscriptMessages(input: ReconcileTranscriptInput): UI
   // revert, or a revert that truncated the transcript to nothing (e.g. the
   // first message) — instead of re-seeding the reverted snapshot messages
   // past the cursor.
-  return mergeSnapshotIntoCachedMessages(
+  const merged = mergeSnapshotIntoCachedMessages(
     input.snapshotMessages,
     input.currentMessages,
     input.revertMessageId,
   );
+  // The merge keeps cached-only messages absent from the (cursor-sliced)
+  // snapshot so a new post-revert replacement prompt survives. It cannot,
+  // however, distinguish that from a stale reverted message still sitting in
+  // the cache when a snapshot carrying the cursor races an untruncated cache.
+  // Apply the cursor to the final result so messages at/after the revert stay
+  // hidden (a no-op when the cursor is absent from the merged transcript).
+  return applyRevertCursor(merged, input.revertMessageId);
 }
 
 /**
