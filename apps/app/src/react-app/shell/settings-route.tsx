@@ -566,6 +566,21 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
         console.warn("[debug-provider] Failed to toggle debug provider:", error);
       });
   }, [developerMode, openworkClient]);
+  // Reconcile the debug/echo provider with the current developer mode once per
+  // server connection, so a stale provider from an earlier dev-mode-on session
+  // does not keep appearing in the model picker with developer mode off (e.g.
+  // a fresh browser). The toggle handler above updates the provider directly,
+  // so this only fires once per client instance.
+  const debugProviderSyncedRef = useRef(false);
+  useEffect(() => {
+    if (!openworkClient || debugProviderSyncedRef.current) return;
+    debugProviderSyncedRef.current = true;
+    openworkClient.setDebugProviderEnabled(developerMode)
+      .then(() => void refreshProviderListQueries(getReactQueryClient()))
+      .catch((error) => {
+        console.warn("[debug-provider] Failed to sync debug provider at startup:", error);
+      });
+  }, [openworkClient, developerMode]);
   const [themeMode, setThemeModeState] = useState<ThemeMode>(getInitialThemeMode);
   const [hideTitlebar, setHideTitlebar] = useState(() => readStoredBoolean(SETTINGS_HIDE_TITLEBAR_KEY, false));
   const [configActionStatus, setConfigActionStatus] = useState<string | null>(null);
