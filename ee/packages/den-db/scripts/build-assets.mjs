@@ -23,14 +23,13 @@ function sqlFromDrizzleKitExport(stdout, stderr) {
 
 function generateCurrentSchemaSql() {
   // Resolve workspace exports and NodeNext .js specifiers to source, even before dependencies are built.
+  // Spawn node.exe directly (no shell): process.execPath can live under a
+  // path with spaces (e.g. C:\Program Files\nodejs\node.exe), and routing it
+  // through cmd.exe with an unquoted command breaks on Windows.
   const result = spawnSync(process.execPath, ["--conditions=development", "--import", "tsx", path.join(packageDir, "node_modules", "drizzle-kit", "bin.cjs"), "export", "--config", "drizzle.config.ts"], {
     cwd: packageDir,
     encoding: "utf8",
     env: process.env,
-    // On Windows pnpm resolves to pnpm.cmd, which cannot be spawned
-    // directly; shell: true routes through cmd.exe. The arguments contain
-    // no spaces, so the concatenation is safe.
-    shell: process.platform === "win32",
   })
 
   if (result.error) throw result.error
