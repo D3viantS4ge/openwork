@@ -218,6 +218,7 @@ export function deriveRenderedSessionMessages(input: {
   // to a revert cursor. Withhold them until the ordered full history arrives.
   if (input.historyComplete === false && revertMessageId) return [];
   const liveMessages = input.transcriptState ?? [];
+  if (process.env.DEBUG_REVERT) console.error('[revert-debug]', JSON.stringify({revert: input.snapshot?.session.revert?.messageID ?? null, hc: input.historyComplete, live: liveMessages.map(m=>m.id), lh: input.latestHistory?.messages.map(m=>m.id) ?? null}));
 
   if (input.latestHistory && input.historyComplete) {
     return applyRevertCursor(input.latestHistory.messages, revertMessageId);
@@ -232,15 +233,21 @@ export function deriveRenderedSessionMessages(input: {
   // only the new turn; it must not replace the older persisted transcript.
   //
   // Apply the revert cursor to the snapshot floor BEFORE merging live
-  // messages: the cursor hides reverted server messages (snapshot messages at
-  // and after it), never live-only messages — the replacement prompt and its
-  // streaming output are post-revert content and must survive the cursor even
-  // when a stale snapshot refetch re-stamps it mid-run.
+  // messages. While the ordered full history has NOT resolved (preview /
+  // partial), live-only messages are kept so a post-revert replacement prompt
+  // and its streaming output survive a stale cursor mid-run. Once the full
+  // history HAS resolved, the cursor is authoritative: live-only messages at/
+  // after it are stale reverted content, not replacements, so only the floor
+  // renders (never revealing hidden messages).
   const snapshotFloor = applyRevertCursor(snapshotMessages, revertMessageId);
 
   const messages = snapshotFloor.length > 0
     ? mergeSnapshotAndLiveMessages(snapshotFloor, liveMessages, { appendLiveOnlyMessages: true })
     : liveMessages;
+
+  if (revertMessageId && input.historyComplete) {
+    return snapshotFloor;
+  }
 
   return messages;
 }
