@@ -10,6 +10,7 @@
 import type { Session } from "@opencode-ai/sdk/v2/client";
 import type { Client, ModelRef } from "../types";
 import { unwrap } from "./opencode";
+import { DEFAULT_AGENT_NAME } from "../constants";
 
 export type AbortSessionLogContext = {
   source: string;
@@ -188,6 +189,14 @@ export async function compactSession(
 // ---------------------------------------------------------------------------
 
 /**
+ * The engine's shell endpoint requires an explicit agent name (unlike
+ * promptAsync, which defaults it server-side). When the session has no agent
+ * selection, fall back to the OpenWork default agent, which the server's
+ * runtime config always registers.
+ */
+const DEFAULT_SHELL_AGENT = DEFAULT_AGENT_NAME;
+
+/**
  * Execute a shell command in a session. Uses `shell` from the SDK.
  * `agent` names the session's agent (the engine requires it); when omitted
  * the engine rejects the request, so senders pass the selected agent.
@@ -202,7 +211,7 @@ export async function shellInSession(
     sessionID,
     command,
     ...(options?.messageID ? { messageID: options.messageID } : {}),
-    ...(options?.agent ? { agent: options.agent } : {}),
+    agent: options?.agent ?? DEFAULT_SHELL_AGENT,
     ...(options?.model ? { model: options.model } : {}),
   });
   assertNoClientError(result);
