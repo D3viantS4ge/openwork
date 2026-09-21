@@ -60,7 +60,6 @@ describe("sidebar session rows", () => {
       buildTree(sessions),
       NO_EXPANDED,
       NO_EXPANDED,
-      new Set(["session-a"]),
       [],
       { include: new Set(["session-a"]) },
     );
@@ -68,19 +67,20 @@ describe("sidebar session rows", () => {
     expect(rows.map((row) => row.session.id)).toEqual(["session-a"]);
   });
 
-  test("removes pinned roots before applying the workspace preview limit", () => {
+  test("keeps every active root in the workspace listing, in natural order", () => {
     const rows = flattenSessionRows(
       sessions,
-      1,
+      Number.MAX_SAFE_INTEGER,
       buildTree(sessions),
       NO_EXPANDED,
       NO_EXPANDED,
-      new Set(),
-      [],
-      { exclude: new Set(["session-a"]) },
     );
 
-    expect(rows.map((row) => row.session.id)).toEqual(["session-b"]);
+    // session-a is pinned in the real sidebar; it must still appear under its
+    // workspace (not be removed), and it is not floated above session-b, so its
+    // shortcut number stays stable across pin/unpin.
+    expect(rows.map((row) => row.session.id)).toEqual(["session-a", "session-b"]);
+    expect(rows.map((row) => row.depth)).toEqual([0, 0]);
   });
 
   test("keeps large-inventory preview counts, manual order, and original session identities", () => {
@@ -89,15 +89,14 @@ describe("sidebar session rows", () => {
     }));
     const pinned = inventory[9_999]!;
     const ordered = inventory[9_998]!;
-    const pinnedIds = new Set([pinned.id]);
     const input = [
       { id: "archived", title: "Archived", time: { archived: 1 } },
       { id: "child", title: "Child", parentID: pinned.id },
       ...inventory,
     ];
     const tree = buildTree(input);
-    const rows = flattenSessionRows(input, 6, tree, NO_EXPANDED, NO_EXPANDED, new Set(), [ordered.id], { exclude: pinnedIds });
-    const pinnedRows = flattenSessionRows(input, 1, tree, NO_EXPANDED, NO_EXPANDED, pinnedIds, [], { include: pinnedIds });
+    const rows = flattenSessionRows(input, 6, tree, NO_EXPANDED, NO_EXPANDED, [ordered.id]);
+    const pinnedRows = flattenSessionRows(input, 1, tree, NO_EXPANDED, NO_EXPANDED, [], { include: new Set([pinned.id]) });
 
     expect(rows).toHaveLength(6);
     expect(rows.map((row) => row.session.id)).toEqual([ordered.id, ...inventory.slice(0, 5).map((session) => session.id)]);
@@ -105,10 +104,12 @@ describe("sidebar session rows", () => {
     expect(rows[1]!.session).toBe(inventory[0]);
     expect(pinnedRows).toHaveLength(1);
     expect(pinnedRows[0]!.session).toBe(pinned);
-    const expanded = flattenSessionRows(input, Number.MAX_SAFE_INTEGER, tree, NO_EXPANDED, NO_EXPANDED, new Set(), [ordered.id], { exclude: pinnedIds });
-    expect(expanded).toHaveLength(inventory.length - 1);
+    const expanded = flattenSessionRows(input, Number.MAX_SAFE_INTEGER, tree, NO_EXPANDED, NO_EXPANDED, [ordered.id]);
+    // Pinned roots are no longer removed from the workspace listing, so the
+    // full root inventory is present and the last root is the pinned one.
+    expect(expanded).toHaveLength(inventory.length);
     expect(expanded.slice(0, rows.length)).toEqual(rows);
-    expect(expanded.at(-1)!.session).toBe(inventory[9_997]);
+    expect(expanded.at(-1)!.session).toBe(inventory[9_999]);
   });
 
   test("global pins reuse root objects in pin order and exclude archived, child, and missing entries", () => {
@@ -139,7 +140,6 @@ describe("sidebar session rows", () => {
         tree,
         NO_EXPANDED,
         NO_EXPANDED,
-        new Set(pins),
         [],
         { include: new Set([entry.session.id]) },
       )[0].session);

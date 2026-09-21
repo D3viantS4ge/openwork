@@ -160,11 +160,12 @@ export const orderArchivedSessions = <T>(
   [...entries].sort((left, right) => (archivedAt(right) ?? 0) - (archivedAt(left) ?? 0));
 
 /**
- * Order root sessions: pinned first, then manual order, then server recency.
+ * Order root sessions: manual order first, then server recency. Pinning does
+ * not reorder the workspace listing — the Pinned section is the only place a
+ * pinned session is lifted, so pin/unpin never shifts the workspace rows.
  */
 export const orderRootSessions = (
   roots: SessionListItem[],
-  pinnedIds: Set<string>,
   orderIds: string[],
 ): SessionListItem[] => {
   const byId = new Map(roots.map((root) => [root.id, root]));
@@ -183,10 +184,7 @@ export const orderRootSessions = (
     used.add(root.id);
   }
 
-  // Stable partition: pinned roots float to the top, preserving relative order.
-  const pinned = ordered.filter((root) => pinnedIds.has(root.id));
-  const rest = ordered.filter((root) => !pinnedIds.has(root.id));
-  return [...pinned, ...rest];
+  return ordered;
 };
 
 /**
@@ -332,15 +330,13 @@ export const flattenSessionRows = (
   tree: SessionTreeState,
   expandedSessionIds: Set<string>,
   forcedExpandedSessionIds: Set<string>,
-  pinnedIds: Set<string> = EMPTY_SET,
   orderIds: string[] = EMPTY_ARRAY,
-  rootFilter?: { include?: Set<string>; exclude?: Set<string> },
+  rootFilter?: { include?: Set<string> },
 ): FlattenedSessionRow[] => {
   const { active } = partitionArchivedSessions(sessions);
-  const orderedRoots = orderRootSessions(getRootSessions(active), pinnedIds, orderIds)
+  const orderedRoots = orderRootSessions(getRootSessions(active), orderIds)
     .filter((root) => (
-      (!rootFilter?.include || rootFilter.include.has(root.id)) &&
-      !rootFilter?.exclude?.has(root.id)
+      !rootFilter?.include || rootFilter.include.has(root.id)
     ))
     .slice(0, rootLimit);
   const rows: FlattenedSessionRow[] = [];
@@ -364,7 +360,6 @@ export const flattenSessionRows = (
   return rows;
 };
 
-const EMPTY_SET: Set<string> = new Set();
 const EMPTY_ARRAY: string[] = [];
 
 export const workspaceLabel = (workspace: WorkspaceInfo) =>

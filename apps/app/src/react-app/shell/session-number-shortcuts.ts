@@ -180,6 +180,11 @@ export function readVisibleSessionNumberShortcutTargets(
 ): SessionNumberShortcutDomTarget[] {
   const rows = Array.from(documentRoot.querySelectorAll<HTMLElement>(SESSION_ROW_SELECTOR));
   const candidates = rows.flatMap((row) => {
+    // A session rendered in both the global Pinned section and its workspace
+    // has one shortcut: the workspace (non-pinned) copy owns the number and the
+    // pinned copy mirrors it. Skip pinned copies so pin/unpin never shifts the
+    // digits of the workspace rows.
+    if (row.closest("[data-global-pinned-sessions]")) return [];
     const button = row.querySelector<HTMLElement>("[data-session-tab-id]");
     const workspaceId = row.dataset.sidebarSessionWorkspaceId?.trim();
     const sessionId = row.dataset.sidebarSessionId?.trim();

@@ -170,9 +170,11 @@ for (const engine of ["v1", "v2"] satisfies Engine[]) {
       expect(expanded.map(({ session }) => session.id)).toEqual(active.map((item) => item.id));
       expect(expanded.some(({ session }) => session.parentID || session.time?.archived)).toBe(false);
       expect(new Set(localItems.map((item) => item.id)).size).toBe(localItems.length);
-      const pinned = new Set([active[250].id]);
-      expect(flattenSessionRows(localItems, 6, pinned)[0].session.id).toBe(active[250].id);
-      expect(flattenSessionRows(localItems, Number.MAX_SAFE_INTEGER, new Set(), [], { exclude: pinned })).toHaveLength(250);
+      // Pinning neither removes a root from its workspace listing nor floats it
+      // to the top: the pinned root keeps its natural (last) position, so its
+      // shortcut number stays stable across pin/unpin.
+      expect(flattenSessionRows(localItems, Number.MAX_SAFE_INTEGER).at(-1)?.session.id).toBe(active[250].id);
+      expect(flattenSessionRows(localItems, Number.MAX_SAFE_INTEGER)).toHaveLength(251);
       // Show more derives rows from the complete loaded list, not another read.
       const requestCount = requests.length;
       expect(flattenSessionRows(localItems, 252)).toHaveLength(251);

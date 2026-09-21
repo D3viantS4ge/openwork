@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { GlobalRegistrator } from "@happy-dom/global-registrator";
 
 import {
   SESSION_NUMBER_SHORTCUT_LIMIT,
@@ -8,6 +9,7 @@ import {
   isSessionNumberModifierKey,
   isSessionNumberModifierPressed,
   nextSessionNumberModifierHeld,
+  readVisibleSessionNumberShortcutTargets,
   resolveSessionNumberShortcutOs,
   sessionNumberAriaKeyShortcut,
   sessionNumberShortcutDescription,
@@ -17,6 +19,12 @@ import {
   type SessionNumberShortcutOs,
   type SessionNumberShortcutTransition,
 } from "../src/react-app/shell/session-number-shortcuts";
+
+const registeredDom = typeof globalThis.window === "undefined" || typeof globalThis.document === "undefined";
+if (registeredDom) GlobalRegistrator.register({ url: "http://localhost/" });
+afterAll(async () => {
+  if (registeredDom) await GlobalRegistrator.unregister();
+});
 
 const macModifier = {
   key: "Meta",
@@ -140,3 +148,41 @@ describe("session number shortcut platform and accessibility metadata", () => {
     }
   });
 });
+
+describe("pinned copies and session number shortcuts", () => {
+  test("the workspace copy owns the digit; the Pinned-section copy is not numbered", () => {
+    document.body.innerHTML = "";
+
+    // Pinned section renders above the workspace list in the sidebar.
+    const pinnedSection = document.createElement("div");
+    pinnedSection.setAttribute("data-global-pinned-sessions", "");
+    const pinnedCopy = addSessionRow(pinnedSection, "a", "pinned");
+    document.body.appendChild(pinnedSection);
+
+    const workspace = document.createElement("div");
+    const workspaceCopy = addSessionRow(workspace, "a", "pinned");
+    addSessionRow(workspace, "a", "regular");
+    document.body.appendChild(workspace);
+
+    const targets = readVisibleSessionNumberShortcutTargets(document);
+    expect(targets.map((target) => `${target.sessionId}:${target.digit}`)).toEqual([
+      "pinned:1",
+      "regular:2",
+    ]);
+    expect(targets[0]!.button).toBe(workspaceCopy);
+    expect(targets.some((target) => target.button === pinnedCopy)).toBe(false);
+  });
+});
+
+function addSessionRow(parent: HTMLElement, workspaceId: string, sessionId: string): HTMLButtonElement {
+  const row = document.createElement("div");
+  row.dataset.sidebarSessionWorkspaceId = workspaceId;
+  row.dataset.sidebarSessionId = sessionId;
+  const button = document.createElement("button");
+  button.setAttribute("data-session-tab-id", sessionId);
+  // happy-dom has no layout, so report the button as visible.
+  Object.defineProperty(button, "getClientRects", { value: () => ({ length: 1 }) });
+  row.appendChild(button);
+  parent.appendChild(row);
+  return button;
+}

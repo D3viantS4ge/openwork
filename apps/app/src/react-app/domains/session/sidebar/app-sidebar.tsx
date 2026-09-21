@@ -1219,7 +1219,6 @@ function GlobalPinnedSessions({ entries }: { entries: GlobalPinnedSessionEntry[]
 
 function GlobalPinnedSessionTree({ group, sessionId }: { group: WorkspaceSessionGroup; sessionId: string }) {
   const ctx = useSidebarContext();
-  const pinnedIds = usePinnedSessionIds();
   const tree = React.useMemo(
     () => buildSessionTreeState(group.sessions, ctx.sessionStatusById),
     [ctx.sessionStatusById, group.sessions],
@@ -1239,7 +1238,6 @@ function GlobalPinnedSessionTree({ group, sessionId }: { group: WorkspaceSession
     tree,
     ctx.expandedSessionIds,
     forcedExpandedSessionIds,
-    pinnedIds,
     [],
     { include: rootIds },
   );
@@ -1517,17 +1515,15 @@ function WorkspaceSidebarGroup({
     tree,
     ctx.expandedSessionIds,
     forcedExpandedSessionIds,
-    EMPTY_PINNED_IDS,
     orderIds,
-    { exclude: pinnedIds },
-  ), [ctx.expandedSessionIds, forcedExpandedSessionIds, group.sessions, orderIds, pinnedIds, previewCount, tree, wsGroups.length]);
+  ), [ctx.expandedSessionIds, forcedExpandedSessionIds, group.sessions, orderIds, previewCount, tree, wsGroups.length]);
   const visibleRootIds = React.useMemo(
     () => sessionRows.flatMap((row) => (row.depth === 0 ? [row.session.id] : [])),
     [sessionRows],
   );
   const activeRootCount = React.useMemo(
-    () => getRootSessions(activeSessions).filter((session) => !pinnedIds.has(session.id)).length,
-    [activeSessions, pinnedIds],
+    () => getRootSessions(activeSessions).length,
+    [activeSessions],
   );
   const remainingRootSessions = Math.max(0, activeRootCount - previewCount);
   const showMoreLabel = remainingRootSessions > 0
@@ -1693,7 +1689,6 @@ function WorkspaceSidebarGroup({
 }
 
 const SESSION_DRAG_TYPE = "application/x-openwork-session-id";
-const EMPTY_PINNED_IDS = new Set<string>();
 const UNGROUPED_GROUP_ID = "__openwork_ungrouped";
 
 function SessionGroupActions({ group, groups, workspaceId, count }: {
