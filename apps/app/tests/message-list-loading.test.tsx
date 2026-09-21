@@ -86,7 +86,7 @@ describe("message-list loading feedback", () => {
       const expand = aggregate?.querySelector<HTMLButtonElement>("button");
       if (!expand) throw new Error("Missing aggregate expansion button");
       await act(async () => expand.click());
-      const detail = aggregate?.querySelector<HTMLButtonElement>('[data-tool-aggregate-detail="command"]');
+      const detail = aggregate?.querySelector<HTMLElement>('[data-tool-aggregate-detail="command"]');
       if (!detail) throw new Error("Missing command detail");
       await act(async () => detail.click());
       expect(detail.getAttribute("aria-expanded")).toBe("true");

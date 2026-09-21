@@ -1,6 +1,13 @@
 "use client"
 
-import { Fragment, type ReactNode, useState } from "react"
+import {
+  Fragment,
+  useRef,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+  useState,
+} from "react"
 import { AlertTriangle, Check, ChevronUp, CircleHelp, CirclePause, Copy, MoreHorizontal } from "lucide-react"
 
 import { FileChip } from "@/components/chat/file-chip"
@@ -136,7 +143,9 @@ export function DetailBox({ kind, text, expanded, onToggle, children }: DetailBo
             : "error"
   const scrollableText = kind === "command" || kind === "pattern" || kind === "error"
   const textClassName = cn(
-    "min-w-0 flex-1 break-all",
+    // select-text: the header doubles as the toggle, but the text itself
+    // (command, pattern, error, diff, file content) stays copyable.
+    "min-w-0 flex-1 break-all select-text",
     scrollableText
       ? expanded ? "max-h-60 overflow-y-auto whitespace-pre-wrap" : "line-clamp-1"
       : "line-clamp-1",
@@ -144,6 +153,43 @@ export function DetailBox({ kind, text, expanded, onToggle, children }: DetailBo
   const labelVerb = kind === "diff" || kind === "write"
     ? expanded ? "Hide" : "Show"
     : expanded ? "Collapse" : "Show full"
+  // A click toggles the box, but a drag or a running text selection means the
+  // user is trying to copy the text, so that click must not toggle. Record the
+  // pointer-down position and suppress the toggle when the pointer travelled
+  // (a selection drag) or a selection already exists (e.g. a triple-click line
+  // select, which fires a click without any pointer movement).
+  const pointerDown = useRef<{ x: number; y: number } | null>(null)
+  const dragged = useRef(false)
+  const handlePointerDown = (event: ReactMouseEvent) => {
+    pointerDown.current = { x: event.clientX, y: event.clientY }
+    dragged.current = false
+  }
+  const handlePointerUp = (event: ReactMouseEvent) => {
+    const start = pointerDown.current
+    pointerDown.current = null
+    if (!start) return
+    dragged.current = Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4
+  }
+  const handleClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (dragged.current) return
+    const selection = window.getSelection()
+    if (selection && !selection.isCollapsed) {
+      // A selection that lives entirely inside this box means the click was
+      // part of selecting the text (e.g. a triple-click line select); leave
+      // the toggle alone. A selection anywhere else — including one left
+      // behind by other UI — must not block a normal click.
+      const target = event.currentTarget
+      const inside = (node: Node | null) => node !== null && (node === target || target.contains(node))
+      if (inside(selection.anchorNode) && inside(selection.focusNode)) return
+    }
+    onToggle()
+  }
+  const handleKeyDown = (event: ReactKeyboardEvent) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault()
+      onToggle()
+    }
+  }
   return (
     <div
       className={cn(
@@ -154,16 +200,20 @@ export function DetailBox({ kind, text, expanded, onToggle, children }: DetailBo
       )}
     >
       <div className="flex min-w-0 items-center">
-        <button
-          type="button"
+        <div
+          role="button"
+          tabIndex={0}
           data-tool-aggregate-detail={kind}
           data-tool-aggregate-command={kind === "command" ? "" : undefined}
           data-command-expanded={expanded ? "true" : "false"}
           aria-expanded={expanded}
           aria-label={`${labelVerb} ${noun}`}
-          onClick={onToggle}
+          onClick={handleClick}
+          onKeyDown={handleKeyDown}
+          onMouseDown={handlePointerDown}
+          onMouseUp={handlePointerUp}
           className={cn(
-            "flex min-w-0 flex-1 cursor-pointer gap-2 rounded-xl px-3 py-2 text-start",
+            "flex min-w-0 flex-1 cursor-pointer gap-2 rounded-xl px-3 py-2 text-start outline-none focus-visible:ring-3 focus-visible:ring-ring/30",
             expanded ? "items-start [&>svg]:mt-0.5" : "items-center",
           )}
         >
@@ -180,7 +230,7 @@ export function DetailBox({ kind, text, expanded, onToggle, children }: DetailBo
           ) : (
             <MoreHorizontal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground/70" />
           )}
-        </button>
+        </div>
         {expanded && kind === "command" ? <CopyCommandButton command={text} /> : null}
       </div>
       {expanded && children ? (

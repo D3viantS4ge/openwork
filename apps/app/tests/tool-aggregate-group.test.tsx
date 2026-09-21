@@ -344,7 +344,7 @@ describe("tool aggregate long details", () => {
       expect(Math.round(collapsed.getBoundingClientRect().height / 20)).toBe(1);
       expect(readCommandText(collapsed)).toBe(command);
 
-      const toggle = container.querySelector<HTMLButtonElement>("[data-tool-aggregate-detail=command]");
+      const toggle = container.querySelector<HTMLElement>("[data-tool-aggregate-detail=command]");
       if (!toggle) throw new Error("Expected the command detail toggle");
       await act(async () => toggle.click());
 
@@ -365,6 +365,84 @@ describe("tool aggregate long details", () => {
       if (previousClipboard) Object.defineProperty(navigator, "clipboard", previousClipboard);
       else Reflect.deleteProperty(navigator, "clipboard");
       if (registeredDom) await GlobalRegistrator.unregister();
+    }
+  });
+
+  test("command text is selectable and a selection drag does not toggle the block", async () => {
+    await withRoot(async (container, root) => {
+      let expanded = false;
+      const render = () => act(async () => root.render(
+        <DetailBox
+          kind="command"
+          text="git status --short --branch"
+          expanded={expanded}
+          onToggle={() => { expanded = !expanded; }}
+        />,
+      ));
+      await render();
+
+      const code = container.querySelector<HTMLElement>("[data-tool-aggregate-detail=command] code");
+      if (!code) throw new Error("Expected the command text");
+      // The text is copyable: the header no longer hard-blocks selection.
+      expect(code.classList.contains("select-text")).toBe(true);
+
+      const header = container.querySelector<HTMLElement>("[data-tool-aggregate-detail=command]");
+      if (!header) throw new Error("Expected the command detail header");
+
+      // A plain click still toggles the block open.
+      await act(async () => header.click());
+      expect(expanded).toBe(true);
+
+      // A selection that lives elsewhere (e.g. left behind by another UI) must
+      // not block a normal click on the box.
+      await act(async () => {
+        const sibling = document.createElement("p");
+        sibling.textContent = "Selected elsewhere";
+        document.body.append(sibling);
+        const sel = window.getSelection()!;
+        sel.removeAllRanges();
+        const range = document.createRange();
+        range.setStart(sibling.firstChild!, 0);
+        range.setEnd(sibling.firstChild!, 8);
+        sel.addRange(range);
+      });
+      await act(async () => header.click());
+      expect(expanded).toBe(false);
+      // Restore the selection so it does not leak into other tests.
+      await act(async () => {
+        window.getSelection()!.removeAllRanges();
+      });
+
+      // A drag-select (pointer travels > 4px before mouseup) must not toggle.
+      await act(async () => {
+        header.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: 10, clientY: 10 }));
+        header.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: 200, clientY: 10 }));
+        header.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, clientX: 200, clientY: 10 }));
+        header.click();
+      });
+      expect(expanded).toBe(false);
+
+      // Keyboard toggling still works (role="button" parity with <button>).
+      await act(async () => {
+        header.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      });
+      expect(expanded).toBe(true);
+    });
+  });
+
+  test("every detail header's text stays selectable, not just commands", () => {
+    const kinds = [
+      ["command", "git status"],
+      ["pattern", "foo|bar"],
+      ["error", "boom"],
+      ["diff", "--- a\n+++ b"],
+      ["write", "/repo/a.ts"],
+    ] as const;
+    for (const [kind, text] of kinds) {
+      const markup = renderToStaticMarkup(
+        <DetailBox kind={kind} text={text} expanded onToggle={() => {}} />,
+      );
+      expect(markup).toContain("select-text");
     }
   });
 
@@ -407,7 +485,7 @@ describe("tool aggregate long details", () => {
       if (!header) throw new Error("Expected the aggregate summary button");
       await act(async () => header.click());
 
-      const toggle = container.querySelector<HTMLButtonElement>("[data-tool-aggregate-command]");
+      const toggle = container.querySelector<HTMLElement>("[data-tool-aggregate-command]");
       if (!toggle) throw new Error("Expected the command block");
       // The block names the command with the $ prompt, clipped to one line.
       expect(toggle.textContent).toContain("$");
@@ -427,7 +505,7 @@ describe("tool aggregate long details", () => {
       if (!header) throw new Error("Expected the aggregate summary button");
       await act(async () => header.click());
 
-      const toggle = container.querySelector<HTMLButtonElement>("[data-tool-aggregate-command]");
+      const toggle = container.querySelector<HTMLElement>("[data-tool-aggregate-command]");
       if (!toggle) throw new Error("Expected the command block");
       // The output is not shown until the command block itself is expanded.
       expect(container.textContent).not.toContain("clean");
@@ -453,7 +531,7 @@ describe("tool aggregate long details", () => {
       await act(async () => root.render(<ToolAggregateGroup parts={[editPart]} />));
       // A solo edit renders its compact row with the diff block attached.
       expect(container.textContent).toContain("Edited");
-      const toggle = container.querySelector<HTMLButtonElement>("[data-tool-aggregate-detail=diff]");
+      const toggle = container.querySelector<HTMLElement>("[data-tool-aggregate-detail=diff]");
       if (!toggle) throw new Error("Expected the diff block");
       // The colored diff and the edit output are not rendered until the block is expanded.
       expect(container.querySelectorAll("[class*='bg-green-1']").length).toBe(0);
@@ -485,7 +563,7 @@ describe("tool aggregate long details", () => {
       expect(container.querySelector("[data-tool-aggregate-detail=write]")).not.toBeNull();
       expect(container.textContent).not.toContain("hello world");
 
-      const toggle = container.querySelector<HTMLButtonElement>("[data-tool-aggregate-detail=write]");
+      const toggle = container.querySelector<HTMLElement>("[data-tool-aggregate-detail=write]");
       if (!toggle) throw new Error("Expected the write block");
       await act(async () => toggle.click());
       expect(container.textContent).toContain("hello world");
