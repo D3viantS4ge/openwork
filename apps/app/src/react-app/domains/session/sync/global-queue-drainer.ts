@@ -389,11 +389,16 @@ async function attemptDrain(sessionId: string) {
       return;
     }
     if (getQueuedSendGeneration(sessionId) !== generation) return;
-    useSessionActivityStore.getState().setRunStatus(
-      context.workspaceId,
-      sessionId,
-      { type: "busy" },
-    );
+    // Shell (`!`) sends resolve only when the command finishes; the engine's
+    // busy → idle status events already drive the spinner, so re-asserting
+    // busy here would leave it stuck after completion.
+    if (draft.mode !== "shell") {
+      useSessionActivityStore.getState().setRunStatus(
+        context.workspaceId,
+        sessionId,
+        { type: "busy" },
+      );
+    }
     markTaskRunStart(sessionId);
   } catch (error) {
     if (isPromptAdmissionUnknown(error)) {

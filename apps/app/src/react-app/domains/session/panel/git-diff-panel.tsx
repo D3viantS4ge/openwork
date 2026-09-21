@@ -1,5 +1,6 @@
 /** @jsxImportSource react */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import {
   FileMinus2,
   FilePlus2,
@@ -63,6 +64,33 @@ export function GitDiffPanel({ sessionId, client, workspaceRoot }: GitDiffPanelP
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const selectedFileRef = useRef<string | null>(null);
+  // Draggable split between the file list (top) and the diff (bottom).
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [listHeight, setListHeight] = useState<number | null>(null);
+  const dragStartRef = useRef<{ startY: number; startHeight: number } | null>(null);
+
+  const handleDividerPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const container = containerRef.current;
+    if (!container) return;
+    const startHeight = listHeight ?? Math.round(container.clientHeight * 0.45);
+    dragStartRef.current = { startY: event.clientY, startHeight };
+    const onMove = (moveEvent: PointerEvent) => {
+      const drag = dragStartRef.current;
+      if (!drag) return;
+      const delta = moveEvent.clientY - drag.startY;
+      const min = 80;
+      const max = Math.max(min + 1, container.clientHeight - 120);
+      setListHeight(Math.round(Math.min(Math.max(drag.startHeight + delta, min), max)));
+    };
+    const onUp = () => {
+      dragStartRef.current = null;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
 
   const refresh = useCallback(() => setRefreshVersion((version) => version + 1), []);
 
@@ -192,8 +220,11 @@ export function GitDiffPanel({ sessionId, client, workspaceRoot }: GitDiffPanelP
       );
     }
     return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1 overflow-y-auto border-b border-border">
+      <div ref={containerRef} className="flex min-h-0 flex-1 flex-col">
+        <div
+          className="min-h-0 overflow-y-auto border-b border-border"
+          style={listHeight !== null ? { height: listHeight } : { flex: "0 0 45%" }}
+        >
           {files.map((entry) => {
             const statusClass =
               entry.status === "added" ? "text-green-11" :
@@ -217,6 +248,15 @@ export function GitDiffPanel({ sessionId, client, workspaceRoot }: GitDiffPanelP
               </button>
             );
           })}
+        </div>
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          onPointerDown={handleDividerPointerDown}
+          className="group relative z-10 h-1.5 shrink-0 cursor-row-resize touch-none border-y border-border bg-muted/40 transition-colors hover:bg-primary/15 active:bg-primary/25"
+          title="Drag to resize"
+        >
+          <div className="pointer-events-none absolute left-1/2 top-1/2 h-0.5 w-8 -translate-x-1/2 -translate-y-1/2 rounded-full bg-border transition-colors group-hover:bg-primary/50" />
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-3">
           {selectedDiff && selectedDiff.patch ? (

@@ -115,7 +115,7 @@ export default {
   "composer.plugin_files_unavailable": "Plugin files are unavailable.",
   "composer.placeholder": "Describe your task...",
   "composer.shell_placeholder": "Run a shell command…",
-  "composer.shell_mode_hint": "Shell mode — the command runs without the model. Backspace on the empty command to exit.",
+  "composer.shell_mode_hint": "Shell mode",
   "composer.shell_run_failed": "Command failed: {message}",
   "composer.shell_run_failed_generic": "The command failed to run.",
   "composer.remote_worker_paste_warning": "This is a remote worker. Sandboxes are remote too. To share files with it, upload them to the Shared folder in the sidebar.",

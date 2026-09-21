@@ -1234,7 +1234,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
   const [verifiedOpenTargets, setVerifiedOpenTargets] = useState<OpenTarget[]>([]);
   const [cloudQueueRetryVersion, setCloudQueueRetryVersion] = useState(0);
   const [pendingSendSessions, setPendingSendSessions] = useState<string[]>([]);
-  const pendingSendsRef = useRef(new Map<symbol, string>());
+  const pendingSendsRef = useRef(new Map<symbol, { owner: string; mode: PromptMode }>());
   const sending = pendingSendSessions.includes(sessionOwner);
   const pendingStopsRef = useRef(new Set<string>());
   const [pendingStopSessions, setPendingStopSessions] = useState<string[]>([]);
@@ -2268,8 +2268,8 @@ export function SessionSurface(props: SessionSurfaceProps) {
     const messageId = nextDraft.messageId ?? createPromptMessageID();
     const generation = getQueuedSendGeneration(props.sessionId);
     const submissionId = Symbol();
-    pendingSendsRef.current.set(submissionId, sessionOwner);
-    setPendingSendSessions([...pendingSendsRef.current.values()]);
+    pendingSendsRef.current.set(submissionId, { owner: sessionOwner, mode: nextDraft.mode ?? "prompt" });
+    setPendingSendSessions([...pendingSendsRef.current.values()].map((pending) => pending.owner));
     setError(null);
     try {
       if (archived || !archiveStateKnown) throw new Error("This session is read-only. Restore it before sending.");
@@ -2298,8 +2298,13 @@ export function SessionSurface(props: SessionSurfaceProps) {
       if (getQueuedSendGeneration(props.sessionId) !== generation) return result;
       if (result.outcome === "blocked" || result.outcome === "cancelled") return result;
       // Only report a run after the pre-send gate released the exact queued
-      // submission and the route accepted or sent it.
-      useSessionActivityStore.getState().setRunStatus(props.workspaceId, props.sessionId, { type: "busy" });
+      // submission and the route accepted or sent it. Shell (`!`) sends
+      // resolve only once the command finishes, and the engine already drives
+      // the busy → idle status events for the whole run — re-asserting busy
+      // here after completion would leave the sidebar spinner stuck.
+      if (nextDraft.mode !== "shell") {
+        useSessionActivityStore.getState().setRunStatus(props.workspaceId, props.sessionId, { type: "busy" });
+      }
       if (activeSessionOwnerRef.current === sessionOwner) {
         setAwaitingAssistantBaseline(renderedMessages.length);
       }
@@ -2335,7 +2340,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
       throw nextError;
     } finally {
       pendingSendsRef.current.delete(submissionId);
-      setPendingSendSessions([...pendingSendsRef.current.values()]);
+      setPendingSendSessions([...pendingSendsRef.current.values()].map((pending) => pending.owner));
     }
   }, [archived, archiveStateKnown, opencodeClient, openingHistory.readSendHistory, props.onSendDraft, props.opencodeBaseUrl, props.selectedAgent, props.sessionId, props.workspaceId, props.workspaceRoot, removeQueuedDraftFromStore, renderedMessages.length, sessionOwner, setError]);
 
@@ -2350,7 +2355,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
   // share the same immediate path.
   const handleSend = useCallback(async (sourceComposer?: ComposerSessionState) => {
     if (archived || !archiveStateKnown || sessionWorkHeld(props.opencodeBaseUrl, props.sessionId)) return;
-    if ([...pendingSendsRef.current.values()].includes(sessionOwner)) return;
+    if ([...pendingSendsRef.current.values()].some((pending) => pending.owner === sessionOwner)) return;
     const generation = getQueuedSendGeneration(props.sessionId);
     const composerCheckpoint = useComposerStateStore.getState().sessions[props.sessionId];
     const submittedComposer = sourceComposer ?? composerCheckpoint;
@@ -2488,10 +2493,13 @@ export function SessionSurface(props: SessionSurfaceProps) {
   }, [attachments.length, draft, handleSend, props.sessionId]);
 
   // Queue: hold the draft locally and clear the composer. The drain effect
-  // sends it once the session reports idle.
+  // sends it once the session reports idle. A shell (`!`) send stays "pending"
+  // for the whole command duration, so allow queueing a successor while only
+  // shell sends are in flight — the engine serializes shell runs and the
+  // drainer waits for idle before running the next queued command.
   const handleQueue = useCallback(() => {
     if (archived || !archiveStateKnown || sessionWorkHeld(props.opencodeBaseUrl, props.sessionId)) return;
-    if ([...pendingSendsRef.current.values()].includes(sessionOwner)) return;
+    if ([...pendingSendsRef.current.values()].some((pending) => pending.owner === sessionOwner && pending.mode !== "shell")) return;
     const text = draft.trim();
     if (!text && attachments.length === 0) return;
     const queuedDraft = withoutRevertTarget(buildDraft(text, attachments));
