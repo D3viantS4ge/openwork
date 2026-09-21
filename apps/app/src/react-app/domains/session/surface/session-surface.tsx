@@ -36,6 +36,7 @@ import type {
   ModelRef,
   PendingPermission,
   PendingQuestion,
+  PromptMode,
   SkillCard,
   TodoItem,
 } from "@/app/types";
@@ -125,6 +126,7 @@ import {
   getComposerAttachments,
   getComposerDraft,
   getComposerMentions,
+  getComposerMode,
   getComposerPasteParts,
   getComposerQueuedDrafts,
   getComposerRevertMessageId,
@@ -1023,12 +1025,14 @@ export function SessionSurface(props: SessionSurfaceProps) {
     (state) => state.statusesByWorkspaceId[props.workspaceId]?.[props.sessionId] ?? "idle",
   );
   const draft = useComposerStateStore((state) => getComposerDraft(state, props.sessionId));
+  const composerMode = useComposerStateStore((state) => getComposerMode(state, props.sessionId));
   const attachments = useComposerStateStore((state) => getComposerAttachments(state, props.sessionId));
   // Preparation belongs to the submitted message, not the next composer draft.
   const [attachmentsUploading, setAttachmentsUploading] = useState(false);
   const mentions = useComposerStateStore((state) => getComposerMentions(state, props.sessionId));
   const pasteParts = useComposerStateStore((state) => getComposerPasteParts(state, props.sessionId));
   const setComposerDraft = useComposerStateStore((state) => state.setDraft);
+  const setComposerMode = useComposerStateStore((state) => state.setMode);
   const replaceComposerDraft = useComposerStateStore((state) => state.replaceDraft);
   const hydrateComposerDraft = useComposerStateStore((state) => state.hydrateDraft);
   const clearComposerRevertTarget = useComposerStateStore((state) => state.clearRevertTarget);
@@ -1095,7 +1099,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
       // edit) must not rebuild the composer session from scratch: that would
       // drop the live revertMessageId (the edited-message highlight) before the
       // browser paints. A scope change or first mount keeps the clean rebuild.
-      hydrateComposerDraft(props.sessionId, nextDraft, claimedScopeKey === persistedDraftKey);
+      hydrateComposerDraft(props.sessionId, nextDraft, claimedScopeKey === persistedDraftKey, persistedDraftSnapshot?.mode ?? "prompt");
     }
     setHydratedDraftScopeKey(persistedDraftKey);
   }, [hydrateComposerDraft, persistDraft, persistedDraftKey, persistedDraftSnapshot, props.sessionId]);
@@ -2202,7 +2206,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
     // A selected Connect skill is a mention, even though its label starts with /.
     const slashCommand = text.trimStart().startsWith("[connect-skill ") ? null : parseSlashCommandInvocation(resolved);
     return {
-      mode: "prompt",
+      mode: sourceComposer?.mode ?? getComposerMode(useComposerStateStore.getState(), props.sessionId),
       parts,
       attachments: nextAttachments,
       text,
@@ -2238,6 +2242,10 @@ export function SessionSurface(props: SessionSurfaceProps) {
     }
     setComposerAttachments(props.sessionId, retained);
   }, [attachments, props.sessionId, setComposerAttachments, setComposerDraft]);
+
+  const handleComposerModeChange = useCallback((mode: PromptMode) => {
+    setComposerMode(props.sessionId, mode);
+  }, [props.sessionId, setComposerMode]);
 
   const handleCopyTranscript = async () => {
     try {
@@ -2431,8 +2439,12 @@ export function SessionSurface(props: SessionSurfaceProps) {
           [sessionOwner]: (state.pendingMessages[sessionOwner] ?? []).map((item) => item.draft === nextDraft ? { ...item, settled: true } : item),
         } }));
       }
-    } catch {
+    } catch (error) {
       restore();
+      if (nextDraft.mode === "shell") {
+        const message = error instanceof Error ? error.message : "";
+        toast.error(message ? t("composer.shell_run_failed", { message }) : t("composer.shell_run_failed_generic"));
+      }
     } finally {
       setAttachmentsUploading(false);
     }
@@ -2779,7 +2791,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
     const persistableText = persistableComposerDraftText(nextDraft.text);
     persistDraft({ text: persistableText, mode: nextDraft.mode });
     props.onDraftChange(nextDraft);
-  }, [attachments, buildDraft, draft, hydratedDraftScopeKey, persistDraft, persistedDraftKey, props.onDraftChange, props.sessionId]);
+  }, [attachments, buildDraft, composerMode, draft, hydratedDraftScopeKey, persistDraft, persistedDraftKey, props.onDraftChange, props.sessionId]);
 
   const handleAttachFiles = useCallback((files: File[]) => {
     if (!props.attachmentsEnabled) {
@@ -3681,6 +3693,8 @@ export function SessionSurface(props: SessionSurfaceProps) {
           runModeControl={<WorkspaceRunModeMenu client={props.client} workspaceId={props.workspaceId} busy={chatStreaming || preparingCloudTools || Boolean(props.activePermission || props.activeQuestion)} />}
           draft={autoSendPayload ? draft : autoSending ? "" : draft}
           mentions={mentions}
+          mode={composerMode}
+          onModeChange={handleComposerModeChange}
           stats={currentSnapshot?.session}
           contextTokens={contextTokens}
           contextCost={contextCost}

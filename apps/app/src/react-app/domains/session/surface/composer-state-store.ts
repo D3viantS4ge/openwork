@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 import { createPromptMessageID } from "../../../../app/lib/opencode";
-import type { ComposerAttachment, ComposerDraft } from "../../../../app/types";
+import type { ComposerAttachment, ComposerDraft, PromptMode } from "../../../../app/types";
 import type { ComposerMentionKind } from "./composer/mention-encoding";
 
 export type QueuedComposerItem = {
@@ -18,6 +18,8 @@ export type ComposerPastePart = {
 
 export type ComposerSessionState = {
   draft: string;
+  /** Shell mode is entered by typing `!` as the first character; commands run without the LLM. */
+  mode: PromptMode;
   attachments: ComposerAttachment[];
   mentions: Record<string, ComposerMentionKind>;
   pasteParts: ComposerPastePart[];
@@ -27,6 +29,7 @@ export type ComposerSessionState = {
 export function snapshotComposerSessionState(state: ComposerSessionState): ComposerSessionState {
   return {
     draft: state.draft,
+    mode: state.mode,
     attachments: state.attachments.map((attachment) => ({ ...attachment })),
     mentions: { ...state.mentions },
     pasteParts: state.pasteParts.map((part) => ({ ...part })),
@@ -50,8 +53,9 @@ export type ComposerStateStore = {
   sessions: Record<string, ComposerSessionState>;
   queuedDrafts: Record<string, QueuedComposerItem[]>;
   setDraft: (sessionId: string, draft: string) => void;
+  setMode: (sessionId: string, mode: PromptMode) => void;
   replaceDraft: (sessionId: string, draft: string, revertMessageId?: string | null) => void;
-  hydrateDraft: (sessionId: string, draft: string, preserveState?: boolean) => void;
+  hydrateDraft: (sessionId: string, draft: string, preserveState?: boolean, mode?: PromptMode) => void;
   clearRevertTarget: (sessionId: string) => void;
   setAttachments: (sessionId: string, attachments: ComposerAttachment[]) => void;
   setMentions: (sessionId: string, mentions: Record<string, ComposerMentionKind>) => void;
@@ -98,6 +102,7 @@ export function composerDraftNeedsHydration(input: {
 function createEmptyComposerSession(): ComposerSessionState {
   return {
     draft: "",
+    mode: "prompt",
     attachments: [],
     mentions: {},
     pasteParts: [],
@@ -125,13 +130,18 @@ export const useComposerStateStore = create<ComposerStateStore>((set) => ({
     if (current.draft === draft && current.revertMessageId === revertMessageId) return state;
     return { sessions: { ...state.sessions, [sessionId]: { ...current, draft, revertMessageId } } };
   }),
+  setMode: (sessionId, mode) => set((state) => {
+    const current = getWritableSession(state, sessionId);
+    if (current.mode === mode) return state;
+    return { sessions: { ...state.sessions, [sessionId]: { ...current, mode } } };
+  }),
   replaceDraft: (sessionId, draft, revertMessageId = null) => set((state) => {
     const current = getWritableSession(state, sessionId);
     const target = revertMessageId?.trim() || null;
     if (current.draft === draft && current.revertMessageId === target) return state;
     return { sessions: { ...state.sessions, [sessionId]: { ...current, draft, revertMessageId: target } } };
   }),
-  hydrateDraft: (sessionId, draft, preserveState = false) => set((state) => {
+  hydrateDraft: (sessionId, draft, preserveState = false, mode: PromptMode = "prompt") => set((state) => {
     const current = state.sessions[sessionId];
     if (!draft) {
       if (!current) return state;
@@ -146,11 +156,12 @@ export const useComposerStateStore = create<ComposerStateStore>((set) => ({
       // the edit target before the browser paints, hiding the edited-message
       // highlight. Sending still clears via clearSession; clearing the draft
       // still nulls revertMessageId via setDraft.
-      if (current.draft === draft) return state;
-      return { sessions: { ...state.sessions, [sessionId]: { ...current, draft } } };
+      if (current.draft === draft && current.mode === mode) return state;
+      return { sessions: { ...state.sessions, [sessionId]: { ...current, draft, mode } } };
     }
     if (
       current?.draft === draft
+      && current.mode === mode
       && current.attachments.length === 0
       && Object.keys(current.mentions).length === 0
       && current.pasteParts.length === 0
@@ -159,7 +170,7 @@ export const useComposerStateStore = create<ComposerStateStore>((set) => ({
     return {
       sessions: {
         ...state.sessions,
-        [sessionId]: { ...createEmptyComposerSession(), draft },
+        [sessionId]: { ...createEmptyComposerSession(), draft, mode },
       },
     };
   }),
@@ -248,6 +259,10 @@ export const useComposerStateStore = create<ComposerStateStore>((set) => ({
 
 export function getComposerDraft(state: ComposerStateStore, sessionId: string): string {
   return state.sessions[sessionId]?.draft ?? "";
+}
+
+export function getComposerMode(state: ComposerStateStore, sessionId: string): PromptMode {
+  return state.sessions[sessionId]?.mode ?? "prompt";
 }
 
 export function getComposerAttachments(state: ComposerStateStore, sessionId: string): ComposerAttachment[] {

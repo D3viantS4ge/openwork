@@ -88,6 +88,10 @@ type EditorProps = {
   attachments?: ComposerAttachmentToken[];
   submitDisabled: boolean;
   placeholder: string;
+  /** When true the composer is in `!` shell mode (commands run without the LLM). */
+  shellMode?: boolean;
+  /** Called when the user types `!` first (enter shell) or backspaces the empty command (exit). */
+  onShellModeChange?: (shell: boolean) => void;
   onChange: (value: string) => void;
   onMentionQueryChange?: (query: string | null) => void;
   onSubmit: (options: { queue: boolean }) => void | Promise<void>;
@@ -2062,6 +2066,8 @@ export const LexicalPromptEditor = forwardRef<LexicalPromptEditorHandle, EditorP
   const valueRef = useRef(props.value);
   const onChangeRef = useRef(props.onChange);
   const onMentionQueryChangeRef = useRef(props.onMentionQueryChange);
+  const shellModeRef = useRef(props.shellMode ?? false);
+  const onShellModeChangeRef = useRef(props.onShellModeChange);
 
   useEffect(() => {
     valueRef.current = props.value;
@@ -2071,6 +2077,14 @@ export const LexicalPromptEditor = forwardRef<LexicalPromptEditorHandle, EditorP
     onChangeRef.current = props.onChange;
     onMentionQueryChangeRef.current = props.onMentionQueryChange;
   }, [props.onChange, props.onMentionQueryChange]);
+
+  useEffect(() => {
+    shellModeRef.current = props.shellMode ?? false;
+  }, [props.shellMode]);
+
+  useEffect(() => {
+    onShellModeChangeRef.current = props.onShellModeChange;
+  }, [props.onShellModeChange]);
 
   const initialConfig = useMemo(
     () => ({
@@ -2117,13 +2131,31 @@ export const LexicalPromptEditor = forwardRef<LexicalPromptEditorHandle, EditorP
         <PlainTextPlugin
           contentEditable={
             <ContentEditable
-              className="min-h-[60px] max-h-[280px] w-full resize-none overflow-y-auto bg-transparent text-base leading-6 text-dls-text outline-none placeholder:text-dls-secondary lg:text-[13px] lg:leading-[1.55] [&_p]:min-h-[1.5rem] [&_p]:m-0"
+              className={`min-h-[60px] max-h-[280px] w-full resize-none overflow-y-auto bg-transparent text-base leading-6 text-dls-text outline-none placeholder:text-dls-secondary lg:text-[13px] lg:leading-[1.55] [&_p]:min-h-[1.5rem] [&_p]:m-0${props.shellMode ? " font-mono" : ""}`}
               aria-placeholder={props.placeholder}
               placeholder={<span />}
               onPaste={props.onPaste}
               onDrop={props.onDrop}
               onDragOver={props.onDragOver}
               onDragLeave={props.onDragLeave}
+              onKeyDownCapture={(event) => {
+                // Shell-mode entry/exit lives at the keydown boundary so the
+                // `!` never becomes a real character: typing `!` first enters
+                // shell mode (pasted `!` text is untouched), and backspace on
+                // the empty shell command exits back to prompt mode.
+                const shellMode = shellModeRef.current;
+                const empty = valueRef.current.trim().length === 0;
+                if (!shellMode && empty && event.key === "!" && !event.ctrlKey && !event.metaKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  onShellModeChangeRef.current?.(true);
+                  return;
+                }
+                if (shellMode && empty && event.key === "Backspace" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+                  event.preventDefault();
+                  onShellModeChangeRef.current?.(false);
+                  return;
+                }
+              }}
             />
           }
           placeholder={

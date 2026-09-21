@@ -4,6 +4,7 @@ import {
   Blocks,
   ArrowLeft,
   ArrowRight,
+  GitBranch,
   Globe,
   Loader2,
   Plus,
@@ -46,10 +47,14 @@ import {
 } from "./utils";
 import { LoginSyncCard } from "../../browser-logins/login-sync-card";
 import { createBrowserBoundsSync } from "./browser-bounds-sync";
+import { GitDiffPanel } from "./git-diff-panel";
+import type { Client } from "@/app/types";
 
 type SidePanelProps = {
   sessionId: string;
   client: OpenworkServerClient | null;
+  /** OpenCode client for the session's workspace, used by the git diff tab. */
+  opencodeClient: Client | null;
   workspaceId: string | null;
   workspaceRoot: string;
   isRemoteWorkspace?: boolean;
@@ -147,7 +152,7 @@ function SidePanelTab({ tab, active, onSelect, onClose }: SidePanelTabProps) {
             ) : (
               <Globe />
             )
-          ) : tab.type === "app" ? <Blocks /> : (
+          ) : tab.type === "app" ? <Blocks /> : tab.type === "diff" ? <GitBranch /> : (
             <ArtifactIcon type={tab.preview} />
           )}
           <span className="min-w-0 flex-1 truncate text-left">{tab.label}</span>
@@ -511,6 +516,7 @@ const browserOperationLabels: Record<string, string> = {
 export function SidePanel({
   sessionId,
   client,
+  opencodeClient,
   workspaceId,
   workspaceRoot,
   isRemoteWorkspace = false,
@@ -780,6 +786,15 @@ export function SidePanel({
               workspaceRoot={workspaceRoot}
               isRemoteWorkspace={isRemoteWorkspace}
               onClose={onClose}
+            />
+          </div>
+        ) : activeTab?.type === "diff" ? (
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <GitDiffPanel
+              sessionId={sessionId}
+              client={opencodeClient}
+              workspaceRoot={workspaceRoot}
+              isRemoteWorkspace={isRemoteWorkspace}
             />
           </div>
         ) : null}

@@ -1210,6 +1210,12 @@ export async function proxyOpencodeV2Request(input: {
     }
     target.searchParams.set("location[directory]", input.workspace.path);
   }
+  // The v2-daemon `/vcs` surface resolves its directory from the `directory`
+  // query param. Scope it to this workspace so git status/diff reflect the
+  // server-side working tree (the git diff side-panel tab).
+  if (forwardedPath.startsWith("/vcs")) {
+    target.searchParams.set("directory", input.workspace.path);
+  }
 
   const headers = new Headers(input.request.headers);
   headers.delete("authorization");
@@ -1221,8 +1227,10 @@ export async function proxyOpencodeV2Request(input: {
 
   // The v2 daemon has a global session namespace: a location query does not
   // prevent reading a session owned by another workspace. Match the v1 mount's
-  // ownership boundary before forwarding session reads or mutations.
-  const sessionMatch = forwardedPath.match(/^\/api\/session\/([^/]+)(?:\/|$)/);
+  // ownership boundary before forwarding session reads or mutations. The match
+  // covers both the legacy `/api/session/{id}` surface and the v2-daemon
+  // `/session/{id}` surface (e.g. `!` shell mode runs `POST /session/{id}/shell`).
+  const sessionMatch = forwardedPath.match(/^\/(?:api\/)?session\/([^/]+)(?:\/|$)/);
   const sessionId = sessionMatch?.[1] ? decodeURIComponent(sessionMatch[1]) : null;
   if (sessionId?.startsWith("ses_")) {
     const sessionUrl = new URL(target);

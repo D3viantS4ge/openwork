@@ -189,7 +189,8 @@ export async function compactSession(
 
 /**
  * Execute a shell command in a session. Uses `shell` from the SDK.
- * Falls back to `promptAsync` with a `!` prefix if `shell` is unavailable.
+ * `agent` names the session's agent (the engine requires it); when omitted
+ * the engine rejects the request, so senders pass the selected agent.
  */
 export async function shellInSession(
   client: Client,
@@ -197,7 +198,13 @@ export async function shellInSession(
   command: string,
   options?: { model?: { providerID: string; modelID: string }; agent?: string; variant?: string; messageID?: string },
 ): Promise<void> {
-  const result = await client.session.shell({ sessionID, command, messageID: options?.messageID });
+  const result = await client.session.shell({
+    sessionID,
+    command,
+    ...(options?.messageID ? { messageID: options.messageID } : {}),
+    ...(options?.agent ? { agent: options.agent } : {}),
+    ...(options?.model ? { model: options.model } : {}),
+  });
   assertNoClientError(result);
 }
 

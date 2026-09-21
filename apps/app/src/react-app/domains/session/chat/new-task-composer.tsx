@@ -5,7 +5,7 @@ import type { Agent } from "@opencode-ai/sdk/v2/client";
 import type { CloudImportedPlugin } from "@/app/cloud/import-state";
 import { createDenClient, readDenSettings } from "@/app/lib/den";
 import type { OpenworkServerClient } from "@/app/lib/openwork-server";
-import type { ComposerAttachment, McpServerEntry, McpStatusMap, ModelOption, ModelRef, SkillCard, SlashCommandOption } from "@/app/types";
+import type { ComposerAttachment, McpServerEntry, McpStatusMap, ModelOption, ModelRef, PromptMode, SkillCard, SlashCommandOption } from "@/app/types";
 import { t } from "@/i18n";
 import type { ComposerSettingsSection } from "@/react-app/domains/settings/library";
 import { ReactSessionComposer } from "@/react-app/domains/session/surface/composer/composer";
@@ -95,6 +95,7 @@ type NewTaskContinuationHolder = {
 function emptyNewTaskComposerState(): ComposerSessionState {
   return {
     draft: "",
+    mode: "prompt",
     attachments: [],
     mentions: {},
     pasteParts: [],
@@ -120,6 +121,7 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
   const draftOwnerKey = context?.draftOwnerKey ?? "legacy";
   const [mentions, setMentions] = useState<Record<string, ComposerMentionKind>>({});
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [mode, setMode] = useState<PromptMode>("prompt");
   const [skills, setSkills] = useState<SkillCard[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServerEntry[]>([]);
   const [mcpStatuses, setMcpStatuses] = useState<McpStatusMap>({});
@@ -167,6 +169,7 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
       props.onDraftChange("");
       setAttachments([]);
       setMentions({});
+      setMode("prompt");
       setPastedText([]);
       setPendingSubmission(null);
       setSubmissionError(null);
@@ -202,6 +205,13 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
     setMentions(next);
   };
 
+  const updateMode = (next: PromptMode) => {
+    const holder = continuationHolderRef.current;
+    if (holder.frozen) return;
+    holder.state = { ...holder.state, mode: next };
+    setMode(next);
+  };
+
   const updatePasteParts = (next: PastedTextChip[]) => {
     const holder = continuationHolderRef.current;
     if (holder.frozen) return;
@@ -220,6 +230,7 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
     setAttachments(restored.attachments);
     setMentions(restored.mentions);
     setPastedText(restored.pasteParts);
+    setMode(restored.mode);
   };
 
   const listSkills = workspaceClient && workspaceId
@@ -395,6 +406,7 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
     setAttachments([]);
     setMentions({});
     setPastedText([]);
+    setMode("prompt");
     try {
       await props.onRunTask(resolved, submitted.attachments, {
         submitted,
@@ -430,6 +442,8 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
       runModeControl={<WorkspaceRunModeMenu client={workspaceClient} workspaceId={workspaceId} busy={props.busy} />}
       draft={props.draft}
       mentions={mentions}
+      mode={mode}
+      onModeChange={updateMode}
       onDraftChange={handleDraftChange}
       onSend={handleRunTask}
       onSteer={noop}

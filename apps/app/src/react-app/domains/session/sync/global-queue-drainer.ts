@@ -115,7 +115,7 @@ async function performQueuedDraftSend(
   );
 
   if (draft.mode === "shell") {
-    await shellInSession(opencodeClient, sessionId, text, { messageID: draft.messageId });
+    await shellInSession(opencodeClient, sessionId, text, { messageID: draft.messageId, agent: context.agent ?? undefined });
     return "sent";
   }
 

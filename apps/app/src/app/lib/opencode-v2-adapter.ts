@@ -1,5 +1,6 @@
 import type {
   FilePart,
+  Message,
   Model,
   Part,
   PermissionRequest,
@@ -2018,7 +2019,50 @@ export function createClientV2(
     revert: async (): Promise<FieldsResult<Session>> => unsupportedResult(baseUrl, "session.revert"),
     unrevert: async (): Promise<FieldsResult<Session>> => unsupportedResult(baseUrl, "session.unrevert"),
     summarize: async (): Promise<FieldsResult<boolean>> => unsupportedResult(baseUrl, "session.summarize"),
-    shell: async (): Promise<FieldsResult<Record<string, never>>> => unsupportedResult(baseUrl, "session.shell"),
+    shell: async (
+      parameters: {
+        sessionID: string;
+        directory?: string;
+        workspace?: string;
+        messageID?: string;
+        agent?: string;
+        model?: { providerID: string; modelID: string };
+        command?: string;
+      },
+      options?: RequestOptions,
+    ): Promise<FieldsResult<{ info: Message; parts: Part[] }>> => {
+      // `!` shell mode runs a command inside the session without the LLM. The
+      // engine exposes this on the v2-daemon surface (`/session/{id}/shell`,
+      // no `/api` prefix), scoped by `directory` — injected by the OpenWork
+      // server proxy for remote workspaces.
+      const query = new URLSearchParams();
+      const targetDirectory = parameters.directory ?? directory;
+      if (targetDirectory) query.set("directory", targetDirectory);
+      if (parameters.workspace) query.set("workspace", parameters.workspace);
+      const queryString = query.toString();
+      const result = await request(
+        "POST",
+        `/session/${encodeURIComponent(parameters.sessionID)}/shell${queryString ? `?${queryString}` : ""}`,
+        {
+          command: parameters.command,
+          ...(parameters.messageID ? { messageID: parameters.messageID } : {}),
+          ...(parameters.agent ? { agent: parameters.agent } : {}),
+          ...(parameters.model ? { model: parameters.model } : {}),
+        },
+        options?.signal,
+      );
+      if (!result.response.ok) return failedResult(result);
+      const payload = responseData(result.payload);
+      const info = isRecord(payload) ? payload.info : undefined;
+      const parts = isRecord(payload) ? payload.parts : undefined;
+      if (!isRecord(info) || !Array.isArray(parts)) {
+        return failedResult({ ...result, payload: { name: "InvalidV2ShellResponse" } });
+      }
+      return successfulResult(result, {
+        info: info as unknown as Message,
+        parts: parts as unknown as Part[],
+      });
+    },
     command: async (): Promise<FieldsResult<Record<string, never>>> => unsupportedResult(baseUrl, "session.command"),
   };
 

@@ -6,7 +6,7 @@ import { AppWindowMac, Cloud, Monitor, ArrowUp, Check, ChevronDown, ChevronRight
 import fuzzysort from "fuzzysort";
 import { toast } from "@/components/ui/sonner";
 import type { CloudImportedPlugin, CloudImportedPluginFile } from "@/app/cloud/import-state";
-import type { ComposerAttachment, McpServerEntry, McpStatus, McpStatusMap, ModelOption, ModelRef, SkillCard, SlashCommandOption } from "@/app/types";
+import type { ComposerAttachment, McpServerEntry, McpStatus, McpStatusMap, ModelOption, ModelRef, PromptMode, SkillCard, SlashCommandOption } from "@/app/types";
 import { DEFAULT_AGENT_NAME } from "@/app/constants";
 import { t } from "@/i18n";
 import { useComposerStateStore } from "../composer-state-store";
@@ -53,6 +53,9 @@ type ToolMenuSection = "agents" | "commands" | "skills" | "connections" | "plugi
 type ComposerProps = {
   draft: string;
   mentions: Record<string, ComposerMentionKind>;
+  /** Composer mode: "prompt" (normal) or "shell" (`!` mode — runs the command without the LLM). */
+  mode: PromptMode;
+  onModeChange: (mode: PromptMode) => void;
   onDraftChange: (value: string) => void;
   onSend: () => void | Promise<void>;
   onSteer: () => void | Promise<void>;
@@ -367,17 +370,24 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
 
   // Editor submit (Enter). While idle this sends normally; while busy
   // Enter queues until the agent finishes, and Cmd/Ctrl+Enter steers.
+  // In shell mode the command always runs without the LLM: submit immediately
+  // when idle, otherwise queue it like any other follow-up.
   const handleEditorSubmit = useCallback((options: { queue: boolean }) => {
     const hasContent = props.draft.trim().length > 0 || props.attachments.length > 0;
     if (!hasContent) return;
     if (props.submissionPreparing) return;
+    if (props.mode === "shell") {
+      if (props.busy) void props.onQueue();
+      else void props.onSend();
+      return;
+    }
     if (props.busy) {
       if (options.queue) void props.onSteer();
       else void props.onQueue();
       return;
     }
     void props.onSend();
-  }, [props.busy, props.draft, props.attachments, props.onSend, props.onSteer, props.onQueue, props.submissionPreparing]);
+  }, [props.busy, props.draft, props.attachments, props.mode, props.onSend, props.onSteer, props.onQueue, props.submissionPreparing]);
 
   const slashCommandQuery = getSlashCommandQuery(props.draft);
   const slashOpenNext = slashCommandQuery !== null;
@@ -1349,6 +1359,17 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
           ) : null}
 
           <div className="px-4 pt-3 pb-2">
+            {/* Shell-mode (`!`) indicator. The `!` is not part of the command
+                text — typing `!` first switches the composer to shell mode and
+                backspace at the empty command switches back. */}
+            {props.mode === "shell" ? (
+              <div className="mb-1.5 flex items-center gap-1.5" data-composer-shell-mode>
+                <span className="inline-flex h-4 min-w-4 items-center justify-center rounded border border-amber-6/50 bg-amber-3/40 px-1 font-mono text-[11px] font-bold leading-none text-amber-11" aria-hidden>
+                  !
+                </span>
+                <span className="text-[11px] text-muted-foreground">{t("composer.shell_mode_hint")}</span>
+              </div>
+            ) : null}
             {/* Editor */}
             <LexicalPromptEditor
               ref={editorRef}
@@ -1357,7 +1378,9 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
               pastedText={pastedTextTokens}
               attachments={attachmentTokens}
               submitDisabled={props.disabled}
-              placeholder={t("composer.placeholder")}
+              placeholder={props.mode === "shell" ? t("composer.shell_placeholder") : t("composer.placeholder")}
+              shellMode={props.mode === "shell"}
+              onShellModeChange={(shell) => props.onModeChange(shell ? "shell" : "prompt")}
               onChange={props.onDraftChange}
               onMentionQueryChange={setActiveMentionQuery}
               onSubmit={handleEditorSubmit}

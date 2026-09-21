@@ -549,7 +549,7 @@ export function createSessionActionsStore(options: {
       const promptOverrides = reasoningEffort ? ({ reasoning_effort: reasoningEffort } as const) : undefined;
 
       if (resolvedDraft.mode === "shell") {
-        await shellInSession(c, sessionID, content);
+        await shellInSession(c, sessionID, content, { agent: agent ?? undefined });
       } else if (resolvedDraft.command || compactCommand) {
         if (compactCommand) {
           await compactCurrentSession(sessionID);

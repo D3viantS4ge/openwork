@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { usePanelRef } from "react-resizable-panels";
 import { DesktopUpdateButton } from "../../settings/state/desktop-updater-provider";
-import { ArrowLeft, Cloud, FileText, Globe, Maximize2, MoreHorizontal, PanelRight, TextSearch, X, Zap } from "lucide-react";
+import { ArrowLeft, Cloud, FileText, GitBranch, Globe, Maximize2, MoreHorizontal, PanelRight, TextSearch, X, Zap } from "lucide-react";
 
 import { resolveExtensionIconSrc } from "@/react-app/design-system/extension-icon-src";
 import { isMacPlatform } from "@/app/utils";
@@ -102,7 +102,9 @@ import { isSameWorkbenchSession } from "./workbench-store";
 import { ReactSessionRuntime } from "../sync/runtime-sync";
 import { useSessionInteractions } from "../sync/use-session-interactions";
 import { createClient } from "@/app/lib/opencode";
+import { unwrap } from "@/app/lib/opencode";
 import { createClientV2, isOpencodeV2BaseUrl } from "@/app/lib/opencode-v2-adapter";
+import type { VcsInfo } from "@opencode-ai/sdk/v2/client";
 import {
   availableNarrowPane,
   NarrowPaneSwitcher,
@@ -466,6 +468,33 @@ export function SessionPage(props: SessionPageProps) {
   const sessionPanelState = useSessionPanelState(sidePanelSessionKey);
   const activePanelTab = useActivePanelTab(sidePanelSessionKey);
   const [hiddenTargetRevision, setHiddenTargetRevision] = useState(0);
+  // OpenCode client for the side panel's git diff tab (same construction the
+  // session surface uses, so local and remote workspaces both resolve).
+  const sidePanelOpencodeClient = useMemo(() => {
+    if (!props.opencodeBaseUrl) return null;
+    return isOpencodeV2BaseUrl(props.opencodeBaseUrl)
+      ? createClientV2(props.opencodeBaseUrl, props.selectedWorkspaceRoot, { token: props.openworkServerToken ?? undefined })
+      : createClient(props.opencodeBaseUrl, props.selectedWorkspaceRoot, { token: props.openworkServerToken ?? undefined, mode: "openwork" });
+  }, [props.opencodeBaseUrl, props.openworkServerToken, props.selectedWorkspaceRoot]);
+  const [workspaceIsGitRepo, setWorkspaceIsGitRepo] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setWorkspaceIsGitRepo(null);
+    if (!sidePanelOpencodeClient || !props.selectedWorkspaceRoot) return;
+    void (async () => {
+      try {
+        const info = unwrap(
+          await sidePanelOpencodeClient.vcs.get({ directory: props.selectedWorkspaceRoot }),
+        ) as VcsInfo | null;
+        if (!cancelled) setWorkspaceIsGitRepo(Boolean(info && (info.branch || info.default_branch)));
+      } catch {
+        if (!cancelled) setWorkspaceIsGitRepo(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [props.selectedWorkspaceRoot, sidePanelOpencodeClient]);
   const hiddenAccessibleTargetIds = useMemo(
     () => readHiddenAccessibleTargetIds(props.selectedWorkspaceId, props.selectedSessionId),
     [props.selectedSessionId, props.selectedWorkspaceId, hiddenTargetRevision],
@@ -481,7 +510,8 @@ export function SessionPage(props: SessionPageProps) {
   const sidePanelOpen = activeSidePanel !== null;
   const panelRailActive = activeSidePanel === "panel";
   const browserRailActive = panelRailActive && activePanelTab?.type === "browser";
-  const filesRailActive = panelRailActive && activePanelTab?.type !== "browser";
+  const gitDiffRailActive = panelRailActive && activePanelTab?.type === "diff";
+  const filesRailActive = panelRailActive && activePanelTab?.type !== "browser" && activePanelTab?.type !== "diff";
   const showCloudSignIn = shellConfig.cloudSignin && !denAuth.isSignedIn && denAuth.status !== "checking";
   const openCloudSignIn = useCallback(() => {
     const baseUrl = readDenBootstrapConfig().baseUrl;
@@ -901,6 +931,15 @@ export function SessionPage(props: SessionPageProps) {
 
     setCurrentSidePanel("panel");
   }, [activePanelTab, artifactFileTargets, hasArtifactTargets, openTab, props.selectedSessionId, selectTab, sessionPanelState, setCurrentSidePanel, sidePanelSessionKey]);
+  const openGitDiffPane = useCallback(() => {
+    if (!props.selectedSessionId) {
+      selectTab(sidePanelSessionKey, null);
+      setCurrentSidePanel("panel");
+      return;
+    }
+    openTab(props.selectedSessionId, { id: "git-diff", type: "diff", label: "Git Diff" });
+    setCurrentSidePanel("panel");
+  }, [openTab, props.selectedSessionId, selectTab, setCurrentSidePanel, sidePanelSessionKey]);
   const removeAccessibleTarget = useCallback((target: OpenTarget) => {
     const nextHiddenIds = new Set(hiddenAccessibleTargetIds);
     nextHiddenIds.add(target.id);
@@ -1322,6 +1361,7 @@ export function SessionPage(props: SessionPageProps) {
     <SidePanel
       sessionId={sidePanelSessionKey}
       client={props.openworkServerClient}
+      opencodeClient={sidePanelOpencodeClient}
       workspaceId={props.runtimeWorkspaceId}
       workspaceRoot={props.selectedWorkspaceRoot}
       isRemoteWorkspace={props.surface?.isRemoteWorkspace ?? false}
@@ -1976,6 +2016,21 @@ export function SessionPage(props: SessionPageProps) {
                 <Globe size={15} />
               </Button>
             ) : null}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className={cn(
+                "rounded-xl transition-colors hover:bg-muted hover:text-foreground",
+                gitDiffRailActive && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
+              )}
+              onClick={openGitDiffPane}
+              disabled={workspaceIsGitRepo === false}
+              title={workspaceIsGitRepo === false ? "Not a git repository" : "Git diff"}
+              aria-label="Git diff"
+              aria-pressed={gitDiffRailActive}
+            >
+              <GitBranch size={15} />
+            </Button>
             <Button
               variant="ghost"
               size="icon-sm"

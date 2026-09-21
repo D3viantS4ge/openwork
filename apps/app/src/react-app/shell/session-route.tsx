@@ -1590,7 +1590,7 @@ export function SessionRoute() {
 
                 if (draft.mode === "shell") {
                   onPrepared?.();
-                  await shellInSession(opencodeClient, targetSessionId, text, { messageID: draft.messageId });
+                  await shellInSession(opencodeClient, targetSessionId, text, { messageID: draft.messageId, agent: sendAgent ?? undefined });
                   return;
                 }
 
@@ -1950,7 +1950,7 @@ export function SessionRoute() {
                 trackTaskStarted(targetSessionId, telemetryDimensions);
                 if (draft.mode === "shell") {
                   onPrepared?.();
-                  await shellInSession(workspaceOpencodeClient, targetSessionId, text, { messageID: draft.messageId });
+                  await shellInSession(workspaceOpencodeClient, targetSessionId, text, { messageID: draft.messageId, agent: sendAgent ?? undefined });
                   return;
                 }
                 if (draft.command) {
