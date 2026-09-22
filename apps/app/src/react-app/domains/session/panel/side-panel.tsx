@@ -795,6 +795,7 @@ export function SidePanel({
               client={opencodeClient}
               workspaceRoot={workspaceRoot}
               isRemoteWorkspace={isRemoteWorkspace}
+              onClose={onClose}
             />
           </div>
         ) : null}

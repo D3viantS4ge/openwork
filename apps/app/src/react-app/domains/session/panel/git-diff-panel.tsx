@@ -8,6 +8,7 @@ import {
   GitBranch,
   Loader2,
   RefreshCw,
+  X,
 } from "lucide-react";
 
 import type { VcsFileDiff, VcsFileStatus, VcsInfo } from "@opencode-ai/sdk/v2/client";
@@ -26,6 +27,8 @@ type GitDiffPanelProps = {
   /** Workspace root directory to diff. */
   workspaceRoot: string;
   isRemoteWorkspace?: boolean;
+  /** Closes the side panel (same affordance as the artifact panel). */
+  onClose: () => void;
 };
 
 type LoadState = "loading" | "ready" | "error";
@@ -55,7 +58,7 @@ function isRepoTouchingToolPart(part: unknown): boolean {
 
 const EMPTY_STATUS: Record<VcsFileStatus["status"], number> = { added: 0, deleted: 0, modified: 0 };
 
-export function GitDiffPanel({ sessionId, client, workspaceRoot }: GitDiffPanelProps) {
+export function GitDiffPanel({ sessionId, client, workspaceRoot, onClose }: GitDiffPanelProps) {
   const [state, setState] = useState<LoadState>("loading");
   const [isRepo, setIsRepo] = useState(true);
   const [branch, setBranch] = useState<string | null>(null);
@@ -290,6 +293,14 @@ export function GitDiffPanel({ sessionId, client, workspaceRoot }: GitDiffPanelP
             </Button>
           )} />
           <TooltipContent>Refresh</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger render={(
+            <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close git diff">
+              <X />
+            </Button>
+          )} />
+          <TooltipContent>Close</TooltipContent>
         </Tooltip>
       </div>
       {renderBody()}
