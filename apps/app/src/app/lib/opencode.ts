@@ -47,7 +47,10 @@ const MCP_AUTH_OPENCODE_REQUEST_TIMEOUT_MS = 90_000;
 // Bound the acceptance handshake, not the task. A timeout leaves admission
 // unknown, so the transport must never automatically resend the prompt.
 const PROMPT_ASYNC_REQUEST_TIMEOUT_MS = 30_000;
-const SESSION_LONG_RUNNING_URL_RE = /\/session\/[^/?#]+\/(?:command|summarize)(?:[?#]|$)/;
+// Session mutations that resolve only when the underlying work finishes (e.g.
+// `command`, `summarize`, and `!` shell runs) must never be timed out at the
+// client transport layer — the engine keeps running and reports via SSE.
+const SESSION_LONG_RUNNING_URL_RE = /\/session\/[^/?#]+\/(?:command|summarize|shell)(?:[?#]|$)/;
 const SESSION_PROMPT_ASYNC_URL_RE = /\/session\/[^/?#]+\/prompt_async(?:[?#]|$)/;
 
 export class PromptAdmissionUnknownError extends Error {
@@ -100,7 +103,7 @@ function getRequestUrl(input: RequestInfo | URL): string {
   return String(input);
 }
 
-function resolveRequestTimeoutMs(input: RequestInfo | URL, fallbackMs: number): number {
+export function resolveRequestTimeoutMs(input: RequestInfo | URL, fallbackMs: number): number {
   const url = getRequestUrl(input);
   if (SESSION_LONG_RUNNING_URL_RE.test(url)) {
     return 0;

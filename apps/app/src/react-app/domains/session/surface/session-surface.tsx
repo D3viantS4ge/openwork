@@ -1685,6 +1685,11 @@ export function SessionSurface(props: SessionSurfaceProps) {
     const remaining = (pendingMessages ?? []).flatMap((item) => {
       const { draft: pending, previousMessageIds } = item;
       const text = pending.resolvedText ?? pending.text;
+      // A user "!" shell run's command is the bash tool input, not a user
+      // prompt: the engine's own user message carries only a synthetic
+      // (invisible) text part. Don't surface the command as a user text bubble.
+      const isShell = pending.mode === "shell";
+      const renderText = isShell ? "" : text;
       // Native v2 assigns its own ID and may never expose files in the transcript.
       // Upload paths and filename changes must come from the prepared request, not a guess.
       const acknowledgementText = item.preparedText ?? (pending.attachments.length ? undefined : text);
@@ -1692,8 +1697,12 @@ export function SessionSurface(props: SessionSurfaceProps) {
         && !matchedIds.has(message.id)
         && (message.id === (item.serverMessageId ?? pending.messageId) || (!item.serverMessageId && isOpencodeV2BaseUrl(props.opencodeBaseUrl) && !previousMessageIds.includes(message.id)
           && Boolean(acknowledgementText?.trim()) && v2PromptText(message.parts) === acknowledgementText)));
-      const { parts, attachmentsReady } = pendingMessageParts(text, pending.attachments, match?.parts);
+      const { parts, attachmentsReady } = pendingMessageParts(renderText, pending.attachments, match?.parts);
       if (!match) {
+        // For a shell run the engine's synthetic user message and the running
+        // command block arrive over the live stream; don't insert a placeholder
+        // user bubble in the meantime.
+        if (isShell) return [item];
         const submissionIds = new Set(item.submissionMessageIds);
         const previousIndex = messages.findLastIndex((message) => submissionIds.has(message.id) || precedingPendingIds.has(message.id));
         messages.splice(previousIndex + 1, 0, { id: pending.messageId, role: "user", parts });
@@ -1704,7 +1713,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
       matchedIds.add(match.id);
       if (match.id !== pending.messageId) messageIdReplacements.set(match.id, pending.messageId);
       messages[messages.indexOf(match)] = { ...match, parts };
-      const textReady = !text.trim()
+      const textReady = !renderText.trim()
         || match.parts.some((part) => part.type === "text" && part.text.trim());
       if (attachmentsReady && textReady && item.settled) return [];
       return [item.serverMessageId === match.id ? item : { ...item, serverMessageId: match.id }];
