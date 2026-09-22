@@ -1236,6 +1236,12 @@ export function SessionSurface(props: SessionSurfaceProps) {
   const [pendingSendSessions, setPendingSendSessions] = useState<string[]>([]);
   const pendingSendsRef = useRef(new Map<symbol, { owner: string; mode: PromptMode }>());
   const sending = pendingSendSessions.includes(sessionOwner);
+  // A shell (`!`) send stays "in flight" for the whole command duration. That
+  // keeps `sending`/busy true (so Enter queues a successor) but must not count
+  // as "preparing a submission" — otherwise the composer swallows Enter until
+  // the command finishes.
+  const [pendingShellSessions, setPendingShellSessions] = useState<string[]>([]);
+  const shellSending = pendingShellSessions.includes(sessionOwner);
   const pendingStopsRef = useRef(new Set<string>());
   const [pendingStopSessions, setPendingStopSessions] = useState<string[]>([]);
   const stopping = pendingStopSessions.includes(sessionOwner);
@@ -2269,7 +2275,9 @@ export function SessionSurface(props: SessionSurfaceProps) {
     const generation = getQueuedSendGeneration(props.sessionId);
     const submissionId = Symbol();
     pendingSendsRef.current.set(submissionId, { owner: sessionOwner, mode: nextDraft.mode ?? "prompt" });
-    setPendingSendSessions([...pendingSendsRef.current.values()].map((pending) => pending.owner));
+    const pendingOwners = [...pendingSendsRef.current.values()];
+    setPendingSendSessions(pendingOwners.map((pending) => pending.owner));
+    setPendingShellSessions(pendingOwners.filter((pending) => pending.mode === "shell").map((pending) => pending.owner));
     setError(null);
     try {
       if (archived || !archiveStateKnown) throw new Error("This session is read-only. Restore it before sending.");
@@ -2340,7 +2348,9 @@ export function SessionSurface(props: SessionSurfaceProps) {
       throw nextError;
     } finally {
       pendingSendsRef.current.delete(submissionId);
-      setPendingSendSessions([...pendingSendsRef.current.values()].map((pending) => pending.owner));
+      const pendingOwners = [...pendingSendsRef.current.values()];
+      setPendingSendSessions(pendingOwners.map((pending) => pending.owner));
+      setPendingShellSessions(pendingOwners.filter((pending) => pending.mode === "shell").map((pending) => pending.owner));
     }
   }, [archived, archiveStateKnown, opencodeClient, openingHistory.readSendHistory, props.onSendDraft, props.opencodeBaseUrl, props.selectedAgent, props.sessionId, props.workspaceId, props.workspaceRoot, removeQueuedDraftFromStore, renderedMessages.length, sessionOwner, setError]);
 
@@ -3715,7 +3725,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
         busy={chatStreaming}
         stopping={stopping}
         steering={steering}
-        submissionPreparing={preparingCloudTools || sending || autoSending}
+        submissionPreparing={preparingCloudTools || autoSending || (sending && !shellSending)}
         queuedCount={queuedItems.length}
         disabled={!archiveStateKnown || archiveHeld || model.transitionState !== "idle" || sessionModelUnavailable || queuedDrainState.phase.kind === "admission_unknown"}
         modelUnavailable={sessionModelUnavailable}
