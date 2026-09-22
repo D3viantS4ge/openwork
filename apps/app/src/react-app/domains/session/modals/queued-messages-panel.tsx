@@ -144,6 +144,19 @@ function QueuedAttachmentChip(props: { attachment: ComposerAttachment }) {
   );
 }
 
+/** Marks a queued message as a shell (`!`) command rather than a freeform prompt. */
+function ShellModeQueuedBadge() {
+  return (
+    <span
+      className="mr-1.5 inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded border border-amber-6/50 bg-amber-3/40 px-1 align-middle font-mono text-[11px] font-bold leading-none text-amber-11"
+      title={t("composer.shell_mode_hint")}
+      aria-label={t("composer.shell_mode_hint")}
+    >
+      !
+    </span>
+  );
+}
+
 function QueuedDraftRow(props: {
   item: QueuedComposerItem;
   ids: string[];
@@ -220,27 +233,30 @@ function QueuedDraftRow(props: {
       </span>
       <div className="min-w-0 flex-1">
         {editing ? (
-          <textarea
-            autoFocus
-            disabled={props.sending}
-            value={draftText}
-            onChange={(event) => setDraftText(event.target.value)}
-            onBlur={commitEdit}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                event.preventDefault();
-                setDraftText(props.item.draft.text);
-                setEditing(false);
-                return;
-              }
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                commitEdit();
-              }
-            }}
-            className="min-h-16 w-full resize-y rounded-lg border border-gray-6 bg-gray-2 px-2 py-1.5 text-sm leading-5 text-gray-12 outline-none focus:border-gray-8"
-            aria-label={t("composer.queued_edit")}
-          />
+          <div className="flex items-start gap-1">
+            {props.item.draft.mode === "shell" ? <ShellModeQueuedBadge /> : null}
+            <textarea
+              autoFocus
+              disabled={props.sending}
+              value={draftText}
+              onChange={(event) => setDraftText(event.target.value)}
+              onBlur={commitEdit}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setDraftText(props.item.draft.text);
+                  setEditing(false);
+                  return;
+                }
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  commitEdit();
+                }
+              }}
+              className="min-h-16 w-full resize-y rounded-lg border border-gray-6 bg-gray-2 px-2 py-1.5 text-sm leading-5 text-gray-12 outline-none focus:border-gray-8"
+              aria-label={t("composer.queued_edit")}
+            />
+          </div>
         ) : (
           <button
             type="button"
@@ -253,6 +269,7 @@ function QueuedDraftRow(props: {
             className="w-full whitespace-pre-wrap break-words rounded-md px-0.5 text-left text-sm leading-5 text-gray-11 hover:text-gray-12 disabled:pointer-events-none"
             title={t("composer.queued_edit")}
           >
+            {props.item.draft.mode === "shell" ? <ShellModeQueuedBadge /> : null}
             <QueuedDraftContent draft={props.item.draft} />
           </button>
         )}
