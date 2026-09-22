@@ -159,6 +159,32 @@ type SnapshotMessages = OpenworkSessionSnapshot["messages"];
 const snapshotMessagesCache = new WeakMap<SnapshotMessages, UIMessage[]>();
 const snapshotMessageCache = new WeakMap<SnapshotMessages[number], UIMessage[]>();
 
+/**
+ * The engine's synthetic user message that prefixes a user "!" shell run
+ * (session.shell). Mirrors opencode's own run-mode detection string.
+ */
+export const SHELL_SYNTHETIC_USER_TEXT = "The following tool was executed by the user";
+
+/** True for the engine's synthetic text part that prefixes a user "!" shell run. */
+export function isShellSyntheticUserPart(part: { type?: string; synthetic?: boolean; text?: string }): boolean {
+  return part.type === "text" && part.synthetic === true && part.text === SHELL_SYNTHETIC_USER_TEXT;
+}
+
+/**
+ * True for the (visually empty) user UIMessage that precedes a user "!" shell
+ * run. The synthetic text part is filtered out of the rendered transcript, so
+ * this flag is the only surviving marker that lets the renderer attribute the
+ * following bash tool message to a user command turn.
+ */
+export function isShellSyntheticUserUIMessage(message: { metadata?: unknown }): boolean {
+  const metadata = message.metadata;
+  if (!metadata || typeof metadata !== "object") return false;
+  const opencode = (metadata as { opencode?: unknown }).opencode;
+  return typeof opencode === "object"
+    && opencode !== null
+    && (opencode as { shellSynthetic?: unknown }).shellSynthetic === true;
+}
+
 // Query snapshots are immutable. Share the projection between rendering and
 // hydration; a refreshed tail can also reuse unchanged historical messages.
 // Callers must copy before applying live updates to these cached messages.
@@ -171,12 +197,16 @@ export function snapshotToUIMessages(snapshot: Pick<OpenworkSessionSnapshot, "me
     const created = message.info.time?.created;
     const time = message.info.time;
     const completed = time && "completed" in time ? time.completed : undefined;
+    const shellSynthetic = message.info.role === "user" && message.parts.some(isShellSyntheticUserPart);
+    const opencodeMetadata = {
+      ...(typeof created === "number" ? { created } : {}),
+      ...(typeof completed === "number" ? { completed } : {}),
+      ...(shellSynthetic ? { shellSynthetic: true } : {}),
+    };
     const uiMessage = {
       id: message.info.id,
       role: message.info.role,
-      ...(typeof created === "number"
-        ? { metadata: { opencode: { created, ...(typeof completed === "number" ? { completed } : {}) } } }
-        : {}),
+      ...(Object.keys(opencodeMetadata).length > 0 ? { metadata: { opencode: opencodeMetadata } } : {}),
       parts: message.parts.flatMap<UIMessage["parts"][number]>((part) => {
         if (part.type === "text") {
           const mapped = textPartToUIPart(part);

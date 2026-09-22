@@ -125,6 +125,7 @@ import { faviconUrlForHref } from "@/lib/favicon"
 import { useOpenArtifactPath } from "@/lib/artifacts"
 import { cn } from "@/lib/utils"
 import { DevProfiler } from "@/react-app/shell/dev-profiler"
+import { isShellSyntheticUserUIMessage } from "@/react-app/domains/session/sync/usechat-adapter"
 import { groupMessages, isMessageGroup, getLastTextPart, getAggregateOnlyParts, getAssistantRenderGroups, getFileTitle, getMediaBadge, getMessageCompleted, getMessageCreated, formatMessageTimestamp, splitTurnAtAnswer, type UIMessageWithIndex, getMessagesText, getSafeFileDownloadUrl, getSafeFileRevealPath } from "./utils"
 import type { AnyToolPart } from "@/lib/tool-aggregate"
 import { resolveConnectorToolIdentity } from "@/react-app/domains/connections/connector-tool-identity"
@@ -479,6 +480,39 @@ function CopyMessageButton({ messages }: CopyMessageButtonProps) {
         variant="ghost"
         size="icon"
         aria-label="Copy message"
+        onClick={() => void onCopy()}
+      >
+        {copied ? <Check /> : <Copy />}
+      </Button>
+    </MessageAction>
+  )
+}
+
+/** Copy button for a user "!" command turn: copies the command text. */
+function ShellCommandCopyButton({ command }: { command: string }) {
+  const [copied, setCopied] = React.useState(false)
+
+  const onCopy = React.useCallback(async () => {
+    if (!command) return
+    try {
+      await navigator.clipboard.writeText(command)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // ignore clipboard failures
+    }
+  }, [command])
+
+  if (!command) {
+    return null
+  }
+
+  return (
+    <MessageAction tooltip={copied ? "Copied!" : "Copy command"}>
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label="Copy command"
         onClick={() => void onCopy()}
       >
         {copied ? <Check /> : <Copy />}
@@ -1232,6 +1266,9 @@ interface AssistantMessageGroupProps {
   items: UIMessageWithIndex[]
   isLastGroup: boolean
   isStreaming: boolean
+  /** When this group's first message is a user "!" shell turn, the id of the
+   *  synthetic user message that precedes it — used to revert the whole turn. */
+  userShellTurnParentId?: string
 }
 
 function collectMcpAppParts(items: UIMessageWithIndex[]): DynamicToolUIPart[] {
@@ -1255,6 +1292,7 @@ function MessageGroup({
   items,
   isLastGroup,
   isStreaming,
+  userShellTurnParentId,
 }: AssistantMessageGroupProps) {
   const { onRevertToUserMessage, onForkAtMessage, forkingMessageId, showThinking, readOnly } = useMessageList()
   const lastItem = items[items.length - 1]
@@ -1376,12 +1414,77 @@ function MessageGroup({
       )
       run = null
     }
+    // A user "!" shell turn is its own assistant bash message that directly
+    // follows the engine's synthetic (invisible) "executed by the user" user
+    // message. Treat it as a turn: render it standalone with the standard
+    // per-message actions instead of folding it into the bare aggregate line.
+    // The parent id comes from the outer list (user messages are standalone
+    // items, so they never appear inside this assistant group's `items`).
+    const firstItemId = items[0]?.message.id
+    const renderUserShellTurn = (item: UIMessageWithIndex, parts: AnyToolPart[], syntheticParentId: string) => {
+      const isStreamingTurn = isLastGroup && item.index === lastItem.index && isStreaming
+      const command = parts
+        .flatMap((part) => (isBashToolPart(part) ? [part.input?.command?.trim() ?? ""] : []))
+        .filter(Boolean)
+        .join("\n")
+      const branching = forkingMessageId === item.message.id
+      return (
+        <div key={`user-shell-${item.message.id}`}>
+          <Message className="mx-auto flex w-full max-w-3xl flex-col items-start gap-2 px-2 md:px-10">
+            <ToolAggregateGroup messageId={item.message.id} parts={parts} className="w-full" />
+            {!isStreamingTurn ? (
+              <div
+                className={cn(
+                  "flex items-center gap-0 transition-opacity duration-150 group-hover/message-group:opacity-100 max-lg:opacity-100 pointer-coarse:opacity-100",
+                  branching ? "opacity-100" : "opacity-0",
+                )}
+              >
+                <MessageActions className="flex gap-0">
+                  <ShellCommandCopyButton command={command} />
+                  <MessageAction tooltip={branching ? "Branching..." : "Branch in new chat"}>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={branching ? "Branching..." : "Branch in new chat"}
+                      aria-busy={branching || undefined}
+                      disabled={Boolean(forkingMessageId)}
+                      onClick={() => onForkAtMessage(item.message.id)}
+                    >
+                      {branching ? <LoaderCircle className="motion-safe:animate-spin" /> : <Split className="rotate-90" />}
+                    </Button>
+                  </MessageAction>
+                  {branching ? <span role="status" className="sr-only">Branching...</span> : null}
+                  <MessageAction tooltip="Revert">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label="Revert"
+                      disabled={readOnly}
+                      onClick={() => onRevertToUserMessage(syntheticParentId)}
+                    >
+                      <Undo2 />
+                    </Button>
+                  </MessageAction>
+                </MessageActions>
+                <MessageTimestamp message={item.message} className="ml-1.5" />
+              </div>
+            ) : null}
+          </Message>
+        </div>
+      )
+    }
     slice.forEach((item, sliceIndex) => {
       const aggregateParts =
         item.message.role === "assistant" && !isSessionErrorMessage(item.message)
           ? getAggregateOnlyParts(item.message, showThinking)
           : null
       if (aggregateParts) {
+        const syntheticParentId = item.message.id === firstItemId ? userShellTurnParentId ?? null : null
+        if (syntheticParentId !== null) {
+          flush()
+          nodes.push(renderUserShellTurn(item, aggregateParts, syntheticParentId))
+          return
+        }
         if (!run) run = { parts: [], key: item.message.id }
         run.parts.push(...aggregateParts)
         return
@@ -1467,6 +1570,7 @@ function MessageGroup({
 function sameMessageGroupProps(left: AssistantMessageGroupProps, right: AssistantMessageGroupProps): boolean {
   return left.isLastGroup === right.isLastGroup
     && left.isStreaming === right.isStreaming
+    && left.userShellTurnParentId === right.userShellTurnParentId
     && left.items.length === right.items.length
     && left.items.every((item, index) => (
       item.index === right.items[index]?.index
@@ -1577,6 +1681,20 @@ export function MessageList({ messages, messageIdReplacements, status, activityS
     return () => window.clearInterval(interval)
   }, [activityActive, runStartedAt, syncDegraded])
   const items = React.useMemo(() => groupMessages(messages, status), [messages, status]);
+  // Map an assistant message id to the id of the synthetic "executed by the
+  // user" user message that precedes it, i.e. the user "!" shell turn's parent.
+  // User messages are standalone items, so this is resolved here (from the flat
+  // transcript) and threaded into the assistant group for the turn's actions.
+  const userShellParentByAssistantId = React.useMemo(() => {
+    const map = new Map<string, string>()
+    for (let index = 0; index < messages.length - 1; index++) {
+      const message = messages[index]
+      const next = messages[index + 1]
+      if (message.role !== "user" || !isShellSyntheticUserUIMessage(message) || next.role !== "assistant") continue
+      map.set(next.id, message.id)
+    }
+    return map
+  }, [messages])
   const error = useSessionErrorMessage();
   const hasSessionErrorMessage = React.useMemo(() => messages.some(isSessionErrorMessage), [messages])
   const latestAssistantToolParts = React.useMemo(
@@ -1620,12 +1738,14 @@ export function MessageList({ messages, messageIdReplacements, status, activityS
         header={messages.length === 0 && <TaskSuggestions className="mx-auto w-full max-w-3xl shrink-0 px-3 pb-3 md:px-5 md:pb-5 grow" />}
         renderGroup={(item) => {
         if (isMessageGroup(item)) {
+          const firstMessageId = item.messages[0]?.message.id
           return (
             <MemoizedMessageGroup
               key={item.messages[0]?.message.id ?? "empty-assistant-group"}
               items={item.messages}
               isLastGroup={item.messages.at(-1)?.index === messages.length - 1}
               isStreaming={isStreaming && item.messages.at(-1)?.index === messages.length - 1}
+              userShellTurnParentId={firstMessageId ? userShellParentByAssistantId.get(firstMessageId) : undefined}
             />
           )
         }

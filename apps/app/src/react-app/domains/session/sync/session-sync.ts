@@ -17,6 +17,7 @@ import {
   attachmentNoteToUIParts,
   textPartToUIPart,
   createSessionErrorUIMessage,
+  isShellSyntheticUserPart,
   snapshotToUIMessages,
 } from "./usechat-adapter";
 import {
@@ -898,6 +899,33 @@ function upsertPart(messages: UIMessage[], messageId: string, partId: string, ne
   });
 }
 
+/**
+ * Stamp the marker that lets the renderer attribute the following bash tool
+ * message to a user "!" shell run. The synthetic text part renders nothing, so
+ * without this the turn would be indistinguishable from a model-invoked bash
+ * call (and would lose its per-message copy/branch/revert actions).
+ */
+function markShellSyntheticUserMessage(entry: SyncEntry, workspaceId: string, sessionId: string, messageId: string) {
+  if (!isTrackedSession(entry, sessionId)) return;
+  const queryClient = getReactQueryClient();
+  queryClient.setQueryData<UIMessage[]>(transcriptKey(workspaceId, sessionId), (current = []) => {
+    let changed = false;
+    const next = current.map((message) => {
+      if (message.id !== messageId) return message;
+      const metadata = message.metadata;
+      if (!metadata || typeof metadata !== "object") {
+        changed = true;
+        return { ...message, metadata: { opencode: { shellSynthetic: true } } };
+      }
+      const opencode = (metadata as { opencode?: Record<string, unknown> }).opencode;
+      if (opencode && opencode.shellSynthetic === true) return message;
+      changed = true;
+      return { ...message, metadata: { ...metadata, opencode: { ...(opencode ?? {}), shellSynthetic: true } } };
+    });
+    return changed ? next : current;
+  });
+}
+
 function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent) {
   observeModelsTaskEvent(workspaceId, event);
   const queryClient = getReactQueryClient();
@@ -1257,6 +1285,14 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
     const props = (event.properties ?? {}) as { part?: Part };
     const part = props.part;
     if (!part?.sessionID || !part.messageID) return;
+    // The engine's synthetic "executed by user" part carries no visible UI;
+    // keep it invisible but record that this user message prefixes a "!" run
+    // so the renderer can attribute the following bash message and show its
+    // copy/branch/revert actions.
+    if (isShellSyntheticUserPart(part)) {
+      markShellSyntheticUserMessage(entry, workspaceId, part.sessionID, part.messageID);
+      return;
+    }
     if (partHasVisibleAssistantOutput(part)) {
       clearSessionRetry(entry, workspaceId, part.sessionID);
       useSessionActivityStore.getState().markAssistantOutput(workspaceId, part.sessionID, part.messageID);
