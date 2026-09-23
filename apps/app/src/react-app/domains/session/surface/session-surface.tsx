@@ -2396,7 +2396,15 @@ export function SessionSurface(props: SessionSurfaceProps) {
     for (const attachment of sentAttachments) {
       if (attachment.kind === "image" && !attachment.previewUrl) attachment.previewUrl = URL.createObjectURL(attachment.file);
     }
-    setSubmittedMessage({ owner: sessionOwner, id: nextDraft.messageId });
+    // Only a normal prompt anchors the scroll controller to its new bubble.
+    // A shell (`!`) run renders no user bubble (the engine emits a synthetic,
+    // invisible user message plus an assistant bash message), so its message id
+    // would never resolve as a scroll anchor and would block the sticky-bottom
+    // follow for the whole run — the view then silently stops tracking the
+    // growing command output. Shell runs instead rely on passive follow.
+    if (nextDraft.mode !== "shell") {
+      setSubmittedMessage({ owner: sessionOwner, id: nextDraft.messageId });
+    }
     useComposerStateStore.setState((state) => ({
       pendingMessages: {
         ...state.pendingMessages,
