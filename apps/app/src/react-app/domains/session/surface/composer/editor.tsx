@@ -51,6 +51,7 @@ import { createPastedTextChip, shouldCollapsePastedText, splitPastedText } from 
 import { insertPastedText } from "./pasted-text-insertion";
 import { encodeConnectorToken, parseConnectorToken } from "./connector-token";
 import { lineBoundaryMoveForKey } from "./line-boundary-keys";
+import { isCaretAtEditorStart, shouldExitShellModeOnBackspace } from "./shell-mode-keys";
 import {
   adjacentTokenForSelection,
   caretAtTokenLeftEdge,
@@ -2141,8 +2142,9 @@ export const LexicalPromptEditor = forwardRef<LexicalPromptEditorHandle, EditorP
               onKeyDownCapture={(event) => {
                 // Shell-mode entry/exit lives at the keydown boundary so the
                 // `!` never becomes a real character: typing `!` first enters
-                // shell mode (pasted `!` text is untouched), and backspace on
-                // the empty shell command exits back to prompt mode.
+                // shell mode (pasted `!` text is untouched), and backspace
+                // deletes the virtual `!` — on an empty command or with the
+                // caret at the very start — exiting back to prompt mode.
                 const shellMode = shellModeRef.current;
                 const empty = valueRef.current.trim().length === 0;
                 if (!shellMode && empty && event.key === "!" && !event.ctrlKey && !event.metaKey && !event.nativeEvent.isComposing) {
@@ -2150,7 +2152,7 @@ export const LexicalPromptEditor = forwardRef<LexicalPromptEditorHandle, EditorP
                   onShellModeChangeRef.current?.(true);
                   return;
                 }
-                if (shellMode && empty && event.key === "Backspace" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+                if (shellMode && shouldExitShellModeOnBackspace(event, { empty, caretAtEditorStart: isCaretAtEditorStart(event.currentTarget) })) {
                   event.preventDefault();
                   onShellModeChangeRef.current?.(false);
                   return;
