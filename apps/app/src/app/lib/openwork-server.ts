@@ -309,6 +309,41 @@ export type OpenworkWorkspaceFileContent = {
   updatedAt: number;
 };
 
+export type OpenworkGitCommit = {
+  id: string;
+  short: string;
+  author: string;
+  email: string;
+  date: string;
+  subject: string;
+  parents: string[];
+};
+
+export type OpenworkGitFile = {
+  file: string;
+  additions: number;
+  deletions: number;
+  status: "added" | "deleted" | "modified";
+  patch: string;
+};
+
+export type OpenworkGitLogResult = {
+  ok: boolean;
+  code?: string;
+  message?: string;
+  branch?: string | null;
+  commits?: OpenworkGitCommit[];
+};
+
+export type OpenworkGitShowResult = {
+  ok: boolean;
+  code?: string;
+  message?: string;
+  commit?: OpenworkGitCommit;
+  files?: OpenworkGitFile[];
+  truncated?: boolean;
+};
+
 export type OpenworkWorkspaceFileWriteResult = {
   ok: boolean;
   path: string;
@@ -2397,6 +2432,20 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
       requestJson<OpenworkWorkspaceFileContent>(
         baseUrl,
         `/workspace/${encodeURIComponent(workspaceId)}/files/content?path=${encodeURIComponent(path)}`,
+        { token, hostToken },
+      ),
+
+    gitLog: (workspaceId: string, count?: number) =>
+      requestJson<OpenworkGitLogResult>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/git/log${count ? `?count=${count}` : ""}`,
+        { token, hostToken },
+      ),
+
+    gitShow: (workspaceId: string, ref: string) =>
+      requestJson<OpenworkGitShowResult>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/git/show?ref=${encodeURIComponent(ref)}`,
         { token, hostToken },
       ),
 

@@ -793,6 +793,8 @@ export function SidePanel({
             <GitDiffPanel
               sessionId={sessionId}
               client={opencodeClient}
+              gitClient={client}
+              workspaceId={workspaceId}
               workspaceRoot={workspaceRoot}
               isRemoteWorkspace={isRemoteWorkspace}
               onClose={onClose}

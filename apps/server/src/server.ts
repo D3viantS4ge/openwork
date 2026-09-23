@@ -99,6 +99,7 @@ import { externalFetch, loopbackFetch } from "./server-fetch.js";
 import { registerCoreRoutes } from "./routes/core.js";
 import { registerDebugRoutes } from "./routes/debug.js";
 import { registerFileRoutes } from "./routes/files.js";
+import { registerGitRoutes } from "./routes/git.js";
 import { registerOperationRoutes } from "./routes/operations.js";
 import { addRoute, matchRoute, type AuthMode, type RequestContext, type Route } from "./routes/registry.js";
 import { registerSessionGroupRoutes } from "./routes/session-groups.js";
@@ -3452,6 +3453,8 @@ function createRoutes(
     resolveInboxMaxBytes,
     scopeRank,
   });
+
+  registerGitRoutes({ routes, config, jsonResponse, resolveWorkspace });
 
   addRoute(routes, "GET", "/workspace/:id/plugins", "client", async (ctx) => {
     const workspace = await resolveWorkspace(config, ctx.params.id);
