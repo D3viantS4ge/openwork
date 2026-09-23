@@ -16,6 +16,7 @@ import type { VcsFileDiff, VcsFileStatus, VcsInfo } from "@opencode-ai/sdk/v2/cl
 
 import type { Client } from "@/app/types";
 import { unwrap } from "@/app/lib/opencode";
+import { OpenworkServerError } from "@/app/lib/openwork-server";
 import type {
   OpenworkGitCommit,
   OpenworkGitShowResult,
@@ -88,6 +89,17 @@ function commitTimestamp(commit: OpenworkGitCommit): number {
   return Number.isFinite(parsed) ? parsed : Date.now();
 }
 
+/** Surface the actual failure (HTTP status/code/message or transport error) in
+ *  the panel instead of a generic message, so a stuck load is diagnosable. */
+function describeGitError(error: unknown): string {
+  if (error instanceof OpenworkServerError) {
+    const detail = error.message?.trim();
+    return detail ? `${error.status} ${error.code}: ${detail}` : `${error.status} ${error.code}`;
+  }
+  if (error instanceof Error) return error.message || error.name;
+  return String(error);
+}
+
 export function GitDiffPanel({
   sessionId,
   client,
@@ -97,6 +109,7 @@ export function GitDiffPanel({
   onClose,
 }: GitDiffPanelProps) {
   const [state, setState] = useState<LoadState>("loading");
+  const [stateError, setStateError] = useState<string | null>(null);
   const [isRepo, setIsRepo] = useState(true);
   const [branch, setBranch] = useState<string | null>(null);
   const [files, setFiles] = useState<VcsFileStatus[]>([]);
@@ -108,6 +121,7 @@ export function GitDiffPanel({
   const [selection, setSelection] = useState<Selection>({ kind: "working" });
   const [commits, setCommits] = useState<OpenworkGitCommit[]>([]);
   const [commitsState, setCommitsState] = useState<LoadState>("ready");
+  const [commitsError, setCommitsError] = useState<string | null>(null);
   const [commitShows, setCommitShows] = useState<Record<string, OpenworkGitShowResult>>({});
   const [commitLoadState, setCommitLoadState] = useState<LoadState>("ready");
   const [commitLoadError, setCommitLoadError] = useState<string | null>(null);
@@ -148,6 +162,7 @@ export function GitDiffPanel({
 
   const load = useCallback(async () => {
     if (!client || !workspaceRoot) {
+      setStateError(!client ? "OpenCode client unavailable" : "Workspace root unavailable");
       setState("error");
       return;
     }
@@ -160,6 +175,7 @@ export function GitDiffPanel({
         setBranch(null);
         setFiles([]);
         setDiffs({});
+        setStateError(null);
         setState("ready");
         return;
       }
@@ -181,8 +197,10 @@ export function GitDiffPanel({
           ? preferred
           : statusFiles[0]?.file ?? null,
       );
+      setStateError(null);
       setState("ready");
-    } catch {
+    } catch (error) {
+      setStateError(describeGitError(error));
       setState("error");
     }
   }, [client, workspaceRoot]);
@@ -190,6 +208,7 @@ export function GitDiffPanel({
   const loadCommits = useCallback(async () => {
     if (!gitClient || !workspaceId) {
       setCommits([]);
+      setCommitsError(null);
       setCommitsState("ready");
       return;
     }
@@ -198,13 +217,16 @@ export function GitDiffPanel({
       const result = await gitClient.gitLog(workspaceId, HISTORY_COMMIT_COUNT);
       if (result.ok) {
         setCommits(result.commits ?? []);
+        setCommitsError(null);
         setCommitsState("ready");
       } else {
         setCommits([]);
+        setCommitsError(result.message?.trim() || result.code || "request failed");
         setCommitsState(result.code === "not_a_repo" ? "ready" : "error");
       }
-    } catch {
+    } catch (error) {
       setCommits([]);
+      setCommitsError(describeGitError(error));
       setCommitsState("error");
     }
   }, [gitClient, workspaceId]);
@@ -416,7 +438,7 @@ export function GitDiffPanel({
     if (state === "error") {
       return (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-xs text-muted-foreground" role="status">
-          <p>{t("panel.git_diff.load_failed")}</p>
+          <p className="break-words">{t("panel.git_diff.load_failed")}{stateError ? ` ${stateError}` : ""}</p>
           <Button variant="outline" size="sm" onClick={refresh}>{t("panel.git_diff.try_again")}</Button>
         </div>
       );
@@ -464,7 +486,7 @@ export function GitDiffPanel({
             </div>
           ) : commitsState === "error" ? (
             <div className="flex flex-col items-start gap-2 px-3 py-2 text-xs text-muted-foreground">
-              <p>{t("panel.git_diff.commits_load_failed")}</p>
+              <p className="break-words">{t("panel.git_diff.commits_load_failed")}{commitsError ? ` ${commitsError}` : ""}</p>
               <Button variant="outline" size="sm" onClick={() => void loadCommits()}>{t("panel.git_diff.try_again")}</Button>
             </div>
           ) : commits.length === 0 ? (
