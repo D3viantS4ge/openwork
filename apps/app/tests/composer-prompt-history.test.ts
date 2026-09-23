@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { TextPart } from "@opencode-ai/sdk/v2/client";
-import type { UIMessage } from "ai";
+import type { DynamicToolUIPart, UIMessage } from "ai";
 import type { OpenworkSessionMessage, OpenworkSessionSnapshot } from "../src/app/lib/openwork-server";
 import type { ComposerPart } from "../src/app/types";
 import { draftToParts } from "../src/react-app/domains/session/sync/draft-parts";
@@ -11,7 +11,25 @@ import {
   deriveComposerHistory,
   deriveRenderedSessionMessages,
   resolveRenderedSessionSnapshot,
+  type ComposerHistoryEntry,
 } from "../src/react-app/domains/session/surface/session-render-state";
+
+/** Prompt-mode history entries, the shape every pre-shell assertion expects. */
+const prompts = (...texts: string[]): ComposerHistoryEntry[] =>
+  texts.map((text) => ({ text, mode: "prompt" }));
+
+const recalledTexts = (entries: ComposerHistoryEntry[]) => entries.map((entry) => entry.text);
+
+function bashPart(toolCallId: string, command: string): DynamicToolUIPart {
+  return {
+    type: "dynamic-tool",
+    toolName: "bash",
+    toolCallId,
+    state: "output-available",
+    input: { command },
+    output: "ok",
+  };
+}
 
 function message(id: string, text: string, created = 1): OpenworkSessionMessage {
   return {
@@ -50,9 +68,9 @@ test("cold recall restores only user-authored text, not synthetic instructions, 
   const stored = snapshot([first, message("blank", " \n "), hidden]);
   const before = structuredClone(stored);
   const recalled = history(stored, [{ id: "assistant", role: "assistant", parts: [{ type: "text", text: "Assistant answer" }] }]);
-  expect(recalled).toEqual(["First line\nSecond line"]);
+  expect(recalled).toEqual(prompts("First line\nSecond line"));
   for (const excluded of ["PRIVATE INSTRUCTION", "IGNORED TEXT", "private.txt", "HIDDEN ONLY", "Assistant answer"]) {
-    expect(recalled.join("\n")).not.toContain(excluded);
+    expect(recalledTexts(recalled).join("\n")).not.toContain(excluded);
   }
   expect(stored).toEqual(before);
 });
@@ -61,24 +79,24 @@ test("recall caps at 50 after trimming and consecutive deduplication, retaining 
   const messages = Array.from({ length: 60 }, (_, index) => message(`message-${index}`, `Prompt ${index}`, index));
   messages.push(message("repeat-last", " Prompt 59 ", 60), message("repeat-earlier", "Prompt 58", 61));
   const recalled = history(snapshot(messages));
-  expect(recalled).toEqual([...Array.from({ length: 49 }, (_, index) => `Prompt ${index + 11}`), "Prompt 58"]);
+  expect(recalled).toEqual(prompts(...Array.from({ length: 49 }, (_, index) => `Prompt ${index + 11}`), "Prompt 58"));
   expect(recalled).toHaveLength(50);
-  expect(recalled).not.toContain("Prompt 10");
-  expect(recalled.filter((text) => text === "Prompt 59")).toHaveLength(1);
-  expect(recalled.filter((text) => text === "Prompt 58")).toHaveLength(2);
+  expect(recalledTexts(recalled)).not.toContain("Prompt 10");
+  expect(recalled.filter((entry) => entry.text === "Prompt 59")).toHaveLength(1);
+  expect(recalled.filter((entry) => entry.text === "Prompt 58")).toHaveLength(2);
 });
 
 test("an older fetch cannot clobber a new live send and repeated snapshots do not duplicate acknowledged prompts", () => {
   const stored = snapshot([message("one", "Repeated prompt", 1), message("two", "Other prompt", 2)]);
   const live: UIMessage[] = [{ id: "three", role: "user", metadata: { opencode: { created: 3 } }, parts: [{ type: "text", text: "Repeated prompt" }] }];
-  const expected = ["Repeated prompt", "Other prompt", "Repeated prompt"];
-  expect(history(null, live)).toEqual(["Repeated prompt"]);
+  const expected = prompts("Repeated prompt", "Other prompt", "Repeated prompt");
+  expect(history(null, live)).toEqual(prompts("Repeated prompt"));
   expect(history(stored, live)).toEqual(expected);
   const acknowledged = snapshot([...stored.messages, message("three", "Repeated prompt", 3)]);
   for (let fetch = 0; fetch < 3; fetch += 1) {
     expect(history(structuredClone(acknowledged), live)).toEqual(expected);
   }
-  expect(history(stored, live)).not.toEqual(["Repeated prompt", "Other prompt"]);
+  expect(history(stored, live)).not.toEqual(prompts("Repeated prompt", "Other prompt"));
   expect(history(acknowledged, live)).toHaveLength(3);
   expect(stored.messages).toHaveLength(2);
   expect(live).toHaveLength(1);
@@ -92,19 +110,19 @@ test("switching sessions never recalls the previous session's cached snapshot", 
   });
   expect(selected).toBeNull();
   expect(history(selected)).toEqual([]);
-  expect(history(selected)).not.toContain("Private prompt");
-  expect(history(stored)).toEqual(["Private prompt"]);
+  expect(recalledTexts(history(selected))).not.toContain("Private prompt");
+  expect(history(stored)).toEqual(prompts("Private prompt"));
 });
 
 test("reverted messages and removed pending sends do not linger in a second history store", () => {
   const stored = snapshot([message("one", "Keep", 1), message("two", "Reverted", 2)]);
   stored.session.revert = { messageID: "two" };
-  expect(history(stored)).toEqual(["Keep"]);
-  expect(history(stored)).not.toContain("Reverted");
+  expect(history(stored)).toEqual(prompts("Keep"));
+  expect(recalledTexts(history(stored))).not.toContain("Reverted");
   const pending: UIMessage[] = [{ id: "pending", role: "user", parts: [{ type: "text", text: "Submitted" }] }];
-  expect(deriveComposerHistory(pending)).toEqual(["Submitted"]);
+  expect(deriveComposerHistory(pending)).toEqual(prompts("Submitted"));
   expect(deriveComposerHistory([])).toEqual([]);
-  expect(deriveComposerHistory([])).not.toContain("Submitted");
+  expect(recalledTexts(deriveComposerHistory([]))).not.toContain("Submitted");
 });
 
 test("Connect skill identity round-trips through durable text-part metadata in both draft branches, without changing display or model instructions", async () => {
@@ -125,7 +143,7 @@ test("Connect skill identity round-trips through durable text-part metadata in b
       const before = structuredClone(stored);
       const expected = [prefix, token, " Keep the details."].filter(Boolean).join("\n").trim();
       const rendered = deriveRenderedSessionMessages({ snapshot: snapshot([stored]), transcriptState: [] });
-      expect(history(snapshot(structuredClone([stored])))).toEqual([expected]);
+      expect(history(snapshot(structuredClone([stored])))).toEqual(prompts(expected));
       expect(rendered[0]?.parts.filter((part) => part.type === "text").map((part) => part.text).join(""))
         .toBe(`${prefix}/compact Keep the details.`);
       const liveParts = stored.parts.flatMap((part) => {
@@ -134,8 +152,8 @@ test("Connect skill identity round-trips through durable text-part metadata in b
         return mapped ? [mapped] : [];
       });
       const live: UIMessage[] = [{ id: stored.info.id, role: "user", parts: liveParts }];
-      expect(history(null, live)).toEqual([expected]);
-      expect(history(snapshot([stored]), live)).toEqual([expected]);
+      expect(history(null, live)).toEqual(prompts(expected));
+      expect(history(snapshot([stored]), live)).toEqual(prompts(expected));
       expect(parseSlashCommandInvocation(expected)).toBeNull();
       expect(expected).not.toContain("execute_capability");
       const recalledToken = expected.match(/\[connect-skill [^\]]+\]/)?.[0] ?? "";
@@ -164,7 +182,7 @@ test("legacy slash labels and native commands are excluded rather than replayed 
     expect(history(null, [{ id: "pending", role: "user", parts: [{ type: "text", text }] }])).toEqual([]);
   }
   expect(history(snapshot([message("command", "/compact"), message("path", "/workspace/notes.txt"), message("local", "[skill summarize] Keep the details.")])))
-    .toEqual(["/workspace/notes.txt", "[skill summarize] Keep the details."]);
+    .toEqual(prompts("/workspace/notes.txt", "[skill summarize] Keep the details."));
 });
 
 test("invalid or mismatched token metadata cannot turn a label into a recalled skill; hidden metadata stays hidden", () => {
@@ -181,5 +199,37 @@ test("invalid or mismatched token metadata cannot turn a label into a recalled s
     expect(history(snapshot([stored]))).toEqual([]);
     expect(textPartToUIPart(part)).toBeNull();
   }
-  expect(history(snapshot([message("original-token", `${token} Keep the details.`)]))).toEqual([`${token} Keep the details.`]);
+  expect(history(snapshot([message("original-token", `${token} Keep the details.`)]))).toEqual(prompts(`${token} Keep the details.`));
+});
+
+test("recalls user ! shell runs with their command and shell mode, not as a prompt", () => {
+  const synthetic: UIMessage = {
+    id: "shell-user",
+    role: "user",
+    metadata: { opencode: { shellSynthetic: true } },
+    parts: [{ type: "text", text: "The following tool was executed by the user" }],
+  };
+  const bash: UIMessage = {
+    id: "shell-assistant",
+    role: "assistant",
+    parts: [bashPart("call-1", "git status --short")],
+  };
+  const prompt: UIMessage = { id: "prompt", role: "user", parts: [{ type: "text", text: "Explain the diff" }] };
+  expect(deriveComposerHistory([synthetic, bash, prompt])).toEqual([
+    { text: "git status --short", mode: "shell" },
+    { text: "Explain the diff", mode: "prompt" },
+  ]);
+  // An agent-run bash tool with no synthetic parent is not a user command.
+  const agentBash: UIMessage = {
+    id: "agent-assistant",
+    role: "assistant",
+    parts: [bashPart("call-2", "pnpm test")],
+  };
+  expect(deriveComposerHistory([agentBash])).toEqual([]);
+  // A synthetic user message whose bash reply never arrived contributes nothing.
+  expect(deriveComposerHistory([synthetic])).toEqual([]);
+  // The shell entry dedupes against an identical consecutive command only.
+  expect(deriveComposerHistory([synthetic, bash, synthetic, bash])).toEqual([
+    { text: "git status --short", mode: "shell" },
+  ]);
 });

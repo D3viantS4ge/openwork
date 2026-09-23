@@ -1,9 +1,11 @@
 import type { UIMessage } from "ai";
 
+import type { PromptMode } from "../../../../app/types";
 import type { OpenworkSessionHistory } from "../../../../app/lib/openwork-server";
+import { isBashToolPart } from "../../../../lib/build-in-tools";
 import { mergeSnapshotAndLiveMessages } from "../sync/message-merge";
 import { applyRevertCursor } from "../sync/transcript-reconcile";
-import { snapshotToUIMessages } from "../sync/usechat-adapter";
+import { isShellSyntheticUserUIMessage, snapshotToUIMessages } from "../sync/usechat-adapter";
 import { parseConnectSkillToken } from "./composer/connect-skill-token";
 import { parseSlashCommandInvocation } from "./composer/slash-command";
 
@@ -252,12 +254,36 @@ export function deriveRenderedSessionMessages(input: {
   return messages;
 }
 
-export function deriveComposerHistory(messages: readonly UIMessage[]): string[] {
-  const history: string[] = [];
+/**
+ * One recalled composer entry. `mode` travels with the text so ArrowUp can
+ * restore a `!` shell command as a shell run rather than as a prompt.
+ */
+export type ComposerHistoryEntry = {
+  text: string;
+  mode: PromptMode;
+};
+
+export function deriveComposerHistory(messages: readonly UIMessage[]): ComposerHistoryEntry[] {
+  const history: ComposerHistoryEntry[] = [];
+  const push = (entry: ComposerHistoryEntry) => {
+    const last = history.at(-1);
+    if (last && last.mode === entry.mode && last.text === entry.text) return;
+    history.push(entry);
+  };
   // Use the reconciled transcript: native projections already exclude synthetic
   // and ignored text, and message identity reconciles snapshots with live sends.
-  for (const message of messages) {
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
     if (message.role !== "user") continue;
+    // A user "!" shell run has no user prompt text: the engine encodes it as a
+    // synthetic (invisible) user message plus an assistant bash message whose
+    // input carries the command. Recall it as a shell entry so ArrowUp + Enter
+    // reruns the command instead of sending it as a prompt.
+    if (isShellSyntheticUserUIMessage(message)) {
+      const command = shellCommandAfter(messages, index);
+      if (command) push({ text: command, mode: "shell" });
+      continue;
+    }
     let unsafe = false;
     const text = message.parts.flatMap((part) => {
       if (part.type !== "text") return [];
@@ -275,7 +301,23 @@ export function deriveComposerHistory(messages: readonly UIMessage[]): string[] 
       return [part.text];
     }).join("\n").trim();
     if (unsafe) continue;
-    if (text && history.at(-1) !== text) history.push(text);
+    if (text) push({ text, mode: "prompt" });
   }
   return history.slice(-50);
+}
+
+/** The command of the assistant bash message that follows a synthetic user
+ *  message, or null when the next turn is not a user "!" shell run. */
+function shellCommandAfter(messages: readonly UIMessage[], userIndex: number): string | null {
+  for (let index = userIndex + 1; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message.role === "user") return null;
+    if (message.role !== "assistant") continue;
+    for (const part of message.parts) {
+      if (part.type !== "dynamic-tool" || !isBashToolPart(part)) continue;
+      const command = part.input?.command?.trim() ?? "";
+      if (command) return command;
+    }
+  }
+  return null;
 }

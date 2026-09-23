@@ -10,6 +10,7 @@ import type { ComposerAttachment, McpServerEntry, McpStatus, McpStatusMap, Model
 import { DEFAULT_AGENT_NAME } from "@/app/constants";
 import { t } from "@/i18n";
 import { useComposerStateStore } from "../composer-state-store";
+import type { ComposerHistoryEntry } from "../session-render-state";
 import {
   composerConfigureSectionForMenu,
   isLibraryCommand,
@@ -110,8 +111,8 @@ type ComposerProps = {
   recentFiles: string[];
   searchFiles: (query: string) => Promise<string[]>;
   onInsertMention: (kind: ComposerMentionKind, value: string, draft?: string) => void;
-  /** Sent-prompt history (oldest first) recalled with ArrowUp/ArrowDown (#2012). */
-  inputHistory?: string[];
+  /** Sent-prompt and `!` shell history (oldest first) recalled with ArrowUp/ArrowDown (#2012). */
+  inputHistory?: ComposerHistoryEntry[];
   onPasteText: (text: string, placeholder: string, chip: PastedTextChip, serializedAfterInsert?: string) => void;
   onUnsupportedFileLinks: (links: string[]) => void;
   pastedText: PastedTextChip[];
@@ -349,12 +350,12 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
   }, [props.onRefreshOrganizationModels, refreshingOrganizationModels]);
 
   // Input history recall (#2012): ArrowUp on an empty composer recalls the
-  // previous sent prompt; repeated ArrowUp/ArrowDown walk the history.
-  // Editing the recalled text exits recall mode, and ArrowDown past the
-  // newest entry restores whatever was typed before recall started.
+  // previous sent prompt (or `!` shell command); repeated ArrowUp/ArrowDown
+  // walk the history. Editing the recalled text exits recall mode, and
+  // ArrowDown past the newest entry restores whatever was typed before recall.
   const historyPosRef = useRef<number | null>(null);
   const historyExpectedRef = useRef<string | null>(null);
-  const historyStashRef = useRef("");
+  const historyStashRef = useRef<{ text: string; mode: PromptMode }>({ text: "", mode: "prompt" });
 
   useEffect(() => {
     if (historyPosRef.current === null) return;
@@ -1135,11 +1136,13 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
         const continueRecall = position !== null && position > 0;
         if (startRecall || continueRecall) {
           const nextPos = position === null ? history.length - 1 : position - 1;
-          if (position === null) historyStashRef.current = props.draft;
+          if (position === null) historyStashRef.current = { text: props.draft, mode: props.mode };
           historyPosRef.current = nextPos;
-          historyExpectedRef.current = history[nextPos];
+          historyExpectedRef.current = history[nextPos].text;
           event.preventDefault();
-          props.onDraftChange(history[nextPos]);
+          // Recall the entry's mode too: a `!` command reruns as a shell run.
+          props.onModeChange(history[nextPos].mode);
+          props.onDraftChange(history[nextPos].text);
           return;
         }
       } else if (position !== null) {
@@ -1148,11 +1151,13 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
         if (nextPos >= history.length) {
           historyPosRef.current = null;
           historyExpectedRef.current = null;
-          props.onDraftChange(historyStashRef.current);
+          props.onModeChange(historyStashRef.current.mode);
+          props.onDraftChange(historyStashRef.current.text);
         } else {
           historyPosRef.current = nextPos;
-          historyExpectedRef.current = history[nextPos];
-          props.onDraftChange(history[nextPos]);
+          historyExpectedRef.current = history[nextPos].text;
+          props.onModeChange(history[nextPos].mode);
+          props.onDraftChange(history[nextPos].text);
         }
         return;
       }
