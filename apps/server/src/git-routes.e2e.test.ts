@@ -106,7 +106,7 @@ describe("git history routes", () => {
     await git(root, ["commit", "--no-gpg-sign", "-m", "second commit"]);
 
     const { base } = await startGitServer(root);
-    const response = await fetch(`${base}/workspace/ws_git/git/log`, { headers: clientAuth() });
+    const response = await fetch(`${base}/workspace/ws_git/git/commits`, { headers: clientAuth() });
     expect(response.status).toBe(200);
     const body = (await response.json()) as Record<string, unknown>;
     expect(body.ok).toBe(true);
@@ -119,13 +119,18 @@ describe("git history routes", () => {
     expect(typeof commits[0]?.short).toBe("string");
     expect(typeof commits[0]?.author).toBe("string");
     expect((commits[0]?.parents as unknown[]).length).toBe(1);
+
+    // The limit query caps the returned history.
+    const limitedResponse = await fetch(`${base}/workspace/ws_git/git/commits?limit=1`, { headers: clientAuth() });
+    const limited = (await limitedResponse.json()) as Record<string, unknown>;
+    expect((limited.commits as unknown[]).length).toBe(1);
   });
 
   test("returns empty commits for a fresh repo with no commits", async () => {
     const root = resolve(await createTempRoot("openwork-git-empty-"));
     await initGitRepo(root);
     const { base } = await startGitServer(root);
-    const response = await fetch(`${base}/workspace/ws_git/git/log`, { headers: clientAuth() });
+    const response = await fetch(`${base}/workspace/ws_git/git/commits`, { headers: clientAuth() });
     const body = (await response.json()) as Record<string, unknown>;
     expect(body.ok).toBe(true);
     expect(body.branch).toBe("main");
@@ -135,7 +140,7 @@ describe("git history routes", () => {
   test("returns not_a_repo for a non-git workspace", async () => {
     const root = resolve(await createTempRoot("openwork-git-nonrepo-"));
     const { base } = await startGitServer(root);
-    const response = await fetch(`${base}/workspace/ws_git/git/log`, { headers: clientAuth() });
+    const response = await fetch(`${base}/workspace/ws_git/git/commits`, { headers: clientAuth() });
     const body = (await response.json()) as Record<string, unknown>;
     expect(body.ok).toBe(false);
     expect(body.code).toBe("not_a_repo");
@@ -156,7 +161,7 @@ describe("git history routes", () => {
 
     const { base } = await startGitServer(root);
 
-    const secondResponse = await fetch(`${base}/workspace/ws_git/git/show?ref=${secondSha}`, { headers: clientAuth() });
+    const secondResponse = await fetch(`${base}/workspace/ws_git/git/commit/${secondSha}`, { headers: clientAuth() });
     expect(secondResponse.status).toBe(200);
     const second = (await secondResponse.json()) as Record<string, unknown>;
     expect(second.ok).toBe(true);
@@ -173,7 +178,7 @@ describe("git history routes", () => {
     expect(b?.additions).toBe(1);
     expect(String(b?.patch)).toContain("diff --git");
 
-    const rootResponse = await fetch(`${base}/workspace/ws_git/git/show?ref=${rootSha}`, { headers: clientAuth() });
+    const rootResponse = await fetch(`${base}/workspace/ws_git/git/commit/${rootSha}`, { headers: clientAuth() });
     const rootShow = (await rootResponse.json()) as Record<string, unknown>;
     expect(rootShow.ok).toBe(true);
     const rootFiles = rootShow.files as Array<Record<string, unknown>>;
@@ -181,7 +186,7 @@ describe("git history routes", () => {
     expect(rootA?.status).toBe("added");
     expect(String(rootA?.patch)).toContain("diff --git");
 
-    const badResponse = await fetch(`${base}/workspace/ws_git/git/show?ref=deadbeef`, { headers: clientAuth() });
+    const badResponse = await fetch(`${base}/workspace/ws_git/git/commit/deadbeef`, { headers: clientAuth() });
     const bad = (await badResponse.json()) as Record<string, unknown>;
     expect(bad.ok).toBe(false);
     expect(bad.code).toBe("invalid_ref");
@@ -194,7 +199,7 @@ describe("git history routes", () => {
     await git(root, ["add", "a.txt"]);
     await git(root, ["commit", "--no-gpg-sign", "-m", "first"]);
     const { base } = await startGitServer(root);
-    const response = await fetch(`${base}/workspace/ws_git/git/show?ref=${encodeURIComponent("HEAD~1; rm -rf .")}`, { headers: clientAuth() });
+    const response = await fetch(`${base}/workspace/ws_git/git/commit/${encodeURIComponent("HEAD~1; rm -rf .")}`, { headers: clientAuth() });
     const body = (await response.json()) as Record<string, unknown>;
     expect(body.ok).toBe(false);
     expect(body.code).toBe("invalid_ref");

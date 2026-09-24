@@ -18,6 +18,12 @@ import { addRoute, type RequestContext, type Route } from "./registry.js";
  * The engine daemon has its own vcs surface for the working tree; these routes
  * cover the commit history (`git log`) and per-commit diffs (`git show`) that
  * the engine does not expose.
+ *
+ * Keep the URL shapes free of analytics-looking signatures: `/git/commits`
+ * (not `/git/log`) with `?limit=` (not `?count=`), and the commit id as a path
+ * segment (not `?ref=`). Browser content blockers match shapes like
+ * `/log?count=` or tracking parameters such as `ref`, which silently blocks
+ * these requests before they leave the page.
  */
 
 const execFileAsync = promisify(execFile);
@@ -155,7 +161,7 @@ function statusFromCode(code: string): "added" | "deleted" | "modified" {
   return "modified";
 }
 
-function parseLogCount(raw: string | null): number {
+function parseCommitLimit(raw: string | null): number {
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed <= 0) return LOG_DEFAULT_COMMITS;
   return Math.min(Math.floor(parsed), LOG_MAX_COMMITS);
@@ -171,12 +177,12 @@ export interface RegisterGitRoutesOptions {
 export function registerGitRoutes(options: RegisterGitRoutesOptions): void {
   const { routes, config, jsonResponse, resolveWorkspace } = options;
 
-  addRoute(routes, "GET", "/workspace/:id/git/log", "client", async (ctx: RequestContext) => {
+  addRoute(routes, "GET", "/workspace/:id/git/commits", "client", async (ctx: RequestContext) => {
     const workspace = await resolveWorkspace(config, ctx.params.id);
     if (!(await isGitRepo(workspace.path))) {
       return jsonResponse({ ok: false, code: "not_a_repo" });
     }
-    const count = parseLogCount(ctx.url.searchParams.get("count"));
+    const count = parseCommitLimit(ctx.url.searchParams.get("limit"));
 
     let branch = "";
     try {
@@ -204,9 +210,9 @@ export function registerGitRoutes(options: RegisterGitRoutesOptions): void {
     }
   });
 
-  addRoute(routes, "GET", "/workspace/:id/git/show", "client", async (ctx: RequestContext) => {
+  addRoute(routes, "GET", "/workspace/:id/git/commit/:ref", "client", async (ctx: RequestContext) => {
     const workspace = await resolveWorkspace(config, ctx.params.id);
-    const ref = (ctx.url.searchParams.get("ref") ?? "").trim();
+    const ref = (ctx.params.ref ?? "").trim();
     if (!REF_RE.test(ref)) {
       return jsonResponse({ ok: false, code: "invalid_ref", message: "Invalid commit reference." });
     }

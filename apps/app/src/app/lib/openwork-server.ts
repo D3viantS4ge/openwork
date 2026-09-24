@@ -2438,14 +2438,19 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
     gitLog: (workspaceId: string, count?: number) =>
       requestJson<OpenworkGitLogResult>(
         baseUrl,
-        `/workspace/${encodeURIComponent(workspaceId)}/git/log${count ? `?count=${count}` : ""}`,
+        // `/git/commits?limit=` instead of `/git/log?count=`: browser content
+        // blockers match analytics-looking shapes like `/log?count=` and would
+        // drop the request before it leaves the page.
+        `/workspace/${encodeURIComponent(workspaceId)}/git/commits${count ? `?limit=${count}` : ""}`,
         { token, hostToken },
       ),
 
     gitShow: (workspaceId: string, ref: string) =>
       requestJson<OpenworkGitShowResult>(
         baseUrl,
-        `/workspace/${encodeURIComponent(workspaceId)}/git/show?ref=${encodeURIComponent(ref)}`,
+        // The commit id is a path segment, not `?ref=`: `ref` is a tracking
+        // parameter that blocker URL-tracking lists may strip or block.
+        `/workspace/${encodeURIComponent(workspaceId)}/git/commit/${encodeURIComponent(ref)}`,
         { token, hostToken },
       ),
 
