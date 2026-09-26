@@ -114,8 +114,18 @@ function getWritableSession(state: ComposerStateStore, sessionId: string): Compo
   return state.sessions[sessionId] ?? createEmptyComposerSession();
 }
 
+// crypto.randomUUID is secure-context-only; getRandomValues still works on
+// plain-HTTP LAN origins.
+function queuedItemId(): string {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return Array.from(
+    crypto.getRandomValues(new Uint8Array(16)),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
 function createQueuedItem(draft: ComposerDraft, id?: string): QueuedComposerItem {
-  return { id: id ?? crypto.randomUUID(), draft: { ...draft, messageId: draft.messageId ?? createPromptMessageID() } };
+  return { id: id ?? queuedItemId(), draft: { ...draft, messageId: draft.messageId ?? createPromptMessageID() } };
 }
 
 export const useComposerStateStore = create<ComposerStateStore>((set) => ({

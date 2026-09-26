@@ -46,7 +46,19 @@ let windowErrorHandlerRef: ((event: ErrorEvent) => void) | null = null;
 let windowUnhandledRejectionHandlerRef: ((event: PromiseRejectionEvent) => void) | null = null;
 let visibilityHandlerRef: (() => void) | null = null;
 let disposeInspectorSliceRef: (() => void) | null = null;
-const sessionKey = `react-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
+// crypto.randomUUID is secure-context-only: on a plain-HTTP LAN origin it is
+// undefined, and an unguarded call here would throw while this module is
+// evaluated — before React mounts — leaving the static boot screen up.
+// getRandomValues is not secure-context-gated, so the fallback stays random.
+function debugSessionSuffix(): string {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID().slice(0, 8);
+  return Array.from(
+    crypto.getRandomValues(new Uint8Array(4)),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+const sessionKey = `react-${Date.now().toString(36)}-${debugSessionSuffix()}`;
 
 // Cached availability of the server-side /dev/log sink, keyed by base URL.
 // Prevents the debug-logger from spamming 404s into the console when the

@@ -89,11 +89,23 @@ async function readSettledFailure(response: Response): Promise<unknown> {
 
 let lastMessageStamp = 0;
 
+// crypto.randomUUID is secure-context-only; getRandomValues still works on
+// plain-HTTP LAN origins, so message ids keep their random 14 characters.
+function promptRandomSuffix(): string {
+  if (typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID().replaceAll("-", "").slice(0, 14);
+  }
+  return Array.from(
+    crypto.getRandomValues(new Uint8Array(7)),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
 /** Native sortable msg_ format. This identifies a submission, NOT an idempotency key. */
 export function createPromptMessageID(): string {
   lastMessageStamp = Math.max(Date.now() * 0x1000, lastMessageStamp + 1);
   // Native stores the low six bytes of the timestamp/counter, then 14 random characters.
-  return `msg_${lastMessageStamp.toString(16).padStart(12, "0").slice(-12)}${crypto.randomUUID().replaceAll("-", "").slice(0, 14)}`;
+  return `msg_${lastMessageStamp.toString(16).padStart(12, "0").slice(-12)}${promptRandomSuffix()}`;
 }
 
 function getRequestUrl(input: RequestInfo | URL): string {

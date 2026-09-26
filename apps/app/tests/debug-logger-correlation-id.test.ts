@@ -11,5 +11,8 @@ describe("debug logger correlation ID", () => {
 
     expect(source).toContain("crypto.randomUUID()");
     expect(source).not.toContain("Math.random()");
+    // randomUUID is secure-context-only; the correlation ID must guard it so
+    // plain-HTTP LAN origins do not throw before React mounts.
+    expect(source).toContain("typeof crypto.randomUUID === \"function\"");
   });
 });
