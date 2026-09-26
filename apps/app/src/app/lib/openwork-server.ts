@@ -1910,18 +1910,6 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
           timeoutMs: timeouts.config,
         },
       ),
-    setDebugProviderEnabled: (enabled: boolean) =>
-      requestJson<{ ok: boolean; enabled: boolean }>(
-        baseUrl,
-        "/runtime-config/debug-provider",
-        {
-          token,
-          hostToken,
-          method: "POST",
-          body: { enabled },
-          timeoutMs: timeouts.config,
-        },
-      ),
     getRuntimeConfigStatus: (workspaceId: string) =>
       requestJson<OpenworkRuntimeConfigStatus>(
         baseUrl,

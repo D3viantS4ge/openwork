@@ -67,7 +67,49 @@ export async function buildOpenworkRuntimeConfigObject(
   // engine-pool fingerprint. Per-workspace MCPs reach the engine through the
   // dynamic push path instead.
   const runtimeConfig = config ? await readGlobalRuntimeOpencodeConfig(config) : {};
-  return buildOpenworkRuntimeConfigObjectFromSnapshot(runtimeConfig);
+  const built = buildOpenworkRuntimeConfigObjectFromSnapshot(runtimeConfig);
+  if (!config) return built;
+  // The debug provider is always injected, never developer-mode gated: the
+  // Echo model is a support/debugging aid that must survive any previous
+  // runtime state. The overlay replaces a stale `debug` row (e.g. one written
+  // by an older server whose port has since changed).
+  const provider = isRecord(built.provider) ? built.provider : {};
+  return {
+    ...built,
+    provider: { ...provider, debug: buildDebugProviderConfig(config.port) },
+  };
+}
+
+/**
+ * Engine-visible definition of the debug provider. `api` and `options.baseURL`
+ * point at this server's `/api/debug/v1` echo endpoint.
+ */
+export function buildDebugProviderConfig(port: number): Record<string, unknown> {
+  const api = `http://127.0.0.1:${port}/api/debug/v1`;
+  return {
+    name: "Debug",
+    npm: "@ai-sdk/openai-compatible",
+    api,
+    options: {
+      baseURL: api,
+      apiKey: "sk-debug",
+    },
+    models: {
+      echo: {
+        id: "echo",
+        name: "Echo",
+        limit: { context: 128000, output: 4096 },
+        capabilities: {
+          temperature: true,
+          reasoning: false,
+          toolcall: true,
+          structured_output: true,
+          input: { text: true, audio: false, image: false, video: false, pdf: false },
+          output: { text: true, audio: false, image: false, video: false, pdf: false },
+        },
+      },
+    },
+  };
 }
 
 export function buildOpenworkRuntimeConfigObjectFromSnapshot(
@@ -213,11 +255,14 @@ export async function writeOpenworkRuntimeConfigFile(
 /**
  * Keep the runtime config file in sync with the runtime DB so every engine
  * instance rebuild reads fresh state instead of a spawn-time snapshot.
- * Returns an unsubscribe function.
+ * The file is rebuilt from this listener's own server config: the engine-visible
+ * bytes embed this server's port (the debug provider's loopback URL), so a
+ * write made through another server's config object must not rewrite this
+ * file with that server's address. Returns an unsubscribe function.
  */
 export function keepOpenworkRuntimeConfigFileFresh(config: ServerConfig): () => void {
-  return onRuntimeOpencodeConfigWrite((writeConfig, writtenWorkspaceId) => {
+  return onRuntimeOpencodeConfigWrite((_writeConfig, writtenWorkspaceId) => {
     if (!isEngineGlobalRuntimeConfigId(writtenWorkspaceId)) return;
-    void writeOpenworkRuntimeConfigFile(writeConfig).catch(() => undefined);
+    void writeOpenworkRuntimeConfigFile(config).catch(() => undefined);
   });
 }

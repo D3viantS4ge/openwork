@@ -283,7 +283,6 @@ import { writeStoredDefaultModel } from "@/react-app/kernel/model-config";
 import {
   ensureProviderListQuery,
   getConnectedProviderItems,
-  refreshProviderListQueries,
   useProviderListQuery,
 } from "@/react-app/infra/provider-list-query";
 
@@ -541,23 +540,6 @@ export function SessionRoute() {
     onServerSettingsChanged: () => setOpenworkServerSettingsVersion((value) => value + 1),
     onHostInfo: setOpenworkServerHostInfoState,
   });
-  // Reconcile the debug/echo provider with the current developer mode once per
-  // server connection. Without this, a debug provider left in the server's
-  // runtime config from an earlier dev-mode-on session keeps appearing in the
-  // model picker even with developer mode off (e.g. a fresh browser), and a
-  // server restart that cleared the runtime config would leave dev-mode-on
-  // without the provider until the user toggles. The toggle handlers update
-  // the provider directly, so this only fires once per client instance.
-  const debugProviderSyncedRef = useRef(false);
-  useEffect(() => {
-    if (!client || debugProviderSyncedRef.current) return;
-    debugProviderSyncedRef.current = true;
-    client.setDebugProviderEnabled(developerMode)
-      .then(() => void refreshProviderListQueries(getReactQueryClient()))
-      .catch((error: unknown) => {
-        console.warn("[debug-provider] Failed to sync debug provider at startup:", error);
-      });
-  }, [client, developerMode]);
   const routeNavigationRef = useRef({ locationKey: location.key, generation: 0 });
   if (routeNavigationRef.current.locationKey !== location.key) {
     routeNavigationRef.current = {
@@ -3183,24 +3165,11 @@ export function SessionRoute() {
     searchText: "developer dev mode debug diagnostics toggle enable disable",
     action: () => {
       setCommandPaletteOpen(false);
-      const next = !developerMode;
-      try { window.localStorage.setItem("openwork.developerMode", next ? "1" : "0"); } catch {}
-      setDeveloperMode(next);
-      if (client) {
-        client.setDebugProviderEnabled(next)
-          .then(() => {
-            // Refresh only after the server has written the runtime config,
-            // then re-check once more once the engine has applied its (async)
-            // reload so a freshly enabled debug/echo provider appears.
-            void refreshProviderListQueries(getReactQueryClient());
-            window.setTimeout(() => {
-              void refreshProviderListQueries(getReactQueryClient());
-            }, 2500);
-          })
-          .catch((error) => {
-            console.warn("[debug-provider] Failed to toggle debug provider:", error);
-          });
-      }
+      setDeveloperMode((current) => {
+        const next = !current;
+        try { window.localStorage.setItem("openwork.developerMode", next ? "1" : "0"); } catch {}
+        return next;
+      });
     },
   }), [developerMode]);
 

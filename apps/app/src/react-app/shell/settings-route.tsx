@@ -548,39 +548,12 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     return window.localStorage.getItem("openwork.developerMode") === "1";
   });
   const toggleDeveloperMode = useCallback(() => {
-    const next = !developerMode;
-    try { window.localStorage.setItem("openwork.developerMode", next ? "1" : "0"); } catch {}
-    setDeveloperMode(next);
-    if (!openworkClient) return;
-    openworkClient.setDebugProviderEnabled(next)
-      .then(() => {
-        // Refresh only after the server has written the runtime config, then
-        // re-check once more once the engine has applied its (async) reload so
-        // a freshly enabled debug/echo provider appears in the model picker.
-        void refreshProviderListQueries(getReactQueryClient());
-        window.setTimeout(() => {
-          void refreshProviderListQueries(getReactQueryClient());
-        }, 2500);
-      })
-      .catch((error) => {
-        console.warn("[debug-provider] Failed to toggle debug provider:", error);
-      });
-  }, [developerMode, openworkClient]);
-  // Reconcile the debug/echo provider with the current developer mode once per
-  // server connection, so a stale provider from an earlier dev-mode-on session
-  // does not keep appearing in the model picker with developer mode off (e.g.
-  // a fresh browser). The toggle handler above updates the provider directly,
-  // so this only fires once per client instance.
-  const debugProviderSyncedRef = useRef(false);
-  useEffect(() => {
-    if (!openworkClient || debugProviderSyncedRef.current) return;
-    debugProviderSyncedRef.current = true;
-    openworkClient.setDebugProviderEnabled(developerMode)
-      .then(() => void refreshProviderListQueries(getReactQueryClient()))
-      .catch((error) => {
-        console.warn("[debug-provider] Failed to sync debug provider at startup:", error);
-      });
-  }, [openworkClient, developerMode]);
+    setDeveloperMode((current) => {
+      const next = !current;
+      try { window.localStorage.setItem("openwork.developerMode", next ? "1" : "0"); } catch {}
+      return next;
+    });
+  }, []);
   const [themeMode, setThemeModeState] = useState<ThemeMode>(getInitialThemeMode);
   const [hideTitlebar, setHideTitlebar] = useState(() => readStoredBoolean(SETTINGS_HIDE_TITLEBAR_KEY, false));
   const [configActionStatus, setConfigActionStatus] = useState<string | null>(null);

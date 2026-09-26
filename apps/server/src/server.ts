@@ -3153,61 +3153,6 @@ function createRoutes(
     });
   });
 
-  addRoute(routes, "POST", "/runtime-config/debug-provider", "client", async (ctx) => {
-    ensureWritable(config);
-    requireClientScope(ctx, "collaborator");
-    const workspace = resolveEngineRuntimeWorkspace(config);
-    const body = await readJsonBody(ctx.request);
-    const enabled = body.enabled === true;
-
-    const debugBaseUrl = `http://127.0.0.1:${config.port}/api/debug/v1`;
-
-    const providerPatch: Record<string, unknown> = enabled
-      ? {
-          debug: {
-            name: "Debug",
-            npm: "@ai-sdk/openai-compatible",
-            api: debugBaseUrl,
-            options: {
-              baseURL: debugBaseUrl,
-              apiKey: "sk-debug",
-            },
-            models: {
-              echo: {
-                id: "echo",
-                name: "Echo",
-                limit: { context: 128000, output: 4096 },
-                capabilities: {
-                  temperature: true,
-                  reasoning: false,
-                  toolcall: true,
-                  structured_output: true,
-                  input: { text: true, audio: false, image: false, video: false, pdf: false },
-                  output: { text: true, audio: false, image: false, video: false, pdf: false },
-                },
-              },
-            },
-          },
-        }
-      : { debug: null };
-
-    const result = await writeGlobalRuntimeOpencodeConfig(config, (current) => ({
-      ...current,
-      provider: mergeRuntimeProviderUpdate(current.provider, providerPatch),
-    }));
-
-    if (result.changed) {
-      await writeOpenworkRuntimeConfigFile(config);
-      emitReloadEvent(ctx.reloadEvents, workspace, "config", buildConfigTrigger(openworkRuntimeConfigFilePath(config)));
-    }
-
-    return jsonResponse({
-      ok: true,
-      enabled,
-      changed: result.changed,
-    });
-  });
-
   addRoute(routes, "GET", "/workspace/:id/runtime-config", "client", async (ctx) => {
     const workspace = await resolveWorkspace(config, ctx.params.id);
     const runtime = await readRuntimeOpencodeConfig(config, workspace.id);

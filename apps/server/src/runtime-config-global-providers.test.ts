@@ -3,7 +3,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { openworkRuntimeConfigFilePath, writeOpenworkRuntimeConfigFile } from "./openwork-runtime-config.js";
+import { buildDebugProviderConfig, openworkRuntimeConfigFilePath, writeOpenworkRuntimeConfigFile } from "./openwork-runtime-config.js";
 import {
   mergeRuntimeProviderUpdate,
   readGlobalRuntimeOpencodeConfig,
@@ -104,7 +104,10 @@ describe("global runtime providers", () => {
     const raw = await readFile(path, "utf8");
     const parsed: unknown = JSON.parse(raw);
     if (!isRecord(parsed)) throw new Error("Expected runtime config object");
-    expect(providerFromPayload(parsed)).toEqual({ lpr_openrouter: openrouter });
+    expect(providerFromPayload(parsed)).toEqual({
+      lpr_openrouter: openrouter,
+      debug: buildDebugProviderConfig(config.port),
+    });
 
     const storageEntries = await readdir(runtimeStorageDir(config));
     expect(storageEntries.filter((entry) => entry.includes("runtime-opencode-config.json.")).length).toBe(0);
@@ -175,6 +178,7 @@ describe("global runtime providers", () => {
     if (!isRecord(restoredFile)) throw new Error("Expected restored runtime config object");
     expect(providerFromPayload(restoredFile)).toEqual({
       lpr_anthropic: provider,
+      debug: buildDebugProviderConfig(config.port),
     });
 
     await writeFile(openworkRuntimeConfigFilePath(config), "{}", "utf8");
@@ -198,7 +202,9 @@ describe("global runtime providers", () => {
 
     const readback = await fetch(`${base}/opencode/config`, { headers: clientHeaders() });
     expect(readback.status).toBe(200);
-    expect(providerFromPayload(await readJsonObject(readback))).toEqual({});
+    expect(providerFromPayload(await readJsonObject(readback))).toEqual({
+      debug: buildDebugProviderConfig(config.port),
+    });
 
     const globalRuntime = await readGlobalRuntimeOpencodeConfig(config);
     expect(runtimeProviderMap(globalRuntime)).toEqual({});

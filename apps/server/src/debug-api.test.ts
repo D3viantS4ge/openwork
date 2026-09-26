@@ -4,11 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { startServer } from "./server.js";
-import {
-  readGlobalRuntimeOpencodeConfig,
-  readRuntimeOpencodeConfig,
-  writeRuntimeOpencodeConfig,
-} from "./runtime-opencode-config-store.js";
 import type { ServerConfig } from "./types.js";
 
 const CLIENT_TOKEN = "owt_runtime_debug_client";
@@ -18,10 +13,6 @@ const stops: Array<() => void | Promise<void>> = [];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function clientAuth() {
-  return { authorization: `Bearer ${CLIENT_TOKEN}`, "content-type": "application/json" };
 }
 
 async function createTempRoot() {
@@ -59,117 +50,6 @@ afterEach(async () => {
     const root = roots.pop();
     if (root) await rm(root, { recursive: true, force: true });
   }
-});
-
-describe("runtime-config debug-provider route", () => {
-  test("enables the debug provider in the global runtime store", async () => {
-    const root = await createTempRoot();
-    const { base, config } = await startOpenworkServer(root);
-
-    const response = await fetch(`${base}/runtime-config/debug-provider`, {
-      method: "POST",
-      headers: clientAuth(),
-      body: JSON.stringify({ enabled: true }),
-    });
-
-    expect(response.status).toBe(200);
-    const body: unknown = await response.json();
-    expect(isRecord(body) ? body.enabled : null).toBe(true);
-
-    const globalRuntime = await readGlobalRuntimeOpencodeConfig(config);
-    const debugProvider = isRecord(globalRuntime.provider) ? globalRuntime.provider.debug : undefined;
-    expect(isRecord(debugProvider)).toBe(true);
-    if (isRecord(debugProvider)) {
-      expect(debugProvider.name).toBe("Debug");
-      expect(debugProvider.npm).toBe("@ai-sdk/openai-compatible");
-      expect(typeof debugProvider.api).toBe("string");
-      expect((debugProvider.api as string)).toContain("127.0.0.1");
-      expect((debugProvider.api as string)).toContain("/api/debug/v1");
-      const models = isRecord(debugProvider.models) ? debugProvider.models : {};
-      expect(isRecord(models.echo)).toBe(true);
-      if (isRecord(models.echo)) {
-        expect(models.echo.id).toBe("echo");
-        expect(models.echo.name).toBe("Echo");
-      }
-    }
-  });
-
-  test("disables the debug provider by removing it from the global runtime store", async () => {
-    const root = await createTempRoot();
-    const { base, config } = await startOpenworkServer(root);
-
-    // First enable
-    await fetch(`${base}/runtime-config/debug-provider`, {
-      method: "POST",
-      headers: clientAuth(),
-      body: JSON.stringify({ enabled: true }),
-    });
-
-    // Then disable
-    const response = await fetch(`${base}/runtime-config/debug-provider`, {
-      method: "POST",
-      headers: clientAuth(),
-      body: JSON.stringify({ enabled: false }),
-    });
-
-    expect(response.status).toBe(200);
-    const body: unknown = await response.json();
-    expect(isRecord(body) ? body.enabled : null).toBe(false);
-
-    const globalRuntime = await readGlobalRuntimeOpencodeConfig(config);
-    const debugProvider = isRecord(globalRuntime.provider) ? globalRuntime.provider.debug : undefined;
-    expect(debugProvider).toBeUndefined();
-  });
-
-  test("preserves other runtime keys while enabling debug provider", async () => {
-    const root = await createTempRoot();
-    const { base, config } = await startOpenworkServer(root);
-
-    // Preseed other runtime keys
-    await writeRuntimeOpencodeConfig(config, "ws_1", () => ({
-      disabled_providers: ["anthropic"],
-      mcp: { notion: { type: "remote", url: "https://notion.example/mcp" } },
-    }));
-
-    const response = await fetch(`${base}/runtime-config/debug-provider`, {
-      method: "POST",
-      headers: clientAuth(),
-      body: JSON.stringify({ enabled: true }),
-    });
-
-    expect(response.status).toBe(200);
-
-    // Workspace-level keys should be preserved
-    const wsRuntime = await readRuntimeOpencodeConfig(config, "ws_1");
-    expect(wsRuntime.disabled_providers).toEqual(["anthropic"]);
-    expect(wsRuntime.mcp?.notion?.url).toBe("https://notion.example/mcp");
-  });
-
-  test("rejects requests without client auth", async () => {
-    const root = await createTempRoot();
-    const { base } = await startOpenworkServer(root);
-
-    const response = await fetch(`${base}/runtime-config/debug-provider`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ enabled: true }),
-    });
-
-    expect(response.status).toBe(401);
-  });
-
-  test("rejects invalid JSON body", async () => {
-    const root = await createTempRoot();
-    const { base } = await startOpenworkServer(root);
-
-    const response = await fetch(`${base}/runtime-config/debug-provider`, {
-      method: "POST",
-      headers: clientAuth(),
-      body: "not-json",
-    });
-
-    expect(response.status).toBe(400);
-  });
 });
 
 describe("debug API endpoint", () => {

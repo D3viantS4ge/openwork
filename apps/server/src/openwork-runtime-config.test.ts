@@ -7,7 +7,9 @@ import { managedPolicyPluginPath } from "./managed-policy-plugin.js";
 import { catalogFastVariants, fastVariantId } from "@openwork/types/cloud-model-fast";
 
 import {
+  buildDebugProviderConfig,
   buildOpenworkRuntimeConfig,
+  buildOpenworkRuntimeConfigObject,
   buildOpenworkRuntimeConfigObjectFromSnapshot,
   keepOpenworkRuntimeConfigFileFresh,
   openworkRuntimeConfigFilePath,
@@ -108,6 +110,35 @@ describe("openwork runtime config file", () => {
     expect(parsed.plugin).toContain("ordinary-plugin");
     expect(parsed.plugin).toContain("/user/plugins/managed-policy.ts");
     expect(buildOpenworkRuntimeConfigObjectFromSnapshot({}).permission).toEqual({});
+  });
+
+  test("always injects the debug provider, replacing any stale row with the current port", async () => {
+    const { config } = await setup();
+    config.port = 43210;
+    // A previous server run may have left a stale debug row behind (e.g. an
+    // older port); the always-on injection must replace it.
+    await writeGlobalRuntimeOpencodeConfig(config, (current) => ({
+      ...current,
+      provider: {
+        debug: { name: "Stale", npm: "@ai-sdk/openai-compatible", api: "http://127.0.0.1:1/api/debug/v1" },
+      },
+    }));
+
+    const built = await buildOpenworkRuntimeConfigObject(config);
+    const provider = built.provider as Record<string, unknown>;
+    expect(provider.debug).toEqual(buildDebugProviderConfig(43210));
+    expect(provider.debug).toMatchObject({
+      name: "Debug",
+      npm: "@ai-sdk/openai-compatible",
+      api: "http://127.0.0.1:43210/api/debug/v1",
+      options: { baseURL: "http://127.0.0.1:43210/api/debug/v1", apiKey: "sk-debug" },
+      models: { echo: { id: "echo", name: "Echo" } },
+    });
+
+    await writeOpenworkRuntimeConfigFile(config);
+    const parsed = await readConfigFile(config);
+    const fileProvider = parsed.provider as Record<string, unknown>;
+    expect(fileProvider.debug).toEqual(buildDebugProviderConfig(43210));
   });
 
   test("writes global-row MCPs and openwork defaults into the file", async () => {
