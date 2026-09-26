@@ -1,4 +1,7 @@
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { OPENWORK_AGENT_PROMPT } from "../openwork-agent-prompt.js";
 import { OpenWorkCapabilitiesKnowledge } from "./openwork-capabilities-knowledge.js";
@@ -9,6 +12,27 @@ import {
   OPENWORK_GOOGLE_CONNECTION_INSTRUCTION,
 } from "./openwork-extensions-preview-steering.js";
 import { OpenWorkSpreadsheets } from "./openwork-spreadsheets.js";
+
+// The browser steering only composes when a desktop bridge is discoverable.
+// A valid discovery file is enough here; no browser request is ever made.
+const originalUiControlDiscovery = process.env.OPENWORK_UI_CONTROL_DISCOVERY;
+let bridgeDirectory: string | null = null;
+
+beforeAll(async () => {
+  bridgeDirectory = await mkdtemp(join(tmpdir(), "openwork-prompt-composition-ui-"));
+  const discoveryPath = join(bridgeDirectory, "openwork-ui-control.json");
+  await writeFile(discoveryPath, JSON.stringify({
+    baseUrl: "http://127.0.0.1:1",
+    token: "prompt-composition-test-token",
+  }));
+  process.env.OPENWORK_UI_CONTROL_DISCOVERY = discoveryPath;
+});
+
+afterAll(async () => {
+  if (originalUiControlDiscovery === undefined) delete process.env.OPENWORK_UI_CONTROL_DISCOVERY;
+  else process.env.OPENWORK_UI_CONTROL_DISCOVERY = originalUiControlDiscovery;
+  if (bridgeDirectory) await rm(bridgeDirectory, { recursive: true, force: true });
+});
 
 function occurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;

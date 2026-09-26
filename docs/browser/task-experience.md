@@ -225,9 +225,11 @@ these journeys require fresh evidence after reconstruction.
 
 The implementation is model-independent. Text-only models can use page text and
 site tools; visual work requires an image-capable model or user assistance.
-The desktop and its local server must run on the same machine. A remote server
-without its own desktop browser returns an unavailable result; this does not
-connect to a different machine's external browser.
+The desktop and its local server must run on the same machine. A remote or
+headless server with no desktop bridge does not register the built-in browser
+tools at all, so agents use another configured browser tool instead of calling
+tools that would only return an unavailable result; this never connects to a
+different machine's external browser.
 The deterministic provider verifies tool availability, execution context and
 result delivery and a verified completion answer in the conversation. It does not prove open-ended planning
 quality for every provider. Direct control of external browser profiles,

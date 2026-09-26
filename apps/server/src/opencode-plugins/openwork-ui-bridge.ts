@@ -47,6 +47,16 @@ async function discoverUiBridge(): Promise<UiBridge | null> {
   return null;
 }
 
+/**
+ * Whether a desktop UI-control bridge is discoverable on this machine right
+ * now. Browser plugins use this at registration time: a remote or headless
+ * server has no bridge, so registering the tools there would only invite
+ * agents to call tools that always return browser_unavailable.
+ */
+export async function uiBridgeAvailable(): Promise<boolean> {
+  return (await discoverUiBridge()) !== null;
+}
+
 export async function uiBridgeRequest(
   path: string,
   options: { method?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal } = {},

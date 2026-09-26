@@ -126,6 +126,12 @@ async function transformedSystem(plugin: Awaited<ReturnType<typeof OpenWorkExten
   return output.system.join("\n");
 }
 
+// Browser tools are only registered when a desktop bridge is discoverable.
+function registeredTool<T>(tool: T | undefined, name: string): T {
+  if (tool === undefined) throw new Error(`Expected tool ${name} to be registered`);
+  return tool;
+}
+
 function startFakeOpenWorkServer(options: {
   failPromptText?: string;
   failSessionListWorkspaceId?: string;
@@ -931,6 +937,7 @@ describe("OpenWorkExtensionsPreview session tools", () => {
 
   test("uses neutral transform steering when the engine reports failed Cloud status", async () => {
     startFakeOpenWorkServer();
+    await startFakeWebMcpUiBridge();
     const requests: unknown[] = [];
     const mcp = {
       result: { data: { "openwork-cloud": { status: "failed" } } },
@@ -959,6 +966,7 @@ describe("OpenWorkExtensionsPreview session tools", () => {
 
   test("extends the engine system entry instead of adding a second system message", async () => {
     startFakeOpenWorkServer();
+    await startFakeWebMcpUiBridge();
     const mcp = {
       async status() {
         return { data: { "openwork-cloud": { status: "connected" } } };
@@ -1561,6 +1569,7 @@ describe("OpenWorkExtensionsPreview session tools", () => {
 
 describe("OpenWorkExtensionsPreview semantic tool surface", () => {
   test("exposes semantic tools, native visualization and the WebMCP browser broker", async () => {
+    await startFakeWebMcpUiBridge();
     const plugin = await OpenWorkExtensionsPreview();
     const tools = Object.keys(plugin.tool).sort();
 
@@ -1594,11 +1603,31 @@ describe("OpenWorkExtensionsPreview semantic tool surface", () => {
     expect(system).toContain("do not repeat through another method");
   });
 
+  test("omits browser tooling when no desktop bridge is discoverable", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "openwork-no-browser-ui-"));
+    process.env.OPENWORK_UI_CONTROL_DISCOVERY = join(directory, "missing-openwork-ui-control.json");
+    stops.push(() => void rm(directory, { recursive: true, force: true }));
+
+    const plugin = await OpenWorkExtensionsPreview();
+    expect(Object.keys(plugin.tool).sort()).toEqual([
+      "openwork_context",
+      "openwork_execute",
+      "openwork_query",
+      "openwork_visualization",
+    ]);
+
+    const system = await transformedSystem(plugin);
+    expect(system).not.toContain("## Built-in Browser");
+    expect(system).not.toContain("Start with browser_tabs");
+    expect(system).not.toContain("webmcp_list_tools");
+  });
+
   test("routes WebMCP discovery and execution through the authenticated desktop bridge", async () => {
     const bridge = await startFakeWebMcpUiBridge();
     const plugin = await OpenWorkExtensionsPreview();
 
-    const listed = JSON.parse(await plugin.tool.webmcp_list_tools.execute({ tabId: "tab_1" }, { sessionID: "browser-test" }));
+    const listTools = registeredTool(plugin.tool.webmcp_list_tools, "webmcp_list_tools");
+    const listed = JSON.parse(await listTools.execute({ tabId: "tab_1" }, { sessionID: "browser-test" }));
     expect(listed).toMatchObject({
       ok: true,
       tabId: "tab_1",
@@ -1610,7 +1639,8 @@ describe("OpenWorkExtensionsPreview semantic tool surface", () => {
       trust: "untrusted-site-content",
     });
 
-    const executed = JSON.parse(await plugin.tool.webmcp_call_tool.execute({
+    const callTool = registeredTool(plugin.tool.webmcp_call_tool, "webmcp_call_tool");
+    const executed = JSON.parse(await callTool.execute({
       toolId: "site_tool_1",
       input: { detail: "full" },
     }, { sessionID: "browser-test" }));
