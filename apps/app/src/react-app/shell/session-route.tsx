@@ -2589,21 +2589,32 @@ export function SessionRoute() {
       applyRequest(overrides);
       return;
     }
-    // A named agent contributes its model/variant defaults; resolve against the
-    // same list the composer uses and still run when the lookup fails.
-    void resolveRunPromptAgentOverrides(overrides, listAgents).then((resolvedOverrides) => {
+    // A named agent contributes its model/variant defaults. Resolve with the
+    // same endpoint client createTaskWithPrompt uses: opencodeClient is still
+    // null while the engine-routing probe resolves on a fresh page load.
+    const loadRunPromptAgents = async () => {
+      const endpoint = endpointForWorkspace(selectedWorkspace);
+      if (!endpoint?.token) return [];
+      const client = createClient(endpoint.opencodeBaseUrl, selectedWorkspaceRoot || undefined, {
+        token: endpoint.token,
+        mode: "openwork",
+      });
+      return unwrap(await client.app.agents()).filter(isLibraryAgent);
+    };
+    void resolveRunPromptAgentOverrides(overrides, loadRunPromptAgents).then((resolvedOverrides) => {
       if (runPromptHandledUrlRef.current !== handledKey) return;
       applyRequest(resolvedOverrides);
     });
   }, [
     createTaskWithPrompt,
     endpointForWorkspace,
-    listAgents,
     loading,
     location,
     navigateToWorkspaceSession,
     selectedSessionId,
     selectedWorkspaceId,
+    selectedWorkspaceRoot,
+    selectedWorkspace,
     workspaces,
   ]);
 
