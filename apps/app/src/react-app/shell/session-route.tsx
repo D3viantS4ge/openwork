@@ -276,7 +276,11 @@ import {
   workspaceSettingsRoute,
 } from "./workspace-routes";
 import { WorkspaceProvider } from "./workspace-provider";
-import { parseRunPromptRequest, type RunPromptOverrides } from "./run-prompt-params";
+import {
+  parseRunPromptRequest,
+  resolveRunPromptAgentOverrides,
+  type RunPromptOverrides,
+} from "./run-prompt-params";
 import type { OpenTarget } from "@/react-app/domains/session/artifacts/open-target";
 import { SettingsSurface } from "./settings-route";
 import { writeStoredDefaultModel } from "@/react-app/kernel/model-config";
@@ -309,6 +313,10 @@ function serializeSDKError(error: unknown): string {
 function applyRunPromptOverrides(sessionId: string, overrides: RunPromptOverrides): void {
   if (overrides.model) {
     useSessionModelStore.getState().setModel(sessionId, overrides.model, overrides.variant ?? null);
+    // setModel no-ops when the model is unchanged, so apply a present variant
+    // separately; otherwise an agent/explicit variant is dropped whenever the
+    // model matches the session's current one.
+    if (overrides.variant) useSessionModelStore.getState().setVariant(sessionId, overrides.variant);
   } else if (overrides.variant) {
     useSessionModelStore.getState().setVariant(sessionId, overrides.variant);
   }
@@ -2558,25 +2566,39 @@ export function SessionRoute() {
     const { message, overrides } = request;
     const hasOverrides = Boolean(overrides.model || overrides.variant || overrides.agent);
 
-    if (selectedSessionId) {
-      // Existing session: apply overrides, then queue the message so it runs
-      // immediately when idle and queues (like Enter) when the agent is busy.
-      if (hasOverrides) applyRunPromptOverrides(selectedSessionId, overrides);
-      const draft: ComposerDraft = {
-        mode: "prompt",
-        parts: [{ type: "text", text: message }],
-        attachments: [],
-        text: message,
-        resolvedText: message,
-      };
-      useComposerStateStore.getState().appendQueuedDraft(selectedSessionId, draft);
-      navigateToWorkspaceSession(selectedWorkspaceId, selectedSessionId, { replace: true });
-    } else {
-      void createTaskWithPrompt(selectedWorkspaceId, message, undefined, hasOverrides ? overrides : undefined);
+    const applyRequest = (resolvedOverrides: RunPromptOverrides) => {
+      if (selectedSessionId) {
+        // Existing session: apply overrides, then queue the message so it runs
+        // immediately when idle and queues (like Enter) when the agent is busy.
+        if (hasOverrides) applyRunPromptOverrides(selectedSessionId, resolvedOverrides);
+        const draft: ComposerDraft = {
+          mode: "prompt",
+          parts: [{ type: "text", text: message }],
+          attachments: [],
+          text: message,
+          resolvedText: message,
+        };
+        useComposerStateStore.getState().appendQueuedDraft(selectedSessionId, draft);
+        navigateToWorkspaceSession(selectedWorkspaceId, selectedSessionId, { replace: true });
+        return;
+      }
+      void createTaskWithPrompt(selectedWorkspaceId, message, undefined, hasOverrides ? resolvedOverrides : undefined);
+    };
+
+    if (!overrides.agent) {
+      applyRequest(overrides);
+      return;
     }
+    // A named agent contributes its model/variant defaults; resolve against the
+    // same list the composer uses and still run when the lookup fails.
+    void resolveRunPromptAgentOverrides(overrides, listAgents).then((resolvedOverrides) => {
+      if (runPromptHandledUrlRef.current !== handledKey) return;
+      applyRequest(resolvedOverrides);
+    });
   }, [
     createTaskWithPrompt,
     endpointForWorkspace,
+    listAgents,
     loading,
     location,
     navigateToWorkspaceSession,
