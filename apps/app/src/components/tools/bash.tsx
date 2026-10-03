@@ -10,6 +10,7 @@ import {
 } from "@/components/tools/collapsible-tool"
 import { parseShellMetadata } from "@/app/lib/shell-metadata"
 import type { BashToolPart } from "@/lib/build-in-tools"
+import { isToolPartInFlight } from "@/lib/tool-activity"
 
 interface BashToolProps {
   part: BashToolPart
@@ -18,7 +19,11 @@ interface BashToolProps {
 export function BashTool({ part }: BashToolProps) {
   const exit = typeof part.metadata?.exit === "number" ? part.metadata.exit : null
   const truncated = part.metadata?.truncated === true
-  const parsed = useMemo(() => parseShellMetadata(part.output ?? ""), [part.output])
+  const inFlight = isToolPartInFlight(part)
+  // While the command runs, the engine streams a tail of its output into
+  // state metadata; show it live instead of waiting for the final output.
+  const liveOutput = inFlight && typeof part.metadata?.output === "string" ? part.metadata.output : ""
+  const parsed = useMemo(() => parseShellMetadata(liveOutput || part.output || ""), [liveOutput, part.output])
 
   return (
     <CollapsibleTool>
@@ -37,6 +42,9 @@ export function BashTool({ part }: BashToolProps) {
           <div className="flex flex-col gap-2 text-xs">
             <pre className="whitespace-pre-wrap wrap-break-word">$ {part.input.command}</pre>
             <span className="flex items-center gap-2">
+              {inFlight ? (
+                <span className="text-muted-foreground ow-text-shimmer">running…</span>
+              ) : null}
               {exit !== null ? (
                 <span
                   className={

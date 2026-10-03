@@ -570,3 +570,70 @@ describe("tool aggregate long details", () => {
     });
   });
 });
+
+describe("tool aggregate live bash output", () => {
+  const runningWithOutput: DynamicToolUIPart = {
+    ...runningCommand,
+    toolCallId: "running-with-output",
+    metadata: { output: "streaming tail" },
+  };
+
+  test("an expanded chevron shows a running command's streamed output without expanding the block", async () => {
+    await withRoot(async (container, root) => {
+      await act(async () => root.render(
+        <CurrentToolLifecycleProvider
+          activityStatus="responding"
+          currentToolCallIds={new Set([runningWithOutput.toolCallId])}
+        >
+          <ToolAggregateGroup parts={[runningWithOutput]} />
+        </CurrentToolLifecycleProvider>,
+      ));
+      const header = container.querySelector<HTMLButtonElement>("[data-tool-aggregate] > button");
+      if (!header) throw new Error("Expected the aggregate summary button");
+      await act(async () => header.click());
+
+      // The command box defaults open while the command runs, so the
+      // streamed tail is visible as soon as the chevron is expanded.
+      expect(container.textContent).toContain("streaming tail");
+    });
+  });
+
+  test("a collapsed chevron hides the running command's streamed output", () => {
+    const markup = renderToStaticMarkup(
+      <CurrentToolLifecycleProvider
+        activityStatus="responding"
+        currentToolCallIds={new Set([runningWithOutput.toolCallId])}
+      >
+        <ToolAggregateGroup parts={[runningWithOutput]} />
+      </CurrentToolLifecycleProvider>,
+    );
+
+    expect(markup).not.toContain("streaming tail");
+  });
+
+  test("a completed command shows its final output once, not the streamed tail", async () => {
+    const completed: DynamicToolUIPart = {
+      ...runningWithOutput,
+      toolCallId: "completed-with-output",
+      state: "output-available",
+      output: "final output",
+      metadata: { output: "final output" },
+    };
+
+    await withRoot(async (container, root) => {
+      await act(async () => root.render(<ToolAggregateGroup parts={[completed]} />));
+      const header = container.querySelector<HTMLButtonElement>("[data-tool-aggregate] > button");
+      if (!header) throw new Error("Expected the aggregate summary button");
+      await act(async () => header.click());
+
+      // Without "Expand tool results", a settled command box stays collapsed.
+      const toggle = container.querySelector<HTMLElement>("[data-tool-aggregate-command]");
+      if (!toggle) throw new Error("Expected the command block");
+      expect(container.textContent).not.toContain("final output");
+
+      await act(async () => toggle.click());
+      expect(container.textContent).toContain("final output");
+      expect(container.textContent).not.toContain("streaming tail");
+    });
+  });
+});

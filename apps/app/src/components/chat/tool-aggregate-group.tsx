@@ -309,11 +309,11 @@ export function ToolAggregateGroup({ parts, messageId, thoughts = [], className 
   const [showAll, setShowAll] = useWorkbenchDisclosure(keyFor(groupKey, "show-all"))
   const resolveLifecycle = useCurrentToolLifecycleResolver()
 
-  const detailBox = (kind: DetailBoxProps["kind"], toolCallId: string, text: string, children?: ReactNode) => {
+  const detailBox = (kind: DetailBoxProps["kind"], toolCallId: string, text: string, children?: ReactNode, defaultOpen?: boolean) => {
     return (
       <RetainedDetailBox
         disclosureKey={keyFor(toolCallId, kind)}
-        defaultOpen={expandByDefault}
+        defaultOpen={defaultOpen ?? expandByDefault}
         kind={kind}
         text={text}
       >
@@ -525,6 +525,13 @@ export function ToolAggregateGroup({ parts, messageId, thoughts = [], className 
               : persistedRowStatus(part)
             const failure = failureText(part)
             const bash = isBashToolPart(part)
+            const inFlight = isToolPartInFlight(part)
+            // While a command runs, the engine streams a tail of its output
+            // into state metadata; surface it so an expanded chevron shows
+            // up-to-date output instead of dead air until completion.
+            const bashLiveOutput = bash && inFlight && typeof part.metadata?.output === "string"
+              ? part.metadata.output
+              : ""
             const command = bash ? part.input?.command?.trim() ?? "" : ""
             const commandDescription = bash
               ? part.input?.description?.trim() || "command"
@@ -606,7 +613,13 @@ export function ToolAggregateGroup({ parts, messageId, thoughts = [], className 
                     command,
                     bash && part.state === "output-available" && part.output
                       ? <ShellMetadataOutput output={part.output} />
-                      : undefined,
+                      : bashLiveOutput
+                        ? <ShellMetadataOutput output={bashLiveOutput} />
+                        : undefined,
+                    // A running command's box starts open so the streamed
+                    // output is visible as soon as the chevron is expanded;
+                    // an explicit collapse (persisted) still wins.
+                    bash && inFlight,
                   )
                 ) : null}
                 {isEditToolPart(part) || isApplyPatchToolPart(part) ? (
