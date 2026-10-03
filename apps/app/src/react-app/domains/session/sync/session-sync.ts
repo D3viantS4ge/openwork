@@ -995,21 +995,35 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
     // renderer derives the visible transcript from this cursor, so a revert
     // (or its cleanup on the next prompt) must reach the snapshot cache or
     // the transcript stays frozen on stale history.
+    //
+    // OpenCode clears `session.revert` during prompt cleanup and publishes the
+    // full session info without a `revert` key (JSON drops `undefined`), so a
+    // full update — one that carries `time` — is authoritative about the
+    // cursor's absence too. Partial updates (the V2 adapter's rename
+    // translation carries only id/title) must not clear it.
+    const info = update.info as Partial<OpenworkSessionSnapshot["session"]>;
+    const revert = info.revert;
+    const fullSessionInfo = typeof info.time === "object" && info.time !== null;
+    const clearsRevert = fullSessionInfo
+      && revert === undefined
+      && queryClient.getQueryData<OpenworkSessionHistory>(
+        snapshotKey(workspaceId, update.sessionId),
+      )?.session.revert !== undefined;
+    if (clearsRevert) {
+      // A snapshot read taken before the clear can resolve after this event
+      // and re-stamp the stale cursor; cancel it before writing the clear.
+      void queryClient.cancelQueries({ queryKey: snapshotKey(workspaceId, update.sessionId), exact: true });
+    }
+    // Cost/token usage also arrives here live via session.updated.
     queryClient.setQueryData<OpenworkSessionHistory>(
       snapshotKey(workspaceId, update.sessionId),
       (current) => {
         if (!current) return current;
-        // The renderer derives the visible transcript from the revert cursor,
-        // so a revert (or its cleanup on the next prompt) must reach the
-        // snapshot cache or the transcript stays frozen on stale history.
-        // Cost/token usage also arrives here live via session.updated.
-        const info = update.info as Partial<OpenworkSessionSnapshot["session"]>;
-        const revert = info.revert;
         return {
           ...current,
           session: {
             ...current.session,
-            ...(revert !== undefined ? { revert } : {}),
+            ...(fullSessionInfo || revert !== undefined ? { revert } : {}),
             ...(typeof info.cost === "number" ? { cost: info.cost } : {}),
             ...(info.tokens ? { tokens: info.tokens } : {}),
           },

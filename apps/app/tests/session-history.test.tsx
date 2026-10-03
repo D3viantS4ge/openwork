@@ -1153,4 +1153,49 @@ describe("opening a thread", () => {
     expect(view.client.getQueryData(key)).toBe(cached);
     expect((await view.ensureFullSnapshot()).session.revert?.messageID).toBe("cursor");
   });
+
+  test("a full session update without a revert key clears the cursor so a streaming replacement is visible", async () => {
+    const view = fixture();
+    const event = sessionEvents();
+    const key = snapshotKey("workspace", "a");
+    // Warm full history with the cursor on the first message: the entire
+    // transcript sits at/after the cursor.
+    view.client.setQueryData(key, snapshot("a", "Reverted", ["cursor", "hidden"], "cursor"));
+    await view.render();
+    // The bounded newest read can time out remotely; without it the renderer
+    // falls back to the cursor-sliced snapshot floor.
+    await act(async () => view.latestReads[0].reject(new Error("newest history timed out")));
+    await settle();
+    // Revert cleanup removed the reverted messages server-side.
+    await event({ type: "message.removed", properties: { sessionID: "a", messageID: "cursor" } });
+    await event({ type: "message.removed", properties: { sessionID: "a", messageID: "hidden" } });
+    // The replacement prompt and its streaming output arrive live.
+    await event({ type: "message.updated", properties: { info: { id: "replacement", sessionID: "a", role: "user", time: { created: 50 } } } });
+    await event({ type: "message.part.updated", properties: { part: { id: "replacement-part", sessionID: "a", messageID: "replacement", type: "text", text: "new prompt" } } });
+    await event({ type: "message.updated", properties: { info: { id: "answer", sessionID: "a", role: "assistant", time: { created: 60 } } } });
+    await event({ type: "message.part.updated", properties: { part: { id: "answer-part", sessionID: "a", messageID: "answer", type: "text", text: "streaming output" } } });
+    // The stale cursor still hides every live message at/after it.
+    expect(view.host.querySelector('[data-message-id="replacement"]')).toBeNull();
+    expect(view.host.querySelector('[data-message-id="answer"]')).toBeNull();
+    // OpenCode clears the revert during prompt cleanup; JSON drops the key.
+    await event({ type: "session.updated", properties: { info: { id: "a", title: "Reverted", version: "1", time: { created: 1, updated: 2 } } } });
+    expect(view.client.getQueryData<OpenworkSessionHistory>(key)?.session.revert).toBeUndefined();
+    expect(view.host.querySelector('[data-message-id="replacement"]')).not.toBeNull();
+    expect(view.host.querySelector('[data-message-id="answer"]')?.textContent).toContain("streaming output");
+  });
+
+  test("a partial session update cannot clear the cached revert cursor", async () => {
+    const view = fixture();
+    const event = sessionEvents();
+    const key = snapshotKey("workspace", "a");
+    view.client.setQueryData(key, snapshot("a", "Reverted", ["before", "cursor", "hidden"], "cursor"));
+    await view.render();
+    await view.resolveLatest(0, snapshot("a", "Reverted", ["before", "cursor", "hidden"]));
+    // The V2 adapter's rename translation carries only id/title: a missing
+    // `revert` there is not evidence the server cleared the cursor.
+    await event({ type: "session.updated", properties: { info: { id: "a", title: "Renamed" } } });
+    expect(view.client.getQueryData<OpenworkSessionHistory>(key)?.session.revert?.messageID).toBe("cursor");
+    // The cursor still hides the reverted tail.
+    expect([...view.host.querySelectorAll("[data-message-id]")].map((item) => item.getAttribute("data-message-id"))).toEqual(["before"]);
+  });
 });
