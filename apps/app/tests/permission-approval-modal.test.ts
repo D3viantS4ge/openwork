@@ -6,8 +6,11 @@ import type { PendingPermission } from "../src/app/types";
 
 import {
   PermissionApprovalPanel,
-  permissionDetailRows,
 } from "../src/react-app/domains/session/chat/permission-approval-modal";
+import {
+  permissionDetailRows,
+  permissionWithToolInputDetails,
+} from "../src/react-app/domains/session/chat/permission-details";
 
 function pendingPermission(overrides: Partial<PendingPermission> = {}): PendingPermission {
   return {
@@ -109,5 +112,59 @@ describe("permission approval modal helpers", () => {
 
     expect(html).toContain('data-permission-source="child-session"');
     expect(html).toContain("Requested by Investigate the deployment failure");
+  });
+});
+
+describe("permissionWithToolInputDetails", () => {
+  test("merges MCP tool arguments into a permission with no engine details", () => {
+    const permission = pendingPermission({ permission: "calibress_curl", metadata: {} });
+    const merged = permissionWithToolInputDetails(permission, {
+      method: "GET",
+      url: "https://raw.githubusercontent.com/de4dot/de4dot/master/README.md",
+    });
+
+    expect(merged?.metadata).toEqual({
+      method: "GET",
+      url: "https://raw.githubusercontent.com/de4dot/de4dot/master/README.md",
+    });
+    expect(permissionDetailRows(merged!.metadata).map((row) => [row.label, row.value])).toEqual([
+      ["URL", "https://raw.githubusercontent.com/de4dot/de4dot/master/README.md"],
+    ]);
+  });
+
+  test("renders the merged arguments as raw details", () => {
+    const permission = permissionWithToolInputDetails(
+      pendingPermission({ permission: "calibress_curl", metadata: {} }),
+      { method: "GET", url: "https://raw.githubusercontent.com/de4dot/de4dot/master/README.md" },
+    );
+    const html = renderToStaticMarkup(
+      React.createElement(PermissionApprovalPanel, {
+        permission: permission!,
+        respondPermission: () => {},
+      }),
+    );
+
+    const document = parseDocument(html);
+    const pre = DomUtils.findAll((element) => element.name === "pre", document.children)[0];
+    expect(DomUtils.textContent(pre)).toContain('"method": "GET"');
+    expect(DomUtils.textContent(pre)).toContain('"url": "https://raw.githubusercontent.com/de4dot/de4dot/master/README.md"');
+  });
+
+  test("engine-provided details win and are not replaced", () => {
+    const permission = pendingPermission({ metadata: { command: "rm -rf dist" } });
+    expect(permissionWithToolInputDetails(permission, { command: "echo other" })).toBe(permission);
+  });
+
+  test("engine metadata keys win over conflicting argument keys", () => {
+    const permission = pendingPermission({ permission: "custom_tool", metadata: { action: "execute" } });
+    expect(permissionWithToolInputDetails(permission, { action: "spoofed", url: "https://example.com" })?.metadata)
+      .toEqual({ action: "execute", url: "https://example.com" });
+  });
+
+  test("no-ops without arguments, without a permission, or with empty arguments", () => {
+    const permission = pendingPermission({ metadata: {} });
+    expect(permissionWithToolInputDetails(permission, null)).toBe(permission);
+    expect(permissionWithToolInputDetails(permission, {})).toBe(permission);
+    expect(permissionWithToolInputDetails(null, { url: "https://example.com" })).toBeNull();
   });
 });

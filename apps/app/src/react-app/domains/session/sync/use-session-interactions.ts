@@ -11,6 +11,7 @@ import { t } from "@/i18n";
 import { useQueryCacheArrayState, useQueryCacheState } from "@/react-app/infra/query-cache-state";
 import { getReactQueryClient } from "@/react-app/infra/query-client";
 import { describeRouteError } from "@/react-app/shell/route-workspaces";
+import { permissionWithToolInputDetails } from "../chat/permission-details";
 import {
   permissionKey,
   questionKey,
@@ -23,6 +24,7 @@ import {
   statusKey,
   todoKey,
 } from "./session-sync";
+import { usePermissionToolInput } from "./use-permission-tool-input";
 
 const emptyPendingPermissions: PendingPermission[] = [];
 const emptyPendingQuestions: PendingQuestion[] = [];
@@ -371,7 +373,18 @@ export function useSessionInteractions(input: UseSessionInteractionsInput) {
     hydrationRef.current?.reconcile(interactionSessionIds);
   }, [client, workspaceId, sessionId, workspaceRoot, interactionSessionIds]);
 
-  const activePermission = pendingPermissions[0] ?? null;
+  // Custom MCP tools ask with empty metadata; fold in the tool call's own
+  // arguments (from the transcript or the engine) so the prompt can show them.
+  const activePermissionBase = pendingPermissions[0] ?? null;
+  const activePermissionToolInput = usePermissionToolInput({
+    client,
+    workspaceId,
+    permission: activePermissionBase,
+  });
+  const activePermission = useMemo(
+    () => permissionWithToolInputDetails(activePermissionBase, activePermissionToolInput),
+    [activePermissionBase, activePermissionToolInput],
+  );
   const respondPermission = useCallback(
     async (requestID: string, reply: "once" | "always" | "reject") => {
       if (!client || !workspaceId || !sessionId) return;
