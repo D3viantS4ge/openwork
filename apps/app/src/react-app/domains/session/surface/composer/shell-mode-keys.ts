@@ -1,6 +1,26 @@
 export type ShellModeKeyEvent = Pick<KeyboardEvent, "key" | "shiftKey" | "metaKey" | "ctrlKey" | "altKey">;
 
 /**
+ * Whether a keydown should enter `!` shell mode.
+ *
+ * The `!` is a virtual prefix — it is never inserted as a character — so it
+ * enters shell mode on an empty composer and when typed at the very start of
+ * an existing draft, which becomes the shell command. Ctrl/Meta chords keep
+ * their own meaning; Shift stays allowed because `!` is Shift+1 on common
+ * layouts, as does Alt for AltGr layouts. An active IME composition never
+ * triggers entry.
+ */
+export function shouldEnterShellModeOnKey(
+  event: ShellModeKeyEvent,
+  context: { empty: boolean; caretAtEditorStart: boolean; composing: boolean },
+): boolean {
+  if (context.composing) return false;
+  if (event.key !== "!") return false;
+  if (event.ctrlKey || event.metaKey) return false;
+  return context.empty || context.caretAtEditorStart;
+}
+
+/**
  * Whether a Backspace in `!` shell mode should exit back to prompt mode.
  *
  * The `!` is a virtual prefix — it is never inserted as a character, so it is

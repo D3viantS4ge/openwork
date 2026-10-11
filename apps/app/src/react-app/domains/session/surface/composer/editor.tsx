@@ -51,7 +51,7 @@ import { createPastedTextChip, shouldCollapsePastedText, splitPastedText } from 
 import { insertPastedText } from "./pasted-text-insertion";
 import { encodeConnectorToken, parseConnectorToken } from "./connector-token";
 import { lineBoundaryMoveForKey } from "./line-boundary-keys";
-import { isCaretAtEditorStart, shouldExitShellModeOnBackspace } from "./shell-mode-keys";
+import { isCaretAtEditorStart, shouldEnterShellModeOnKey, shouldExitShellModeOnBackspace } from "./shell-mode-keys";
 import {
   adjacentTokenForSelection,
   caretAtTokenLeftEdge,
@@ -2141,16 +2141,21 @@ export const LexicalPromptEditor = forwardRef<LexicalPromptEditorHandle, EditorP
               onDragLeave={props.onDragLeave}
               onKeyDownCapture={(event) => {
                 // Shell-mode entry/exit lives at the keydown boundary so the
-                // `!` never becomes a real character: typing `!` first enters
-                // shell mode (pasted `!` text is untouched), and backspace
-                // deletes the virtual `!` — on an empty command or with the
-                // caret at the very start — exiting back to prompt mode.
+                // `!` never becomes a real character: typing `!` first — on an
+                // empty composer or at the very start of an existing draft,
+                // which becomes the shell command — enters shell mode (pasted
+                // `!` text is untouched), and backspace deletes the virtual
+                // `!` — on an empty command or with the caret at the very
+                // start — exiting back to prompt mode.
                 const shellMode = shellModeRef.current;
                 const empty = valueRef.current.trim().length === 0;
-                if (!shellMode && empty && event.key === "!" && !event.ctrlKey && !event.metaKey && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  onShellModeChangeRef.current?.(true);
-                  return;
+                if (!shellMode && event.key === "!") {
+                  const caretAtEditorStart = isCaretAtEditorStart(event.currentTarget);
+                  if (shouldEnterShellModeOnKey(event, { empty, caretAtEditorStart, composing: event.nativeEvent.isComposing })) {
+                    event.preventDefault();
+                    onShellModeChangeRef.current?.(true);
+                    return;
+                  }
                 }
                 if (shellMode && shouldExitShellModeOnBackspace(event, { empty, caretAtEditorStart: isCaretAtEditorStart(event.currentTarget) })) {
                   event.preventDefault();

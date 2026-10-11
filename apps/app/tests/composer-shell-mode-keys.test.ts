@@ -6,6 +6,7 @@ if (ownedDom) GlobalRegistrator.register({ url: "http://localhost/" });
 
 import {
   isCaretAtEditorStart,
+  shouldEnterShellModeOnKey,
   shouldExitShellModeOnBackspace,
 } from "../src/react-app/domains/session/surface/composer/shell-mode-keys";
 
@@ -42,6 +43,40 @@ function editorWithText(text: string) {
   document.body.append(root);
   return root;
 }
+
+describe("shouldEnterShellModeOnKey", () => {
+  test("! on an empty composer enters shell mode", () => {
+    expect(shouldEnterShellModeOnKey(key("!"), { empty: true, caretAtEditorStart: false, composing: false })).toBe(true);
+  });
+
+  test("! at the start of an existing draft enters shell mode", () => {
+    expect(shouldEnterShellModeOnKey(key("!"), { empty: false, caretAtEditorStart: true, composing: false })).toBe(true);
+  });
+
+  test("! mid-draft does not enter shell mode", () => {
+    expect(shouldEnterShellModeOnKey(key("!"), { empty: false, caretAtEditorStart: false, composing: false })).toBe(false);
+  });
+
+  test("an IME composition does not enter", () => {
+    expect(shouldEnterShellModeOnKey(key("!"), { empty: true, caretAtEditorStart: true, composing: true })).toBe(false);
+  });
+
+  test("Ctrl/Meta chords keep their own meaning", () => {
+    for (const modifier of ["ctrlKey", "metaKey"] as const) {
+      expect(shouldEnterShellModeOnKey(key("!", { [modifier]: true }), { empty: true, caretAtEditorStart: true, composing: false })).toBe(false);
+    }
+  });
+
+  test("Shift stays allowed because ! is Shift+1", () => {
+    expect(shouldEnterShellModeOnKey(key("!", { shiftKey: true }), { empty: true, caretAtEditorStart: false, composing: false })).toBe(true);
+  });
+
+  test("every other key never enters shell mode", () => {
+    for (const other of ["a", "Backspace", "Delete", "ArrowLeft", "Enter", " ", "1"]) {
+      expect(shouldEnterShellModeOnKey(key(other), { empty: true, caretAtEditorStart: true, composing: false })).toBe(false);
+    }
+  });
+});
 
 describe("shouldExitShellModeOnBackspace", () => {
   test("Backspace exits on an empty command", () => {
