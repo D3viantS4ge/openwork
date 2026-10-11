@@ -53,6 +53,7 @@ import type {
 } from "@/react-app/domains/connections/cloud-mcp-submit-readiness";
 import { ReactSessionComposer } from "./composer/composer";
 import { estimateContextCost } from "./context-cost";
+import { committedTurnTokens, estimatePendingShellContextTokens } from "./context-tokens";
 import { WorkspaceRunModeMenu } from "./composer/workspace-run-mode-menu";
 import { useSessionModelSelection } from "./session-model-store";
 import { getSessionAgentSelection, useSessionAgentSelection } from "./session-mode-memory";
@@ -1367,15 +1368,23 @@ export function SessionSurface(props: SessionSurfaceProps) {
   const committedContextTokens = useMemo(() => {
     const messages = currentSnapshot?.messages ?? [];
     for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const info = messages[index].info;
-      if (info.role !== "assistant") continue;
-      const tokens = info.tokens;
-      const turnTokens =
-        tokens.input + tokens.cache.read + tokens.cache.write + tokens.output + tokens.reasoning;
-      if (turnTokens > 0) return turnTokens;
+      const turnTokens = committedTurnTokens(messages[index]);
+      if (turnTokens !== null) return turnTokens;
     }
     return null;
   }, [currentSnapshot?.messages]);
+
+  // User `!` shell runs commit no usage of their own, so the committed value
+  // ignores the command and its output until the next model turn folds them
+  // into its input. Estimate them for the tail so the stats bar moves when a
+  // command finishes; the estimate is replaced (never added) once a turn commits.
+  const pendingShellContextTokens = useMemo(
+    () => estimatePendingShellContextTokens(currentSnapshot?.messages ?? []),
+    [currentSnapshot?.messages],
+  );
+  const baseContextTokens = committedContextTokens == null
+    ? null
+    : committedContextTokens + pendingShellContextTokens;
 
   // The selected model's context window limit in tokens, or null when the
   // model definition doesn't expose one. Drives the "used / limit" stat.
@@ -1418,23 +1427,23 @@ export function SessionSurface(props: SessionSurfaceProps) {
     }
     const tokens = currentSnapshot?.session.tokens;
     runBaselineRef.current = {
-      contextTokens: committedContextTokens ?? 0,
+      contextTokens: baseContextTokens ?? 0,
       outputTokens: (tokens?.output ?? 0) + (tokens?.reasoning ?? 0),
     };
-  }, [runActive, committedContextTokens, currentSnapshot?.session.tokens]);
+  }, [runActive, baseContextTokens, currentSnapshot?.session.tokens]);
 
   // Live context size. While a run is active, the committed value from the
   // snapshot lags the stream, so extend it by the run's accumulated output
   // growth (from the live session token totals that move with total cost).
   const contextTokens = useMemo(() => {
-    if (committedContextTokens == null) return null;
-    if (!runActive) return committedContextTokens;
+    if (baseContextTokens == null) return null;
+    if (!runActive) return baseContextTokens;
     const baseline = runBaselineRef.current;
     const tokens = currentSnapshot?.session.tokens;
-    if (!baseline || !tokens) return committedContextTokens;
+    if (!baseline || !tokens) return baseContextTokens;
     const liveOutput = (tokens.output ?? 0) + (tokens.reasoning ?? 0);
     return baseline.contextTokens + Math.max(0, liveOutput - baseline.outputTokens);
-  }, [runActive, committedContextTokens, currentSnapshot?.session.tokens]);
+  }, [runActive, baseContextTokens, currentSnapshot?.session.tokens]);
 
   // Estimated cost of the current context using the selected model's pricing
   // (cache-write rate, or uncached input fallback), accounting for context
