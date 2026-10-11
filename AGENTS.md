@@ -28,6 +28,12 @@ Never let a branch name, commit, PR text, comment, fixture, or evidence identify
 a customer, prospect, partner, or outside person; use internal ticket IDs, and
 escalate any leak instead of rewriting history.
 
+## Vendor (`vendor/`) — do not commit here
+
+`vendor/` contains git submodules pinned to third-party repositories and must
+reflect their upstream state exactly. Never edit files under `vendor/`, never
+commit inside a submodule worktree, and never commit a dirty gitlink.
+
 ## Coding
 
 * pnpm only, never npm/yarn. TypeScript: never `any`, typecasts, or `as` unless
