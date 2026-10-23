@@ -1,7 +1,5 @@
 import DOMPurify from "dompurify";
-import emojiKeywords from "emojilib";
 import { Marked, type MarkedExtension, type Token, type Tokens } from "marked";
-import { markedEmoji } from "marked-emoji";
 import {
   transformerMetaHighlight,
   transformerMetaWordHighlight,
@@ -125,22 +123,6 @@ function codeLanguageClass(lang: string | undefined) {
 
   return normalized ? ` class="language-${escapeAttribute(normalized)}"` : "";
 }
-
-function createEmojiAliases() {
-  const aliases: Record<string, string> = {};
-
-  for (const [emoji, names] of Object.entries(emojiKeywords)) {
-    for (const name of names) {
-      if (!aliases[name]) {
-        aliases[name] = emoji;
-      }
-    }
-  }
-
-  return aliases;
-}
-
-const emojiAliases = createEmojiAliases();
 
 function codeCopyButton() {
   return `<button type="button" data-openwork-code-copy="" class="absolute right-2 top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-md border border-border/70 bg-background/95 text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Copy code block" title="Copy code block">${CODE_COPY_ICON}${CODE_COPIED_ICON}<span data-openwork-code-copy-label="" class="sr-only" aria-live="polite">Copy code block</span></button>`;
@@ -516,19 +498,11 @@ function highlightedCodeExtension(profile: MarkdownProfile): MarkedExtension<str
 function createMarkdownParsers(presentation: MarkdownPresentation) {
   const profile = markdownProfileForPresentation(presentation);
   const markdownParser = new Marked<string, string>(createMarkedOptions(profile, presentation, false)).use(
-    markedEmoji({
-      emojis: emojiAliases,
-      renderer: (token) => escapeHtml(token.emoji),
-    }),
     markdownMath(),
   );
   // Math must be registered on both parsers, otherwise formulas would flicker away
   // when a message containing a fenced code block upgrades to the Shiki render.
   const highlightedMarkdownParser = new Marked<string, string>(createMarkedOptions(profile, presentation, true)).use(
-    markedEmoji({
-      emojis: emojiAliases,
-      renderer: (token) => escapeHtml(token.emoji),
-    }),
     markdownMath(),
     highlightedCodeExtension(profile),
   );
