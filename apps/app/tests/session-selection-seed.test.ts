@@ -114,6 +114,18 @@ describe("seedSessionSelectionFromRuntime", () => {
     expect(getSessionAgent(sessionId)).toBe("plan");
   });
 
+  test("keeps an explicit Default agent selection when the runtime recorded a resolved agent", () => {
+    useSessionAgentStore.getState().setAgent(sessionId, null);
+
+    seedSessionSelectionFromRuntime(createSession({
+      parentID: "parent-session",
+      agent: "plan",
+      model: { providerID: "openai", id: "gpt-5" },
+    }), null);
+
+    expect(getSessionAgent(sessionId)).toBeNull();
+  });
+
   test("keeps the model override while seeding the missing agent", () => {
     useSessionModelStore.getState().setModel(sessionId, { providerID: "anthropic", modelID: "claude" }, null);
 

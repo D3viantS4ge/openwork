@@ -49,8 +49,8 @@ export function seedSessionSelectionFromRuntime(
     // A session without memory adopts the fallback agent on open; that
     // auto-adopted value is not a deliberate override, so the runtime truth
     // still wins and opening a subsession shows the subagent that ran.
-    const fallbackAdopted = fallbackAgent !== undefined
-      && remembered !== undefined
+    const fallbackAdopted = typeof fallbackAgent === "string"
+      && typeof remembered === "string"
       && remembered === fallbackAgent;
     if (remembered === undefined || fallbackAdopted) {
       useSessionAgentStore.getState().setAgent(sessionId, session.agent);
