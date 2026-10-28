@@ -1061,6 +1061,14 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
   }, [props.onDraftChange]);
 
   const handleKeyDownCapture: React.KeyboardEventHandler<HTMLDivElement> = (event) => {
+    const target = event.target;
+    if (
+      target instanceof HTMLElement &&
+      !target.closest("[data-lexical-editor='true']") &&
+      target.closest("textarea, input, [contenteditable='true']")
+    ) {
+      return;
+    }
     // IME composition guard — block Enter while IME is mid-character.
     const imeActive =
       imeComposingRef.current ||
