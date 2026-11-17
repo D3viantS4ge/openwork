@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "../../../i18n";
 import { tagClass } from "./modal-styles";
 import { WorkspaceOptionCard } from "./option-card";
@@ -134,15 +135,11 @@ export function ShareWorkspaceModal(props: ShareWorkspaceModalProps) {
   const handleCopy = useCallback(async (value: string, key: string) => {
     const text = value?.trim() ?? "";
     if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-      dispatch({ type: "setCopiedKey", key });
-      window.setTimeout(() => {
-        dispatch({ type: "clearCopiedKey", key });
-      }, 2000);
-    } catch {
-      // ignore clipboard failures
-    }
+    if (!(await copyTextToClipboard(text))) return;
+    dispatch({ type: "setCopiedKey", key });
+    window.setTimeout(() => {
+      dispatch({ type: "clearCopiedKey", key });
+    }, 2000);
   }, []);
 
   const headerTitle = (() => {

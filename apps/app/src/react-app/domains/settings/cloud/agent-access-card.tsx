@@ -12,6 +12,7 @@ import type {
   OpenworkServerClient,
 } from "@/app/lib/openwork-server";
 import { Button } from "@/components/ui/button";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import {
   SettingsInset,
   SettingsNotice,
@@ -210,23 +211,19 @@ export function AgentAccessCard(props: {
   };
 
   const copyDiagnostics = async () => {
-    try {
-      await navigator.clipboard.writeText(buildCloudMcpSupportBundle({
-        health,
-        refresh: lastEngineRefresh,
-        context: context
-          ? {
-              workspaceId: context.workspaceId,
-              orgId: context.orgId,
-              denBaseUrl: context.denBaseUrl,
-              serverBaseUrl: context.serverBaseUrl,
-            }
-          : undefined,
-      }));
-      setCopyStatus("Copied sanitized diagnostic to the clipboard.");
-    } catch {
-      setCopyStatus("Could not copy the diagnostic.");
-    }
+    const copied = await copyTextToClipboard(buildCloudMcpSupportBundle({
+      health,
+      refresh: lastEngineRefresh,
+      context: context
+        ? {
+            workspaceId: context.workspaceId,
+            orgId: context.orgId,
+            denBaseUrl: context.denBaseUrl,
+            serverBaseUrl: context.serverBaseUrl,
+          }
+        : undefined,
+    }));
+    setCopyStatus(copied ? "Copied sanitized diagnostic to the clipboard." : "Could not copy the diagnostic.");
   };
 
   const repairAndTest = async () => {

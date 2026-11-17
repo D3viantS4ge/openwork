@@ -29,6 +29,7 @@ import {
   type ElectronAlphaArtifact,
 } from "../../../../app/lib/electron-alpha";
 import { downloadTextAsFile } from "../../../../app/lib/download";
+import { copyTextToClipboard } from "@/lib/clipboard";
 
 import {
   writeOpenworkServerSettings,
@@ -646,12 +647,8 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
   );
 
   const onCopyRuntimeDebugReport = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(runtimeDebugReportJson);
-      setRuntimeDebugStatus(t("settings.copied_debug_report"));
-    } catch (error) {
-      setRuntimeDebugStatus(error instanceof Error ? error.message : safeStringify(error));
-    }
+    const copied = await copyTextToClipboard(runtimeDebugReportJson);
+    setRuntimeDebugStatus(copied ? t("settings.copied_debug_report") : "Could not copy to the clipboard.");
   }, [runtimeDebugReportJson]);
 
   const onExportRuntimeDebugReport = useCallback(async () => {
@@ -673,12 +670,8 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
   }, []);
 
   const onCopyDeveloperLog = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(developerLog.join("\n"));
-      setDeveloperLogStatus("Copied developer log to clipboard.");
-    } catch (error) {
-      setDeveloperLogStatus(error instanceof Error ? error.message : safeStringify(error));
-    }
+    const copied = await copyTextToClipboard(developerLog.join("\n"));
+    setDeveloperLogStatus(copied ? "Copied developer log to clipboard." : "Could not copy to the clipboard.");
   }, [developerLog]);
 
   const onExportDeveloperLog = useCallback(async () => {
@@ -1046,12 +1039,12 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
       setOpencodeLogStatus(t("settings.no_logs_captured"));
       return;
     }
-    try {
-      await navigator.clipboard.writeText(content);
-      setOpencodeLogStatus(t("settings.copied_service_logs", { service: "OpenCode" }));
-    } catch (error) {
-      setOpencodeLogStatus(error instanceof Error ? error.message : safeStringify(error));
-    }
+    const copied = await copyTextToClipboard(content);
+    setOpencodeLogStatus(
+      copied
+        ? t("settings.copied_service_logs", { service: "OpenCode" })
+        : "Could not copy to the clipboard.",
+    );
   }, [engineInfoState?.lastStdout, opencodeLogs]);
 
   const onExportOpencodeLogs = useCallback(async () => {
@@ -1082,12 +1075,12 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
       setOpenworkLogStatus(t("settings.no_logs_captured"));
       return;
     }
-    try {
-      await navigator.clipboard.writeText(text);
-      setOpenworkLogStatus(t("settings.copied_service_logs", { service: "OpenWork server" }));
-    } catch (error) {
-      setOpenworkLogStatus(error instanceof Error ? error.message : safeStringify(error));
-    }
+    const copied = await copyTextToClipboard(text);
+    setOpenworkLogStatus(
+      copied
+        ? t("settings.copied_service_logs", { service: "OpenWork server" })
+        : "Could not copy to the clipboard.",
+    );
   }, [formatServiceLogs, openworkServerSnapshot.openworkServerHostInfo, serverLogs]);
 
   const onExportOpenworkLogs = useCallback(async () => {

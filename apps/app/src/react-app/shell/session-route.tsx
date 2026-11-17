@@ -12,6 +12,7 @@ import { toast } from "@/components/ui/sonner";
 import type { ProviderListResponse } from "@opencode-ai/sdk/v2/client";
 
 import { captureAnalyticsEvent, markTaskRunStart } from "@/app/lib/analytics";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { trackSessionActive, trackTaskStarted } from "@/app/lib/den-telemetry";
 import { buildDiagnosticsBundleJson } from "@/app/lib/diagnostics-bundle";
 import { downloadTextAsFile } from "@/app/lib/download";
@@ -3235,7 +3236,12 @@ export function SessionRoute() {
       setCommandPaletteOpen(false);
       try {
         const json = await buildCommandDiagnosticsBundle();
-        await navigator.clipboard.writeText(json);
+        if (!(await copyTextToClipboard(json))) {
+          toast.error(t("session.diagnostics_failed"), {
+            description: "Could not copy the diagnostics to the clipboard.",
+          });
+          return;
+        }
         toast.success(t("session.diagnostics_copied"));
       } catch (error) {
         toast.error(t("session.diagnostics_failed"), { description: describeRouteError(error) });

@@ -6,6 +6,7 @@ import type { AgentContextDiagnosticsReport } from "@openwork/types/agent-contex
 import { serializeAgentContextDiagnosticsReport } from "@/app/lib/agent-context-diagnostics";
 import { Button } from "@/components/ui/button";
 import { t } from "@/i18n";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { SettingsNotice } from "../settings-section";
 import {
   AgentContextDiagnosticsErrorNotice,
@@ -221,26 +222,21 @@ export function AgentContextDiagnosticsSection(props: AgentContextDiagnosticsSec
         && latestScope.generation === scope.generation;
     };
     try {
-      await navigator.clipboard.writeText(serializeAgentContextDiagnosticsReport(report));
+      const copied = await copyTextToClipboard(serializeAgentContextDiagnosticsReport(report));
       if (!isCurrentCopy()) return;
       setScopedDiagnosticsState((current) => {
         const value = readDiagnosticsValueForScope(current, scope);
         if (!value || value.report !== report) return current;
-        return { scope, value: { ...value, copied: true, error: null } };
-      });
-    } catch {
-      if (!isCurrentCopy()) return;
-      setScopedDiagnosticsState((current) => {
-        const value = readDiagnosticsValueForScope(current, scope);
-        if (!value || value.report !== report) return current;
-        return {
-          scope,
-          value: {
-            ...value,
-            copied: false,
-            error: t("connect.diagnostics_copy_failed"),
-          },
-        };
+        return copied
+          ? { scope, value: { ...value, copied: true, error: null } }
+          : {
+              scope,
+              value: {
+                ...value,
+                copied: false,
+                error: t("connect.diagnostics_copy_failed"),
+              },
+            };
       });
     } finally {
       if (!isCurrentCopy()) return;

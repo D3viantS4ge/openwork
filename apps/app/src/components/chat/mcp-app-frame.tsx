@@ -21,6 +21,7 @@ import {
 } from "@/app/lib/openwork-server"
 import { useMessageList } from "./message-list-provider"
 import { createMcpAppActions, type McpAppOrigin } from "./mcp-app-origin"
+import { copyTextToClipboard } from "@/lib/clipboard"
 import { cn } from "@/lib/utils"
 import {
   formatMcpAppDiagnostic,
@@ -275,9 +276,8 @@ export function McpAppDiagnosticNotice({ error, notice, onRetry }: { error: McpA
           type="button"
           className="mt-1 underline underline-offset-2"
           onClick={() => {
-            if (!navigator.clipboard) return
-            void navigator.clipboard.writeText(details)
-              .then(() => setDetailsCopied(true))
+            void copyTextToClipboard(details)
+              .then((copied) => setDetailsCopied(copied))
               .catch(() => setDetailsCopied(false))
           }}
         >

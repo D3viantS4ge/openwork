@@ -18,6 +18,7 @@ import { getMcpIdentityKey, validateMcpServerName } from "@/app/mcp";
 import type { Client } from "@/app/types";
 import { isDesktopRuntime, normalizeDirectoryPath } from "@/app/utils";
 import { t } from "@/i18n";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { Button } from "@/components/ui/button";
 import { TextInput } from "../../design-system/text-input";
 import { resolveMcpStatusByIdentity } from "./mcp-status-synchronization";
@@ -124,19 +125,16 @@ export function McpAuthModal(props: McpAuthModalProps) {
   const handleCopyAuthorizationUrl = async () => {
     if (!authorizationUrl) return;
 
-    try {
-      await navigator.clipboard.writeText(authorizationUrl);
-      setAuthUrlCopied(true);
-      if (authCopyTimeoutRef.current !== null) {
-        window.clearTimeout(authCopyTimeoutRef.current);
-      }
-      authCopyTimeoutRef.current = window.setTimeout(() => {
-        setAuthUrlCopied(false);
-        authCopyTimeoutRef.current = null;
-      }, 2_000);
-    } catch {
-      // ignore clipboard failures
+    if (!(await copyTextToClipboard(authorizationUrl))) return;
+
+    setAuthUrlCopied(true);
+    if (authCopyTimeoutRef.current !== null) {
+      window.clearTimeout(authCopyTimeoutRef.current);
     }
+    authCopyTimeoutRef.current = window.setTimeout(() => {
+      setAuthUrlCopied(false);
+      authCopyTimeoutRef.current = null;
+    }, 2_000);
   };
 
   const fetchMcpStatus = async (slug: string) => {

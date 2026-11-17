@@ -82,6 +82,54 @@ describe("markdown code blocks", () => {
     expect(highlightedHtml).not.toContain("github-dark");
     expect(highlightedHtml).not.toContain("data-openwork-code-copy");
   });
+
+  test("copies a code block when the Clipboard API is unavailable", async () => {
+    const { GlobalRegistrator } = await import("@happy-dom/global-registrator");
+    const ownedDom = typeof window === "undefined";
+    if (ownedDom) GlobalRegistrator.register({ url: "http://192.168.1.10:3000/" });
+    const previousClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const previousExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    let copiedText = "";
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: (command: string) => {
+        copiedText = document.activeElement instanceof HTMLTextAreaElement
+          ? document.activeElement.value
+          : "";
+        return command === "copy";
+      },
+    });
+    const previousActEnvironment = Reflect.get(globalThis, "IS_REACT_ACT_ENVIRONMENT");
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+    const { act, createElement } = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(MarkdownBlock, { text: MARKDOWN, streaming: true })));
+      const button = host.querySelector<HTMLButtonElement>("[data-openwork-code-copy]");
+      if (!button) throw new Error("Missing code copy button");
+      expect(button.querySelector("[data-openwork-code-copy-check-icon]")?.hasAttribute("hidden")).toBe(true);
+
+      await act(async () => button.click());
+
+      expect(copiedText).toBe(CODE);
+      expect(button.getAttribute("aria-label")).toBe("Code block copied");
+      expect(button.querySelector("[data-openwork-code-copy-check-icon]")?.hasAttribute("hidden")).toBe(false);
+      expect(button.querySelector("[data-openwork-code-copy-icon]")?.hasAttribute("hidden")).toBe(true);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      if (previousClipboard) Object.defineProperty(navigator, "clipboard", previousClipboard);
+      else Reflect.deleteProperty(navigator, "clipboard");
+      if (previousExecCommand) Object.defineProperty(document, "execCommand", previousExecCommand);
+      else Reflect.deleteProperty(document, "execCommand");
+      Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", previousActEnvironment);
+      if (ownedDom) await GlobalRegistrator.unregister();
+    }
+  });
 });
 
 describe("markdown safety and links", () => {

@@ -30,6 +30,7 @@ import { openDesktopUrl, revealDesktopItemInDir } from "@/app/lib/desktop"
 import { isElectronRuntime } from "@/app/lib/runtime-env"
 import { SYNTHETIC_SESSION_ERROR_MESSAGE_PREFIX } from "@/app/types"
 import { t } from "@/i18n"
+import { copyTextToClipboard } from "@/lib/clipboard"
 import { useOpenTargets } from "@/lib/target-provider"
 import { openTargetFromUrl } from "@/react-app/domains/session/artifacts/open-target"
 import { presentOpencodeSessionError, sessionErrorPresentationFromUIMessage } from "@/react-app/domains/session/sync/session-error"
@@ -461,13 +462,9 @@ function CopyMessageButton({ messages }: CopyMessageButtonProps) {
       return
     }
 
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // ignore clipboard failures
-    }
+    if (!(await copyTextToClipboard(text))) return
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 2000)
   }, [text])
 
   if (!text) {
@@ -494,13 +491,9 @@ function ShellCommandCopyButton({ command }: { command: string }) {
 
   const onCopy = React.useCallback(async () => {
     if (!command) return
-    try {
-      await navigator.clipboard.writeText(command)
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // ignore clipboard failures
-    }
+    if (!(await copyTextToClipboard(command))) return
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 2000)
   }, [command])
 
   if (!command) {
@@ -741,7 +734,7 @@ const UserMessage = React.memo(
     const menuActions: MenuAction[] = []
     if (messageText) menuActions.push(
       { type: "item", id: "edit", label: "Edit message", icon: <Pencil className="size-4" />, disabled: readOnly, onSelect: () => onEditUserMessage(message.id, messageText) },
-      { type: "item", id: "copy", label: "Copy", icon: <Copy className="size-4" />, onSelect: () => navigator.clipboard.writeText(messageText) },
+      { type: "item", id: "copy", label: "Copy", icon: <Copy className="size-4" />, onSelect: () => void copyTextToClipboard(messageText) },
     )
     menuActions.push(
       { type: "item", id: "branch", label: branching ? "Branching..." : "Branch in new chat", icon: <Split className="size-4 rotate-90" />, disabled: Boolean(forkingMessageId), onSelect: () => onForkAtMessage(message.id) },
@@ -1004,13 +997,9 @@ function SessionErrorTechnicalDetails({ details, tone }: { details: string; tone
   const [open, setOpen] = React.useState(false)
   const [copied, setCopied] = React.useState(false)
   const onCopy = React.useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(details)
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // ignore clipboard failures
-    }
+    if (!(await copyTextToClipboard(details))) return
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 2000)
   }, [details])
 
   return (

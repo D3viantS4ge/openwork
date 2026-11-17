@@ -151,6 +151,7 @@ import {
   waitForFreshMcpAuthorization,
   type ChatMcpReconnectScope,
 } from "./mcp-chat-reconnect";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { OpenTargetProvider, type OpenTargetOptions } from "@/lib/target-provider";
 import type { ThreadStatus } from "@/lib/messages";
 import {
@@ -2272,10 +2273,8 @@ export function SessionSurface(props: SessionSurfaceProps) {
   }, [props.sessionId, setComposerMode]);
 
   const handleCopyTranscript = async () => {
-    try {
-      await navigator.clipboard.writeText(transcriptToText(renderedMessages));
-    } catch (nextError) {
-      setError({ message: nextError instanceof Error ? nextError.message : "Failed to copy transcript." });
+    if (!(await copyTextToClipboard(transcriptToText(renderedMessages)))) {
+      setError({ message: "Failed to copy transcript." });
     }
   };
 

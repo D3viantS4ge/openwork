@@ -24,6 +24,7 @@ import {
 } from "@/app/lib/den-endpoint-sources";
 import { isDesktopRuntime } from "@/app/utils";
 import { t } from "@/i18n";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { ControlPlaneUrlEditor } from "../cloud/control-plane-url-editor";
 import { usePlatform } from "../../../kernel/platform";
 import { useFeatureFlagsPreferences } from "../state/feature-flags-preferences";
@@ -394,8 +395,8 @@ export function AdvancedCloudMcpDiagnosticsSection(props: AdvancedCloudMcpDiagno
 
   const copy = async () => {
     const payload = JSON.stringify({ cloudMcpHealth: safeHealth }, null, 2);
-    await navigator.clipboard.writeText(payload);
-    setCopyStatus("Copied sanitized Cloud diagnostic.");
+    const copied = await copyTextToClipboard(payload);
+    setCopyStatus(copied ? "Copied sanitized Cloud diagnostic." : "Could not copy the sanitized Cloud diagnostic.");
   };
 
   return (

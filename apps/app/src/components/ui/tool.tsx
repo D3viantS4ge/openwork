@@ -14,6 +14,7 @@ import {
   type ToolErrorAttribution,
 } from "@/components/tools/error-attribution"
 import { useChatToolReconnect } from "@/components/tools/use-chat-tool-reconnect"
+import { copyTextToClipboard } from "@/lib/clipboard"
 import { getToolActivityLabel, isToolPartInFlight } from "@/lib/tool-activity"
 import { cn } from "@/lib/utils"
 import {
@@ -140,13 +141,9 @@ const Tool = ({
 
   const handleCopyResult = useCallback(async () => {
     if (resultText === null) return
-    try {
-      await navigator.clipboard.writeText(resultText)
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // Clipboard access can be unavailable outside a secure browser context.
-    }
+    if (!(await copyTextToClipboard(resultText))) return
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 2000)
   }, [resultText])
 
   return (

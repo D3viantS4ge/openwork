@@ -2,6 +2,7 @@
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "../../../i18n";
 
 export function SignInFallbackNotice({ url }: { url: string }) {
@@ -9,11 +10,13 @@ export function SignInFallbackNotice({ url }: { url: string }) {
   const [copied, setCopied] = useState(false);
 
   const copyLink = () => {
-    void navigator.clipboard.writeText(url).then(() => {
+    void copyTextToClipboard(url).then((copied) => {
+      if (!copied) {
+        console.error("[den-auth] failed to copy sign-in link");
+        return;
+      }
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
-    }).catch((error) => {
-      console.error("[den-auth] failed to copy sign-in link:", error);
     });
   };
 

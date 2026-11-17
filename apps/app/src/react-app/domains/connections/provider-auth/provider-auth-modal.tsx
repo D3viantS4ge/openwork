@@ -27,6 +27,7 @@ import { toast } from "@/components/ui/sonner";
 import { openDesktopUrl } from "@/app/lib/desktop";
 import { isDesktopRuntime } from "@/app/utils";
 import { compareProviders } from "@/app/utils/providers";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { Button } from "@/components/ui/button";
 import { ProviderIcon } from "../../../design-system/provider-icon";
 import { TextInput } from "../../../design-system/text-input";
@@ -414,11 +415,10 @@ export default function ProviderAuthModal(props: ProviderAuthModalProps) {
   const copyOauthDisplayCode = async () => {
     const code = oauthDisplayCode.trim();
     if (!code) return;
-    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+    if (!(await copyTextToClipboard(code))) {
       setLocalError("Clipboard is unavailable in this environment.");
       return;
     }
-    await navigator.clipboard.writeText(code);
     setOauthCodeCopied(true);
     if (typeof window === "undefined") return;
     if (oauthCodeCopiedResetRef.current !== null) {

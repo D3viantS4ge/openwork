@@ -5,6 +5,7 @@ import { formatCrashDiagnostic } from "@/app/lib/crash-diagnostics";
 import { openworkServerInfo, readDesktopDistributionInfo, revealDesktopItemInDir } from "@/app/lib/desktop";
 import { reportCaughtWebError } from "@/app/lib/error-monitoring";
 import { getOpenWorkDeployment } from "@/app/lib/openwork-deployment";
+import { copyTextToClipboard } from "@/lib/clipboard";
 
 const APP_VERSION = String(import.meta.env.VITE_OPENWORK_APP_VERSION ?? "").trim();
 
@@ -78,12 +79,11 @@ function RecoveryScreen({ crash }: { crash: CrashDetails }) {
   const copy = async () => {
     setCopied(false);
     setCopyError(false);
-    try {
-      await navigator.clipboard.writeText(buildCrashReport(crash, readCrashContext()));
-      setCopied(true);
-    } catch {
+    if (!(await copyTextToClipboard(buildCrashReport(crash, readCrashContext())))) {
       setCopyError(true);
+      return;
     }
+    setCopied(true);
   };
 
   const openLogs = async (path: string) => {

@@ -6,6 +6,7 @@ import {
   DialogContent,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 import { useOpenTargets } from "@/lib/target-provider";
 import { useOpenArtifactPath } from "@/lib/artifacts";
@@ -145,9 +146,7 @@ function MarkdownBlockInner({
   const [highlightedHtml, setHighlightedHtml] = useState<{ text: string; html: string } | null>(null);
 
   const handleCodeBlockCopy = useCallback(async (button: HTMLButtonElement, code: string) => {
-    try {
-      await navigator.clipboard.writeText(code);
-    } catch {
+    if (!(await copyTextToClipboard(code))) {
       return;
     }
 

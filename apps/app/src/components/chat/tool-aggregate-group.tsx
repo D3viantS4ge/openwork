@@ -32,6 +32,7 @@ import {
   type AnyToolPart,
 } from "@/lib/tool-aggregate"
 import { isApplyPatchToolPart, isBashToolPart, isEditToolPart, isWriteToolPart } from "@/lib/build-in-tools"
+import { copyTextToClipboard } from "@/lib/clipboard"
 import { isToolPartInFlight } from "@/lib/tool-activity"
 import { trackToolCallDuration } from "@/lib/tool-call-duration"
 import { cn } from "@/lib/utils"
@@ -103,13 +104,9 @@ type DetailBoxProps = {
 function CopyCommandButton({ command }: { command: string }) {
   const [copied, setCopied] = useState(false)
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(command)
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // Clipboard access can be unavailable outside a secure browser context.
-    }
+    if (!(await copyTextToClipboard(command))) return
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 2000)
   }
   return (
     <Button
