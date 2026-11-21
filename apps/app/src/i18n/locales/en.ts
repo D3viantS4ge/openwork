@@ -138,6 +138,7 @@ export default {
   "panel.git_diff.title": "Git diff",
   "panel.git_diff.close": "Close",
   "panel.git_diff.close_panel": "Close git diff",
+  "panel.resize_sidebar": "Resize sidebar",
   "composer.run_task": "Run task",
   "composer.steer": "Send",
   "composer.steer_hint": "Send now — the agent will adjust mid-task",

@@ -14,6 +14,8 @@ function uiState(overrides: Partial<UiState> = {}): UiState {
     sidePanelState: {},
     expandedWorkspaceIds: [],
     applicationMenuVisible: false,
+    gitDiffSidebarWidth: 176,
+    workspaceFileTreeWidth: 160,
     workspaceLeftSidebarWidth: DEFAULT_WORKSPACE_LEFT_SIDEBAR_WIDTH,
     workspaceLeftSidebarResizing: false,
     workspaceRightSidebarExpanded: false,

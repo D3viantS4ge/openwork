@@ -54,7 +54,12 @@ function objectValue(object: object, key: string): unknown {
 const storage = memoryStorage();
 storage.setItem(
   PERSISTED_UI_STATE_KEY,
-  JSON.stringify({ sidePanelState: { ses_1: "extensions" }, workspaceRightSidebarExpanded: true }),
+  JSON.stringify({
+    sidePanelState: { ses_1: "extensions" },
+    workspaceRightSidebarExpanded: true,
+    gitDiffSidebarWidth: 9999,
+    workspaceFileTreeWidth: 10,
+  }),
 );
 
 Object.defineProperty(globalThis, "window", {
@@ -69,9 +74,15 @@ Object.defineProperty(globalThis, "localStorage", {
   value: storage,
 });
 
-const { expandWorkspace, persistUiState, toggleSidePanelState, toggleWorkspaceExpanded, useUiStateStore } = await import(
-  "../src/react-app/shell/ui-state-store"
-);
+const {
+  expandWorkspace,
+  MAX_GIT_DIFF_SIDEBAR_WIDTH,
+  MIN_WORKSPACE_FILE_TREE_WIDTH,
+  persistUiState,
+  toggleSidePanelState,
+  toggleWorkspaceExpanded,
+  useUiStateStore,
+} = await import("../src/react-app/shell/ui-state-store");
 const { usePanelTabStore } = await import("../src/react-app/domains/session/panel/panel-tab-store");
 
 const importedSidePanelState = useUiStateStore.getState().sidePanelState;
@@ -95,6 +106,8 @@ describe("ui state store", () => {
       sidePanelState: { ses_1: "extensions" },
       expandedWorkspaceIds: ["ws_1"],
       applicationMenuVisible: false,
+      gitDiffSidebarWidth: 210,
+      workspaceFileTreeWidth: 150,
       workspaceLeftSidebarWidth: 260,
       workspaceLeftSidebarResizing: false,
       workspaceRightSidebarExpanded: true,
@@ -108,11 +121,18 @@ describe("ui state store", () => {
     expect("expandedWorkspaceIds" in parsed).toBe(false);
     expect(objectValue(parsed, "workspaceRightSidebarExpanded")).toBe(true);
     expect(objectValue(parsed, "workspaceRightSidebarExpandedWidth")).toBe(520);
+    expect(objectValue(parsed, "gitDiffSidebarWidth")).toBe(210);
+    expect(objectValue(parsed, "workspaceFileTreeWidth")).toBe(150);
   });
 
   test("ignores legacy persisted side panel state on startup", () => {
     expect(importedSidePanelState).toEqual({});
     expect(importedWorkspaceRightSidebarExpanded).toBe(true);
+  });
+
+  test("clamps persisted panel sidebar widths", () => {
+    expect(useUiStateStore.getState().gitDiffSidebarWidth).toBe(MAX_GIT_DIFF_SIDEBAR_WIDTH);
+    expect(useUiStateStore.getState().workspaceFileTreeWidth).toBe(MIN_WORKSPACE_FILE_TREE_WIDTH);
   });
 
   test("keeps side panel toggles in memory", () => {
@@ -121,6 +141,8 @@ describe("ui state store", () => {
       sidePanelState: {},
       expandedWorkspaceIds: [],
       applicationMenuVisible: false,
+      gitDiffSidebarWidth: 176,
+      workspaceFileTreeWidth: 160,
       workspaceLeftSidebarWidth: 260,
       workspaceLeftSidebarResizing: false,
       workspaceRightSidebarExpanded: false,
@@ -142,6 +164,8 @@ describe("ui state store", () => {
       sidePanelState: {},
       expandedWorkspaceIds: [],
       applicationMenuVisible: false,
+      gitDiffSidebarWidth: 176,
+      workspaceFileTreeWidth: 160,
       workspaceLeftSidebarWidth: 260,
       workspaceLeftSidebarResizing: false,
       workspaceRightSidebarExpanded: false,

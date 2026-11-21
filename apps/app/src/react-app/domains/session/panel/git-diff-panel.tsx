@@ -1,6 +1,7 @@
 /** @jsxImportSource react */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
+import { usePanelRef } from "react-resizable-panels";
 import {
   FileMinus2,
   FilePlus2,
@@ -24,8 +25,10 @@ import type {
 } from "@/app/lib/openwork-server";
 import { formatRelativeTime } from "@/app/utils";
 import { Button } from "@/components/ui/button";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DiffView } from "@/components/ui/diff-view";
+import { useUiStateStore } from "@/react-app/shell/ui-state-store";
 import { t } from "@/i18n";
 
 type GitDiffPanelProps = {
@@ -134,6 +137,20 @@ export function GitDiffPanel({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [listHeight, setListHeight] = useState<number | null>(null);
   const dragStartRef = useRef<{ startY: number; startHeight: number } | null>(null);
+
+  const diffSidebarRef = usePanelRef();
+  const gitDiffSidebarWidth = useUiStateStore((state) => state.gitDiffSidebarWidth);
+  const setGitDiffSidebarWidth = useUiStateStore((state) => state.setGitDiffSidebarWidth);
+  const [diffSidebarDefaultWidth, setDiffSidebarDefaultWidth] = useState(gitDiffSidebarWidth);
+  const commitDiffSidebarWidth = useCallback(() => {
+    const size = diffSidebarRef.current?.getSize();
+    if (size?.inPixels) setGitDiffSidebarWidth(Math.round(size.inPixels));
+  }, [diffSidebarRef, setGitDiffSidebarWidth]);
+
+  useEffect(() => {
+    if (state === "ready") return;
+    setDiffSidebarDefaultWidth(gitDiffSidebarWidth);
+  }, [gitDiffSidebarWidth, state]);
 
   const handleDividerPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -453,8 +470,20 @@ export function GitDiffPanel({
     }
 
     return (
-      <div className="flex min-h-0 flex-1">
-        <aside className="flex w-44 shrink-0 flex-col overflow-y-auto border-r border-border">
+      <ResizablePanelGroup
+        orientation="horizontal"
+        className="min-h-0 flex-1"
+        onLayoutChanged={commitDiffSidebarWidth}
+      >
+        <ResizablePanel
+          panelRef={diffSidebarRef}
+          defaultSize={`${diffSidebarDefaultWidth}px`}
+          minSize="140px"
+          maxSize="50%"
+          groupResizeBehavior="preserve-pixel-size"
+          className="min-h-0"
+        >
+          <aside className="flex h-full min-h-0 flex-col overflow-y-auto overflow-x-hidden">
           <div className="px-3 pb-1 pt-2.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
             {t("panel.git_diff.changes")}
           </div>
@@ -517,8 +546,12 @@ export function GitDiffPanel({
             })
           )}
         </aside>
+        </ResizablePanel>
 
-        <div className="flex min-h-0 flex-1 flex-col">
+        <ResizableHandle withHandle aria-label={t("panel.resize_sidebar")} title={t("panel.resize_sidebar")} />
+
+        <ResizablePanel className="min-h-0 min-w-0">
+          <div className="flex h-full min-h-0 flex-col">
           <div className="shrink-0 border-b border-border px-3 py-2">
             {selection.kind === "working" ? (
               <div className="flex items-center gap-2">
@@ -567,8 +600,9 @@ export function GitDiffPanel({
               selectedShow?.truncated ? t("panel.git_diff.commit_diff_too_large") : t("panel.git_diff.no_commit_changes"),
             )
           )}
-        </div>
-      </div>
+          </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
     );
   };
 

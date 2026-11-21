@@ -1,7 +1,8 @@
 /** @jsxImportSource react */
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, Ellipsis, ExternalLink, FolderOpen, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
+import { usePanelRef } from "react-resizable-panels";
 
 import type { OpenworkServerClient, OpenworkWorkspaceCatalogEntry } from "@/app/lib/openwork-server";
 import { openDesktopPath, revealDesktopItemInDir } from "@/app/lib/desktop";
@@ -12,9 +13,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { toast } from "@/components/ui/sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePlatform } from "@/react-app/kernel/platform";
+import { useUiStateStore } from "@/react-app/shell/ui-state-store";
+import { t } from "@/i18n";
 import { type ArtifactPanelTab, usePanelTabStore } from "../panel/panel-tab-store";
 import { isCollectibleArtifactTarget, openTargetFromWorkspaceFile, type BinaryData, type Data, type OpenTarget, type TextData } from "./open-target";
 import { HTMLPreview, ImagePreview, MarkdownPreview, PdfPreview, PlainText, PreviewError, PreviewLoading, PreviewUnavailable } from "./preview";
@@ -100,6 +104,19 @@ function ArtifactPanelView({ sessionId, client, workspaceId, workspaceRoot, isRe
   const [draft, setDraft] = useState("");
   const lastSyncedRef = useRef<string | null>(null);
   const failedDraftRef = useRef<string | null>(null);
+  const fileTreePanelRef = usePanelRef();
+  const workspaceFileTreeWidth = useUiStateStore((state) => state.workspaceFileTreeWidth);
+  const setWorkspaceFileTreeWidth = useUiStateStore((state) => state.setWorkspaceFileTreeWidth);
+  const [treeDefaultWidth, setTreeDefaultWidth] = useState(workspaceFileTreeWidth);
+  const commitWorkspaceFileTreeWidth = useCallback(() => {
+    const size = fileTreePanelRef.current?.getSize();
+    if (size?.inPixels) setWorkspaceFileTreeWidth(Math.round(size.inPixels));
+  }, [fileTreePanelRef, setWorkspaceFileTreeWidth]);
+
+  useEffect(() => {
+    if (treeOpen) return;
+    setTreeDefaultWidth(workspaceFileTreeWidth);
+  }, [treeOpen, workspaceFileTreeWidth]);
   const isMermaidArtifact = target.kind === "file" && /\.mmd$/i.test(target.value);
   // Plain text opens directly in CodeMirror. Markdown and HTML default to
   // their rendered previews and retain the existing Edit toggle.
@@ -378,68 +395,86 @@ function ArtifactPanelView({ sessionId, client, workspaceId, workspaceRoot, isRe
           </div>
         </div>
       </div>
-      <div className="flex min-h-0 flex-1 overflow-hidden">
+      <ResizablePanelGroup
+        orientation="horizontal"
+        className="min-h-0 flex-1 overflow-hidden"
+        onLayoutChanged={commitWorkspaceFileTreeWidth}
+      >
         {treeOpen ? (
-          <Suspense fallback={<div className="w-40 shrink-0 border-r border-border bg-muted/20" />}>
-            <WorkspaceFileTree
-              client={client}
-              workspaceId={workspaceId}
-              workspaceName={workspaceName}
-              selectedPath={target.value}
-              onOpenFile={openWorkspaceFile}
-              fileActions={[
-                { id: "download", label: "Download", run: (entry) => void downloadFile(entry.path, entry.path.split(/[/\\]/).pop() ?? entry.path) },
-                ...(canUseDesktopWorkspaceActions
-                  ? [
-                    { id: "reveal", label: "Show in folder", run: (entry: OpenworkWorkspaceCatalogEntry) => void revealFile(entry.path) },
-                    { id: "open-external", label: "Open externally", run: (entry: OpenworkWorkspaceCatalogEntry) => void openFileExternally(entry.path) },
-                  ]
-                  : []),
-              ]}
-            />
-          </Suspense>
+          <>
+            <ResizablePanel
+              panelRef={fileTreePanelRef}
+              defaultSize={`${treeDefaultWidth}px`}
+              minSize="140px"
+              maxSize="50%"
+              groupResizeBehavior="preserve-pixel-size"
+              className="min-h-0"
+            >
+              <Suspense fallback={<div className="h-full w-full bg-muted/20" />}>
+                <WorkspaceFileTree
+                  client={client}
+                  workspaceId={workspaceId}
+                  workspaceName={workspaceName}
+                  selectedPath={target.value}
+                  onOpenFile={openWorkspaceFile}
+                  fileActions={[
+                    { id: "download", label: "Download", run: (entry) => void downloadFile(entry.path, entry.path.split(/[/\\]/).pop() ?? entry.path) },
+                    ...(canUseDesktopWorkspaceActions
+                      ? [
+                        { id: "reveal", label: "Show in folder", run: (entry: OpenworkWorkspaceCatalogEntry) => void revealFile(entry.path) },
+                        { id: "open-external", label: "Open externally", run: (entry: OpenworkWorkspaceCatalogEntry) => void openFileExternally(entry.path) },
+                      ]
+                      : []),
+                  ]}
+                />
+              </Suspense>
+            </ResizablePanel>
+            <ResizableHandle withHandle aria-label={t("panel.resize_sidebar")} title={t("panel.resize_sidebar")} />
+          </>
         ) : null}
-        <div className="min-w-0 flex-1 overflow-hidden">
-          {isLoading || (data?.kind === "binary" && !binaryObjectUrl) ? (
-          <PreviewLoading />
-        ) : isError ? (
-          <PreviewError message={error instanceof Error ? error.message : "Failed to load artifact" } />
-        ) : data?.kind === "text" && (editing || isDirectTextEdit) ? (
-          <TextEditor value={draft} language={target.preview === "markdown" ? "markdown" : "text"} onChange={setDraft} />
-        ) : target.preview === "markdown" && data?.kind === "text" ? (
-          <MarkdownPreview content={data.data} mermaidSource={isMermaidArtifact} />
-        ) : target.preview === "code" && data?.kind === "text" ? (
-          <Suspense fallback={<PreviewLoading />}>
-            <ArtifactCodeView
-              name={target.name}
-              path={target.value}
-              content={data.data}
-              editable={isDirectCodeEdit}
-              onChange={setDraft}
-            />
-          </Suspense>
-        ) : target.preview === "sheet" ? (
-          <SheetEditor
-            name={target.name}
-            content={data ?? { kind: "binary", data: new ArrayBuffer(0) }}
-            saving={isSaving}
-            onSave={saveSpreadsheetContent}
-          />
-        ) : target.preview === "html" && data?.kind === "text" ? (
-          <HTMLPreview type="text" title={target.name} content={data.data} />
-        ) : target.preview === "image" && data?.kind === "binary" && binaryObjectUrl ? (
-          <ImagePreview src={binaryObjectUrl} alt={target.name} />
-        ) : target.preview === "pdf" && data?.kind === "binary" && binaryObjectUrl ? (
-          <PdfPreview url={binaryObjectUrl} title={target.name} />
-        ) : data?.kind === "binary" && binaryObjectUrl && target.preview === "html" ? (
-          <HTMLPreview type="binary" title={target.name} url={binaryObjectUrl} />
-        ) : data?.kind === "text" ? (
-          <PlainText content={data.data} />
-        ) : (
-          <PreviewUnavailable />
-          )}
-        </div>
-      </div>
+        <ResizablePanel className="min-h-0 min-w-0">
+          <div className="h-full min-h-0 overflow-hidden">
+            {isLoading || (data?.kind === "binary" && !binaryObjectUrl) ? (
+              <PreviewLoading />
+            ) : isError ? (
+              <PreviewError message={error instanceof Error ? error.message : "Failed to load artifact" } />
+            ) : data?.kind === "text" && (editing || isDirectTextEdit) ? (
+              <TextEditor value={draft} language={target.preview === "markdown" ? "markdown" : "text"} onChange={setDraft} />
+            ) : target.preview === "markdown" && data?.kind === "text" ? (
+              <MarkdownPreview content={data.data} mermaidSource={isMermaidArtifact} />
+            ) : target.preview === "code" && data?.kind === "text" ? (
+              <Suspense fallback={<PreviewLoading />}>
+                <ArtifactCodeView
+                  name={target.name}
+                  path={target.value}
+                  content={data.data}
+                  editable={isDirectCodeEdit}
+                  onChange={setDraft}
+                />
+              </Suspense>
+            ) : target.preview === "sheet" ? (
+              <SheetEditor
+                name={target.name}
+                content={data ?? { kind: "binary", data: new ArrayBuffer(0) }}
+                saving={isSaving}
+                onSave={saveSpreadsheetContent}
+              />
+            ) : target.preview === "html" && data?.kind === "text" ? (
+              <HTMLPreview type="text" title={target.name} content={data.data} />
+            ) : target.preview === "image" && data?.kind === "binary" && binaryObjectUrl ? (
+              <ImagePreview src={binaryObjectUrl} alt={target.name} />
+            ) : target.preview === "pdf" && data?.kind === "binary" && binaryObjectUrl ? (
+              <PdfPreview url={binaryObjectUrl} title={target.name} />
+            ) : data?.kind === "binary" && binaryObjectUrl && target.preview === "html" ? (
+              <HTMLPreview type="binary" title={target.name} url={binaryObjectUrl} />
+            ) : data?.kind === "text" ? (
+              <PlainText content={data.data} />
+            ) : (
+              <PreviewUnavailable />
+            )}
+          </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
     </div>
   );
 }

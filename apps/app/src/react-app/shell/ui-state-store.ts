@@ -13,6 +13,12 @@ export const DEFAULT_WORKSPACE_RIGHT_SIDEBAR_COLLAPSED_WIDTH = 72;
 export const DEFAULT_WORKSPACE_RIGHT_SIDEBAR_EXPANDED_WIDTH = 520;
 export const MIN_WORKSPACE_RIGHT_SIDEBAR_WIDTH = 320;
 export const MAX_WORKSPACE_RIGHT_SIDEBAR_WIDTH = 960;
+export const DEFAULT_GIT_DIFF_SIDEBAR_WIDTH = 176;
+export const MIN_GIT_DIFF_SIDEBAR_WIDTH = 140;
+export const MAX_GIT_DIFF_SIDEBAR_WIDTH = 480;
+export const DEFAULT_WORKSPACE_FILE_TREE_WIDTH = 160;
+export const MIN_WORKSPACE_FILE_TREE_WIDTH = 140;
+export const MAX_WORKSPACE_FILE_TREE_WIDTH = 480;
 
 export const SIDE_PANEL_ITEMS = ["panel", "extensions"] as const;
 export type SidePanelItem = (typeof SIDE_PANEL_ITEMS)[number];
@@ -20,6 +26,8 @@ export type SidePanelState = Record<string, SidePanelItem | null>;
 
 export type PersistedUiState = {
   applicationMenuVisible?: boolean;
+  gitDiffSidebarWidth?: number;
+  workspaceFileTreeWidth?: number;
   workspaceLeftSidebarWidth?: number;
   workspaceRightSidebarExpanded?: boolean;
   workspaceRightSidebarExpandedWidth?: number;
@@ -34,6 +42,8 @@ export type UiState = {
   // them: the session route unmounts while Settings is open.
   expandedWorkspaceIds: string[];
   applicationMenuVisible: boolean;
+  gitDiffSidebarWidth: number;
+  workspaceFileTreeWidth: number;
   workspaceLeftSidebarWidth: number;
   workspaceLeftSidebarResizing: boolean;
   workspaceRightSidebarExpanded: boolean;
@@ -45,6 +55,8 @@ const initialState: UiState = {
   sidePanelState: {},
   expandedWorkspaceIds: [],
   applicationMenuVisible: false,
+  gitDiffSidebarWidth: DEFAULT_GIT_DIFF_SIDEBAR_WIDTH,
+  workspaceFileTreeWidth: DEFAULT_WORKSPACE_FILE_TREE_WIDTH,
   workspaceLeftSidebarWidth: DEFAULT_WORKSPACE_LEFT_SIDEBAR_WIDTH,
   workspaceLeftSidebarResizing: false,
   workspaceRightSidebarExpanded: false,
@@ -144,6 +156,16 @@ function readPersistedUiState(): UiState {
       ...initialState,
       sidebarOpen,
       applicationMenuVisible: parsed.applicationMenuVisible ?? initialState.applicationMenuVisible,
+      gitDiffSidebarWidth: normalizeNumber(
+        parsed.gitDiffSidebarWidth,
+        MIN_GIT_DIFF_SIDEBAR_WIDTH,
+        MAX_GIT_DIFF_SIDEBAR_WIDTH,
+      ) ?? initialState.gitDiffSidebarWidth,
+      workspaceFileTreeWidth: normalizeNumber(
+        parsed.workspaceFileTreeWidth,
+        MIN_WORKSPACE_FILE_TREE_WIDTH,
+        MAX_WORKSPACE_FILE_TREE_WIDTH,
+      ) ?? initialState.workspaceFileTreeWidth,
       workspaceLeftSidebarWidth: normalizeNumber(
         parsed.workspaceLeftSidebarWidth,
         MIN_WORKSPACE_LEFT_SIDEBAR_WIDTH,
@@ -174,6 +196,8 @@ export function persistUiState(state: UiState): void {
       PERSISTED_UI_STATE_KEY,
       JSON.stringify({
         applicationMenuVisible: state.applicationMenuVisible,
+        gitDiffSidebarWidth: state.gitDiffSidebarWidth,
+        workspaceFileTreeWidth: state.workspaceFileTreeWidth,
         workspaceLeftSidebarWidth: state.workspaceLeftSidebarWidth,
         workspaceRightSidebarExpanded: state.workspaceRightSidebarExpanded,
         workspaceRightSidebarExpandedWidth: state.workspaceRightSidebarExpandedWidth,
@@ -317,6 +341,30 @@ export function setWorkspaceRightSidebarExpandedWidth(state: UiState, width: num
   };
 }
 
+export function setGitDiffSidebarWidth(state: UiState, width: number): UiState {
+  const nextWidth = clampNumber(width, MIN_GIT_DIFF_SIDEBAR_WIDTH, MAX_GIT_DIFF_SIDEBAR_WIDTH);
+  if (state.gitDiffSidebarWidth === nextWidth) {
+    return state;
+  }
+
+  return {
+    ...state,
+    gitDiffSidebarWidth: nextWidth,
+  };
+}
+
+export function setWorkspaceFileTreeWidth(state: UiState, width: number): UiState {
+  const nextWidth = clampNumber(width, MIN_WORKSPACE_FILE_TREE_WIDTH, MAX_WORKSPACE_FILE_TREE_WIDTH);
+  if (state.workspaceFileTreeWidth === nextWidth) {
+    return state;
+  }
+
+  return {
+    ...state,
+    workspaceFileTreeWidth: nextWidth,
+  };
+}
+
 export function toggleWorkspaceRightSidebar(state: UiState): UiState {
   return setWorkspaceRightSidebarExpanded(state, !state.workspaceRightSidebarExpanded);
 }
@@ -335,6 +383,8 @@ type UiStateStore = UiState & {
   expandWorkspace: (workspaceId: string) => void;
   toggleWorkspaceExpanded: (workspaceId: string) => void;
   setApplicationMenuVisible: (visible: boolean) => void;
+  setGitDiffSidebarWidth: (width: number) => void;
+  setWorkspaceFileTreeWidth: (width: number) => void;
   setWorkspaceLeftSidebarWidth: (width: number) => void;
   setWorkspaceLeftSidebarResizing: (resizing: boolean) => void;
   setWorkspaceRightSidebarExpanded: (expanded: boolean) => void;
@@ -355,6 +405,8 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
     syncApplicationMenuVisible(visible);
   },
   setWorkspaceLeftSidebarWidth: (width) => set((state) => setWorkspaceLeftSidebarWidth(state, width)),
+  setGitDiffSidebarWidth: (width) => set((state) => setGitDiffSidebarWidth(state, width)),
+  setWorkspaceFileTreeWidth: (width) => set((state) => setWorkspaceFileTreeWidth(state, width)),
   setWorkspaceLeftSidebarResizing: (resizing) => set((state) => setWorkspaceLeftSidebarResizing(state, resizing)),
   setWorkspaceRightSidebarExpanded: (expanded) => set((state) => setWorkspaceRightSidebarExpanded(state, expanded)),
   setWorkspaceRightSidebarExpandedWidth: (width) => set((state) => setWorkspaceRightSidebarExpandedWidth(state, width)),
