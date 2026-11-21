@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { FileTree, useFileTree, useFileTreeSearch } from "@pierre/trees/react";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw, Search } from "lucide-react";
@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import { useNativeContextMenu } from "@/components/ui/action-context-menu";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { cn } from "@/lib/utils";
-import { OverlayScrollbar } from "./overlay-scrollbar";
 
 const TREE_CSS = `
   :host {
@@ -154,30 +153,6 @@ export function WorkspaceFileTree({ client, workspaceId, workspaceName, selected
   });
   const search = useFileTreeSearch(model);
 
-  const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
-  const [treeVersion, setTreeVersion] = useState(0);
-
-  useEffect(() => {
-    let frame: number | null = null;
-    let attempts = 0;
-    const findScrollElement = () => {
-      const host = model.getFileTreeContainer();
-      const scroll = host?.shadowRoot?.querySelector('[data-file-tree-virtualized-scroll="true"]');
-      if (scroll instanceof HTMLElement) {
-        setScrollElement(scroll);
-        return;
-      }
-      attempts += 1;
-      if (attempts < 30) frame = window.requestAnimationFrame(findScrollElement);
-    };
-    findScrollElement();
-    return () => {
-      if (frame !== null) window.cancelAnimationFrame(frame);
-    };
-  }, [model, query.isError]);
-
-  useEffect(() => model.subscribe(() => setTreeVersion((version) => version + 1)), [model]);
-
   useEffect(() => model.resetPaths(paths), [model, paths]);
 
   useEffect(() => {
@@ -219,15 +194,12 @@ export function WorkspaceFileTree({ client, workspaceId, workspaceName, selected
       {query.isError ? (
         <p className="p-3 text-xs text-destructive">Could not load workspace files.</p>
       ) : (
-        <div className="group/tree relative min-h-0 flex-1">
-          <FileTree
-            model={model}
-            aria-label={`${workspaceName} files`}
-            className="h-full w-full overflow-hidden"
-            style={{ ["--trees-fg-override" as string]: "var(--foreground)" }}
-          />
-          <OverlayScrollbar scrollElement={scrollElement} contentVersion={treeVersion} />
-        </div>
+        <FileTree
+          model={model}
+          aria-label={`${workspaceName} files`}
+          className="min-h-0 flex-1 overflow-hidden"
+          style={{ ["--trees-fg-override" as string]: "var(--foreground)" }}
+        />
       )}
       {query.data?.incomplete ? (
         <p role="status" className="border-t border-border px-2 py-1 text-[10px] text-muted-foreground">Some folders could not be read. Check their permissions and refresh.</p>
