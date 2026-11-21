@@ -1,5 +1,5 @@
 diff --git a/dist/render/FileTreeView.js b/dist/render/FileTreeView.js
-index 7d3b818c43a7621ab9170da32b180232ed3c9472..459a97c906462f0f688eb80187007b59abf9e5f1 100644
+index 7d3b818c43a7621ab9170da32b180232ed3c9472..c14df103e2bd78cff0bdfdc5fd7d2f98073a6d84 100644
 --- a/dist/render/FileTreeView.js
 +++ b/dist/render/FileTreeView.js
 @@ -3,7 +3,7 @@ import { createFileTreeIconResolver } from "./iconResolver.js";
@@ -11,6 +11,15 @@ index 7d3b818c43a7621ab9170da32b180232ed3c9472..459a97c906462f0f688eb80187007b59
  import { computeFileTreeLayout, computeStickyRows } from "../model/layout.js";
  import { GIT_STATUS_DESCENDANT_TITLE, GIT_STATUS_LABEL, GIT_STATUS_TITLE } from "../utils/gitStatusPresentation.js";
  import { shouldBumpControllerRevision } from "./controllerSnapshotSubscription.js";
+@@ -28,7 +28,7 @@ function formatFlattenedSegments(row, renameInput = null, dragTargetFlattenedSeg
+ 			return /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx("span", {
+ 				"data-item-flattened-subitem": segment.path,
+ 				"data-item-flattened-subitem-drag-target": dragTargetFlattenedSegmentPath === segment.path ? "true" : void 0,
+-				children: isLast && renameInput != null ? renameInput : /* @__PURE__ */ jsx(Truncate, { children: segment.name })
++				children: isLast && renameInput != null ? renameInput : segment.name
+ 			}), index < segments.length - 1 ? " / " : ""] }, segment.path);
+ 		})
+ 	});
 @@ -376,9 +376,7 @@ function renderFileTreeRowContent(row, resolveIcon, { actionLaneEnabled = false,
  		}),
  		/* @__PURE__ */ jsx("div", {

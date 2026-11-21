@@ -20,6 +20,19 @@ const TREE_CSS = `
     --trees-font-size-override: 12px;
   }
   button[data-type='item'] { border-radius: 5px; }
+  [data-item-section="content"] {
+    flex: 1 1 auto;
+  }
+  [data-item-section="decoration"]:empty,
+  [data-item-section="action"]:empty {
+    display: none;
+  }
+  [data-item-section="content"]:has([data-item-flattened-subitems]) {
+    white-space: nowrap;
+  }
+  [data-item-flattened-subitems] {
+    display: inline;
+  }
 `;
 
 export type WorkspaceFileAction = {
@@ -90,8 +103,7 @@ export function WorkspaceFileTree({ client, workspaceId, workspaceName, selected
     // useFileTree captures options on first render, so callbacks read refs.
     composition: {
       contextMenu: {
-        triggerMode: "both",
-        buttonVisibility: "when-needed",
+        triggerMode: "right-click",
         onOpen: (item, context) => {
           const show = showNativeMenuRef.current;
           if (!show) return;
