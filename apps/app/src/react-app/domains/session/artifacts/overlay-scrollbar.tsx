@@ -38,13 +38,9 @@ type OverlayScrollbarProps = {
   scrollElement: HTMLElement | null;
 };
 
-const SCROLLING_VISIBLE_MS = 700;
-
 export function OverlayScrollbar({ scrollElement }: OverlayScrollbarProps) {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const [thumb, setThumb] = useState<OverlayThumb | null>(null);
-  const [scrolling, setScrolling] = useState(false);
-  const scrollTimerRef = useRef<number | null>(null);
   const dragRef = useRef<{
     startY: number;
     startScrollTop: number;
@@ -81,18 +77,8 @@ export function OverlayScrollbar({ scrollElement }: OverlayScrollbarProps) {
   useEffect(() => {
     if (!scrollElement) return;
 
-    const showScrolling = () => {
-      setScrolling(true);
-      if (scrollTimerRef.current !== null) window.clearTimeout(scrollTimerRef.current);
-      scrollTimerRef.current = window.setTimeout(() => {
-        scrollTimerRef.current = null;
-        setScrolling(false);
-      }, SCROLLING_VISIBLE_MS);
-    };
-
     const onScroll = () => {
       update();
-      showScrolling();
     };
 
     scrollElement.addEventListener("scroll", onScroll, { passive: true });
@@ -107,10 +93,6 @@ export function OverlayScrollbar({ scrollElement }: OverlayScrollbarProps) {
     return () => {
       scrollElement.removeEventListener("scroll", onScroll);
       observer.disconnect();
-      if (scrollTimerRef.current !== null) {
-        window.clearTimeout(scrollTimerRef.current);
-        scrollTimerRef.current = null;
-      }
     };
   }, [scrollElement, update]);
 
@@ -159,8 +141,7 @@ export function OverlayScrollbar({ scrollElement }: OverlayScrollbarProps) {
     <div
       ref={trackRef}
       aria-hidden="true"
-      data-scrolling={scrolling ? "true" : undefined}
-      className="pointer-events-none absolute inset-y-0 right-0 z-10 w-1.5 opacity-0 transition-opacity duration-150 group-hover/tree:opacity-100 group-focus-within/tree:opacity-100 data-[scrolling=true]:opacity-100"
+      className="pointer-events-none absolute inset-y-0 right-0 z-10 w-1.5"
     >
       {thumb ? (
         <div
