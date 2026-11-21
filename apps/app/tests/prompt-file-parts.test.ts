@@ -7,6 +7,7 @@ import { firstLineLocalFileParts, isReadInlineablePath } from "../src/react-app/
 import {
   connectSkillSlashCommandOptions,
   getSlashCommandQuery,
+  getSlashCommandQueryAtCaret,
   parseSlashCommandInvocation,
   skillMenuSlashCommandName,
   skillSlashCommandName,
@@ -134,6 +135,19 @@ describe("slash-command parsing", () => {
   test("does not parse absolute file paths as commands", () => {
     expect(parseSlashCommandInvocation("/Users/omar/code/openwork/apps/app/src/file.ts\nwhy does this fail?")).toBeNull();
     expect(getSlashCommandQuery("/Users/omar/code/file.ts")).toBeNull();
+  });
+
+  test("finds a slash query at the caret outside an empty composer", () => {
+    expect(getSlashCommandQueryAtCaret("/rel")).toEqual({ start: 0, query: "rel" });
+    expect(getSlashCommandQueryAtCaret("hello /rel")).toEqual({ start: 6, query: "rel" });
+    expect(getSlashCommandQueryAtCaret("first line\n/rel")).toEqual({ start: 11, query: "rel" });
+    expect(getSlashCommandQueryAtCaret("hello /")).toEqual({ start: 6, query: "" });
+  });
+
+  test("ignores slashes that are not at a token boundary", () => {
+    expect(getSlashCommandQueryAtCaret("and/or")).toBeNull();
+    expect(getSlashCommandQueryAtCaret("/Users/omar/code/file.ts")).toBeNull();
+    expect(getSlashCommandQueryAtCaret("hello /rel ")).toBeNull();
   });
 });
 

@@ -1,6 +1,7 @@
 import type { SkillCard, SlashCommandOption } from "@/app/types";
 
 const SLASH_COMMAND_QUERY_RE = /^\/([A-Za-z0-9_-]*)$/;
+const SLASH_COMMAND_AT_CARET_RE = /(?<!\S)\/([A-Za-z0-9_-]*)$/;
 const SLASH_COMMAND_INVOCATION_RE = /^\/([A-Za-z0-9_-]+)(?:[ \t]+([\s\S]*))?$/;
 
 export type ComposerSlashCommandOption = SlashCommandOption & {
@@ -41,6 +42,15 @@ export function connectSkillSlashCommandOptions(skills: SkillCard[]): ComposerSl
 export function getSlashCommandQuery(value: string) {
   const match = value.match(SLASH_COMMAND_QUERY_RE);
   return match ? match[1] : null;
+}
+
+export function getSlashCommandQueryAtCaret(beforeCaret: string) {
+  const match = beforeCaret.match(SLASH_COMMAND_AT_CARET_RE);
+  if (!match) return null;
+  return {
+    start: beforeCaret.length - match[0].length,
+    query: match[1] ?? "",
+  };
 }
 
 export function parseSlashCommandInvocation(value: string) {

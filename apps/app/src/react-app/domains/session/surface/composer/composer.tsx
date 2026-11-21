@@ -49,6 +49,11 @@ type MentionItem = {
   description?: string;
 };
 
+type SlashCommandSelectionOptions = {
+  replaceSkillDraft?: boolean;
+  replaceSlashQuery?: boolean;
+};
+
 type ToolMenuSection = "agents" | "commands" | "skills" | "connections" | "plugins" | `plugin:${string}`;
 
 type ComposerProps = {
@@ -142,6 +147,10 @@ const FOCUS_PROMPT_EVENT = "openwork:focusPrompt";
 
 function isNonDefaultAgent(agent: Agent) {
   return agent.name !== DEFAULT_AGENT_NAME;
+}
+
+function stripTrailingSlashQuery(value: string) {
+  return value.replace(/(?<!\S)\/[A-Za-z0-9_-]*$/, "");
 }
 
 /**
@@ -262,6 +271,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
   const [toolMenuSection, setToolMenuSection] = useState<ToolMenuSection>("commands");
   const [mentionItems, setMentionItems] = useState<MentionItem[]>([]);
   const [activeMentionQuery, setActiveMentionQuery] = useState<string | null>(null);
+  const [activeSlashQuery, setActiveSlashQuery] = useState<string | null>(null);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [menuIndex, setMenuIndex] = useState(0);
   const menuItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -390,7 +400,9 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
     void props.onSend();
   }, [props.busy, props.draft, props.attachments, props.mode, props.onSend, props.onSteer, props.onQueue, props.submissionPreparing]);
 
-  const slashCommandQuery = getSlashCommandQuery(props.draft);
+  const slashEnabled = props.mode !== "shell";
+  const wholeDraftSlashQuery = slashEnabled ? getSlashCommandQuery(props.draft) : null;
+  const slashCommandQuery = slashEnabled ? activeSlashQuery ?? wholeDraftSlashQuery : null;
   const slashOpenNext = slashCommandQuery !== null;
   const slashQuery = slashCommandQuery ?? "";
   const mentionOpenNext = activeMentionQuery !== null;
@@ -736,10 +748,11 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
     return undefined;
   }, [loadSkills, slashOpen, toolMenuOpen, toolMenuSection]);
 
-  const slashItems = useMemo<ComposerSlashCommandOption[]>(
-    () => [...commands, ...connectSkillSlashCommandOptions(skills)],
-    [commands, skills],
-  );
+  const slashItems = useMemo<ComposerSlashCommandOption[]>(() => {
+    const items: ComposerSlashCommandOption[] = [...commands, ...connectSkillSlashCommandOptions(skills)];
+    if (wholeDraftSlashQuery !== null) return items;
+    return items.filter((command) => Boolean(command.skill) || command.source === "skill");
+  }, [commands, skills, wholeDraftSlashQuery]);
   const slashFiltered = useMemo(() => {
     if (!slashOpen) return [];
     if (!slashQuery) return slashItems.slice(0, 8);
@@ -883,7 +896,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
     target?.scrollIntoView({ block: "nearest" });
   }, [menuIndex, activeItems.length]);
 
-  const applyCommandSelection = (command: ComposerSlashCommandOption, options?: { replaceSkillDraft?: boolean }) => {
+  const applyCommandSelection = (command: ComposerSlashCommandOption, options?: SlashCommandSelectionOptions) => {
     if (command.skill) {
       applySkillSelection(command.skill, options);
       return;
@@ -892,12 +905,17 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
       applySkillSelection(command.name, options);
       return;
     }
+    if (options?.replaceSlashQuery) {
+      setSlashOpen(false);
+      setToolMenuOpen(false);
+      return;
+    }
     props.onDraftChange(`/${command.name} `);
     setSlashOpen(false);
     setToolMenuOpen(false);
   };
 
-  const applySkillSelection = (input: string | SkillCard, options?: { replaceSkillDraft?: boolean }) => {
+  const applySkillSelection = (input: string | SkillCard, options?: SlashCommandSelectionOptions) => {
     const skill = typeof input === "string"
       ? { name: input, path: "", origin: "local" as const }
       : input;
@@ -914,10 +932,11 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
       } else {
         const editor = editorRef.current;
         if (editor) {
-          editor.insertSkillAtSelection(slug, token);
+          editor.insertSkillAtSelection(slug, token, { replaceSlashQuery: options?.replaceSlashQuery });
         } else {
-          const separator = props.draft.length > 0 && !/\s$/.test(props.draft) ? " " : "";
-          props.onDraftChange(`${props.draft}${separator}${token} `);
+          const baseDraft = options?.replaceSlashQuery ? stripTrailingSlashQuery(props.draft) : props.draft;
+          const separator = baseDraft.length > 0 && !/\s$/.test(baseDraft) ? " " : "";
+          props.onDraftChange(`${baseDraft}${separator}${token} `);
         }
       }
       setSlashOpen(false);
@@ -930,10 +949,11 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
     } else {
       const editor = editorRef.current;
       if (editor) {
-        editor.insertSkillAtSelection(name);
+        editor.insertSkillAtSelection(name, undefined, { replaceSlashQuery: options?.replaceSlashQuery });
       } else {
-        const separator = props.draft.length > 0 && !/\s$/.test(props.draft) ? " " : "";
-        props.onDraftChange(`${props.draft}${separator}[skill ${name}] `);
+        const baseDraft = options?.replaceSlashQuery ? stripTrailingSlashQuery(props.draft) : props.draft;
+        const separator = baseDraft.length > 0 && !/\s$/.test(baseDraft) ? " " : "";
+        props.onDraftChange(`${baseDraft}${separator}[skill ${name}] `);
       }
     }
     setSlashOpen(false);
@@ -994,12 +1014,18 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
     return true;
   };
 
+  const slashSelectionOptions = (): SlashCommandSelectionOptions => (
+    getSlashCommandQuery(props.draft) !== null
+      ? { replaceSkillDraft: true }
+      : { replaceSlashQuery: true }
+  );
+
   const acceptActiveItem = () => {
     if (!activeItems.length) return false;
     if (activeMenu === "slash") {
       const command = slashFiltered[menuIndex];
       if (!command) return false;
-      applyCommandSelection(command, { replaceSkillDraft: true });
+      applyCommandSelection(command, slashSelectionOptions());
       return true;
     }
     if (activeMenu === "mention") {
@@ -1246,10 +1272,10 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
                     onMouseDown={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
-                      applyCommandSelection(command, { replaceSkillDraft: true });
+                      applyCommandSelection(command, slashSelectionOptions());
                     }}
                     onClick={(event) => {
-                      if (event.detail === 0) applyCommandSelection(command, { replaceSkillDraft: true });
+                      if (event.detail === 0) applyCommandSelection(command, slashSelectionOptions());
                     }}
                   >
                     <Terminal size={14} className="mt-0.5 shrink-0 text-gray-9" />
@@ -1396,6 +1422,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
               onShellModeChange={(shell) => props.onModeChange(shell ? "shell" : "prompt")}
               onChange={props.onDraftChange}
               onMentionQueryChange={setActiveMentionQuery}
+              onSlashQueryChange={setActiveSlashQuery}
               onSubmit={handleEditorSubmit}
               onExpandPastedText={handleExpandPastedText}
               onExpandAttachment={setExpandedAttachmentId}

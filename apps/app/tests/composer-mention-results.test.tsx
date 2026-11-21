@@ -3,6 +3,7 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { createRequire } from "node:module";
 import { act, useState, type ComponentProps, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
+import type { PromptMode, SkillCard, SlashCommandOption } from "../src/app/types";
 import { encodeComposerMentionValue } from "../src/react-app/domains/session/surface/composer/mention-encoding";
 
 GlobalRegistrator.register({ url: "http://localhost/" });
@@ -53,6 +54,9 @@ async function mounted(options: {
   attachments?: Props["attachments"];
   search?: Props["searchFiles"];
   listAgents?: Props["listAgents"];
+  commands?: SlashCommandOption[];
+  skills?: SkillCard[];
+  mode?: PromptMode;
   newTask?: boolean;
 } = {}) {
   runningApps = options.apps ?? [];
@@ -68,7 +72,8 @@ async function mounted(options: {
     return options.search ? options.search(query) : options.files ?? ["notes.md", "docs/start.md", "src/openwork.ts", "docs/cloud-notes.md"];
   };
   const listAgents = options.listAgents ?? (async () => defaultAgents);
-  const listCommands = async () => [];
+  const listCommands = async () => options.commands ?? [];
+  const listSkills = async () => options.skills ?? [];
   const attachments = options.attachments ?? [];
   const recentFiles: string[] = [];
   function Harness() {
@@ -101,7 +106,11 @@ async function mounted(options: {
       {...context}
       draft={draft}
       mentions={mentions}
+      mode={options.mode ?? "prompt"}
+      onModeChange={() => {}}
       onDraftChange={updateDraft}
+      listSkills={listSkills}
+      skills={options.skills}
       onSend={sent}
       onSteer={() => {}}
       onQueue={() => {}}
@@ -137,10 +146,12 @@ async function mounted(options: {
   if (!editor) throw new Error("Lexical editor is unavailable");
   await act(async () => editor.update(() => { $getRoot().selectEnd(); }, { discrete: true }));
   const buttons = () => Array.from(container.querySelectorAll("button")).filter((button) => button.textContent?.startsWith("@"));
+  const slashButtons = () => Array.from(container.querySelectorAll("button")).filter((button) => button.textContent?.startsWith("/"));
   return {
     queries, selectedAgent, sent,
     draft: () => currentDraft,
     labels: () => buttons().map((button) => button.textContent ?? ""),
+    slashLabels: () => slashButtons().map((button) => button.textContent ?? ""),
     tokenTitles: () => Array.from(element.querySelectorAll("span[contenteditable='false'][title]")).map((node) => node.getAttribute("title")),
     async type(text: string) {
       await act(async () => editor.update(() => {
@@ -199,6 +210,14 @@ async function mounted(options: {
       await act(async () => {
         button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
         button.click();
+      });
+    },
+    async chooseSlash(prefix: string) {
+      const button = slashButtons().find((candidate) => candidate.textContent?.startsWith(prefix));
+      if (!button) throw new Error(`Slash item ${prefix} is unavailable`);
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
       });
     },
     async close() {
@@ -423,6 +442,94 @@ test("a delayed previous query cannot replace newer mention results", async () =
     expect(composer.labels()[0]?.startsWith("@cloud")).toBe(true);
     expect(composer.labels().some((label) => label.includes("src/openwork.ts"))).toBe(false);
   } finally { oldFiles.resolve([]); await composer.close(); }
+});
+
+const escalateSkill: SkillCard = {
+  name: "Escalate ticket",
+  trigger: "escalate-ticket",
+  description: "Prepare a support escalation.",
+  path: "openwork-connect://marketplace_1/plugin_1/skill_1",
+  origin: "openwork-connect",
+  marketplaceName: "Team tools",
+  pluginName: "Support kit",
+  connectCapabilityName: "plugin:plugin_1:skill_1",
+};
+
+const releaseCommand: SlashCommandOption = {
+  id: "release",
+  name: "release",
+  description: "Cut a release.",
+  source: "command",
+};
+
+for (const method of ["Tab", "mouse"] as const) {
+  test(`typing / in a non-empty draft suggests skills and inserts at the caret (${method})`, async () => {
+    const composer = await mounted({ draft: "Summarize the notes", skills: [escalateSkill] });
+    try {
+      await composer.caret("Summarize the notes".length);
+      await composer.type(" /esc");
+      expect(composer.slashLabels()[0]).toContain("/escalate-ticket");
+      if (method === "mouse") await composer.chooseSlash("/escalate-ticket");
+      else await composer.press("Tab");
+      expect(composer.draft()).toBe("Summarize the notes [connect-skill escalate-ticket|Escalate ticket|Team tools|plugin:plugin_1:skill_1] ");
+      expect(composer.sent).not.toHaveBeenCalled();
+      await composer.type("next");
+      expect(composer.draft()).toBe("Summarize the notes [connect-skill escalate-ticket|Escalate ticket|Team tools|plugin:plugin_1:skill_1] next");
+    } finally { await composer.close(); }
+  });
+}
+
+test("inline slash inserts a local skill without replacing the draft", async () => {
+  const composer = await mounted({
+    draft: "Keep my draft",
+    commands: [{ id: "skill:local", name: "Local Playbook", description: "Local instructions.", source: "skill" }],
+  });
+  try {
+    await composer.caret("Keep my draft".length);
+    await composer.type(" /local");
+    expect(composer.slashLabels()[0]).toContain("/Local Playbook");
+    await composer.press("Tab");
+    expect(composer.draft()).toBe("Keep my draft [skill Local Playbook] ");
+  } finally { await composer.close(); }
+});
+
+test("a whole-draft slash still offers and selects commands", async () => {
+  const composer = await mounted({ commands: [releaseCommand] });
+  try {
+    await composer.type("/rel");
+    expect(composer.slashLabels()[0]).toContain("/release");
+    await composer.press("Enter");
+    expect(composer.draft()).toBe("/release ");
+    expect(composer.sent).not.toHaveBeenCalled();
+  } finally { await composer.close(); }
+});
+
+test("inline slash does not offer commands that require the whole message", async () => {
+  const composer = await mounted({ draft: "Keep my draft", commands: [releaseCommand] });
+  try {
+    await composer.caret("Keep my draft".length);
+    await composer.type(" /rel");
+    expect(composer.slashLabels()).toEqual([]);
+  } finally { await composer.close(); }
+});
+
+test("moving the caret into and out of a slash token updates suggestions", async () => {
+  const composer = await mounted({ draft: "hello /esc", skills: [escalateSkill] });
+  try {
+    expect(composer.slashLabels()[0]).toContain("/escalate-ticket");
+    await composer.caret(0);
+    expect(composer.slashLabels()).toEqual([]);
+    await composer.caret("hello /esc".length);
+    expect(composer.slashLabels()[0]).toContain("/escalate-ticket");
+  } finally { await composer.close(); }
+});
+
+test("shell mode does not open the slash menu for command paths", async () => {
+  const composer = await mounted({ mode: "shell" });
+  try {
+    await composer.type("ls /us");
+    expect(composer.slashLabels()).toEqual([]);
+  } finally { await composer.close(); }
 });
 
 afterAll(() => GlobalRegistrator.unregister());

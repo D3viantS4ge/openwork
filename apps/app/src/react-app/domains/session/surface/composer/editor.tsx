@@ -50,6 +50,7 @@ import { parseConnectSkillToken } from "./connect-skill-token";
 import { createPastedTextChip, shouldCollapsePastedText, splitPastedText } from "./pasted-text";
 import { insertPastedText } from "./pasted-text-insertion";
 import { encodeConnectorToken, parseConnectorToken } from "./connector-token";
+import { getSlashCommandQueryAtCaret } from "./slash-command";
 import { lineBoundaryMoveForKey } from "./line-boundary-keys";
 import { isCaretAtEditorStart, shouldEnterShellModeOnKey, shouldExitShellModeOnBackspace } from "./shell-mode-keys";
 import {
@@ -95,6 +96,7 @@ type EditorProps = {
   onShellModeChange?: (shell: boolean) => void;
   onChange: (value: string) => void;
   onMentionQueryChange?: (query: string | null) => void;
+  onSlashQueryChange?: (query: string | null) => void;
   onSubmit: (options: { queue: boolean }) => void | Promise<void>;
   onExpandPastedText?: (label: string) => void;
   onExpandAttachment?: (id: string) => void;
@@ -106,8 +108,12 @@ type EditorProps = {
   onDragLeave?: React.DragEventHandler<HTMLDivElement>;
 };
 
+export type ComposerSkillInsertOptions = {
+  replaceSlashQuery?: boolean;
+};
+
 export type LexicalPromptEditorHandle = {
-  insertSkillAtSelection: (skillName: string, skillToken?: string) => void;
+  insertSkillAtSelection: (skillName: string, skillToken?: string, options?: ComposerSkillInsertOptions) => void;
   insertMentionAtSelection: (kind: ComposerMentionKind, value: string) => string | null;
 };
 
@@ -1020,6 +1026,25 @@ function mentionAtSelection() {
   return { node, start: end - match[0].length, end: end + remaining.length, query: match[1] ?? "" };
 }
 
+function slashAtSelection() {
+  const selection = $getSelection();
+  if (!$isRangeSelection(selection) || !selection.isCollapsed()) return null;
+  let node = selection.anchor.getNode();
+  let end = selection.anchor.offset;
+  if ($isElementNode(node)) {
+    const previous = node.getChildAtIndex(end - 1);
+    if (!$isTextNode(previous)) return null;
+    node = previous;
+    end = node.getTextContentSize();
+  }
+  if (!$isTextNode(node) || isComposerInlineTokenNode(node)) return null;
+  const text = node.getTextContent();
+  const match = getSlashCommandQueryAtCaret(text.slice(0, end));
+  if (!match) return null;
+  const remaining = text.slice(end).match(/^[A-Za-z0-9_-]*/)?.[0] ?? "";
+  return { node, start: match.start, end: end + remaining.length, query: match.query };
+}
+
 function insertMentionAtSelection(kind: ComposerMentionKind, value: string) {
   const match = mentionAtSelection();
   if (!match) return false;
@@ -1047,15 +1072,23 @@ function appendSkillAtEnd(skillName: string, skillToken?: string) {
   setSelectionAfterNode(spaceNode);
 }
 
-function insertSkillAtSelection(skillName: string, skillToken?: string) {
+function insertSkillAtSelection(skillName: string, skillToken?: string, options?: ComposerSkillInsertOptions) {
   const selection = $getSelection();
   if (!$isRangeSelection(selection)) {
     appendSkillAtEnd(skillName, skillToken);
     return;
   }
+  let target = selection;
+  if (options?.replaceSlashQuery) {
+    const slash = slashAtSelection();
+    if (slash) {
+      const end = slash.end + (slash.node.getTextContent()[slash.end] === " " ? 1 : 0);
+      target = slash.node.select(slash.start, end);
+    }
+  }
   const skillNode = $createComposerSkillNode(skillName, skillToken);
   const spaceNode = $createTextNode(" ");
-  selection.insertNodes([skillNode, spaceNode]);
+  target.insertNodes([skillNode, spaceNode]);
   setSelectionAfterNode(spaceNode);
 }
 
@@ -2001,8 +2034,8 @@ function ImperativeHandlePlugin(props: { editorRef: ForwardedRef<LexicalPromptEd
   const [editor] = useLexicalComposerContext();
 
   useImperativeHandle(props.editorRef, () => ({
-    insertSkillAtSelection(skillName: string, skillToken?: string) {
-      editor.update(() => insertSkillAtSelection(skillName, skillToken));
+    insertSkillAtSelection(skillName: string, skillToken?: string, options?: ComposerSkillInsertOptions) {
+      editor.update(() => insertSkillAtSelection(skillName, skillToken, options));
       editor.focus();
     },
     insertMentionAtSelection(kind: ComposerMentionKind, value: string) {
@@ -2067,6 +2100,7 @@ export const LexicalPromptEditor = forwardRef<LexicalPromptEditorHandle, EditorP
   const valueRef = useRef(props.value);
   const onChangeRef = useRef(props.onChange);
   const onMentionQueryChangeRef = useRef(props.onMentionQueryChange);
+  const onSlashQueryChangeRef = useRef(props.onSlashQueryChange);
   const shellModeRef = useRef(props.shellMode ?? false);
   const onShellModeChangeRef = useRef(props.onShellModeChange);
 
@@ -2077,7 +2111,8 @@ export const LexicalPromptEditor = forwardRef<LexicalPromptEditorHandle, EditorP
   useEffect(() => {
     onChangeRef.current = props.onChange;
     onMentionQueryChangeRef.current = props.onMentionQueryChange;
-  }, [props.onChange, props.onMentionQueryChange]);
+    onSlashQueryChangeRef.current = props.onSlashQueryChange;
+  }, [props.onChange, props.onMentionQueryChange, props.onSlashQueryChange]);
 
   useEffect(() => {
     shellModeRef.current = props.shellMode ?? false;
@@ -2111,6 +2146,7 @@ export const LexicalPromptEditor = forwardRef<LexicalPromptEditorHandle, EditorP
     (state: Parameters<NonNullable<React.ComponentProps<typeof OnChangePlugin>["onChange"]>>[0]) => {
       state.read(() => {
         onMentionQueryChangeRef.current?.(mentionAtSelection()?.query ?? null);
+        onSlashQueryChangeRef.current?.(slashAtSelection()?.query ?? null);
         const next = serializePromptFromRoot();
         if (next === valueRef.current) return;
         valueRef.current = next;
