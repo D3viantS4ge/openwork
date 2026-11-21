@@ -2015,7 +2015,7 @@ async function refreshSessionTodos(workspaceId: string, sessionId: string) {
 export function seedSessionState(
   workspaceId: string,
   snapshot: OpenworkSessionHistory,
-  options: { preview?: boolean; fallbackAgent?: string | null } = {},
+  options: { preview?: boolean } = {},
 ) {
   // A reverted window cannot establish which messages are still visible.
   if (options.preview && snapshot.session.revert?.messageID) return;
@@ -2110,9 +2110,9 @@ export function seedSessionState(
   // agent/model/variant so opening any session shows (and continues to send
   // with) what actually ran there — subagent subsessions, CLI-created
   // sessions, sessions continued elsewhere — instead of the global default.
-  // No-op when the user already has a remembered override; an auto-adopted
-  // fallback is treated as no override so the runtime truth wins.
-  seedSessionSelectionFromRuntime(snapshot.session, options.fallbackAgent);
+  // No-op when the user already has a remembered override; only a value
+  // auto-adopted from the fallback on open is replaced so the runtime wins.
+  seedSessionSelectionFromRuntime(snapshot.session);
 }
 
 /**

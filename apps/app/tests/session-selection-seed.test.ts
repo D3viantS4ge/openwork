@@ -3,7 +3,11 @@ import type { Session } from "@opencode-ai/sdk/v2/client";
 
 import type { OpenworkSessionSnapshot } from "../src/app/lib/openwork-server";
 import { getReactQueryClient } from "../src/react-app/infra/query-client";
-import { getSessionAgent, useSessionAgentStore } from "../src/react-app/domains/session/surface/session-mode-memory";
+import {
+  getSessionAgent,
+  isSessionAgentAdopted,
+  useSessionAgentStore,
+} from "../src/react-app/domains/session/surface/session-mode-memory";
 import {
   getSessionModelSelection,
   useSessionModelStore,
@@ -38,7 +42,7 @@ function createSnapshot(session: Session): OpenworkSessionSnapshot {
 
 function clearSelections() {
   useSessionModelStore.setState({ bySessionId: {} });
-  useSessionAgentStore.setState({ bySessionId: {} });
+  useSessionAgentStore.setState({ bySessionId: {}, adoptedBySessionId: {} });
 }
 
 afterEach(() => {
@@ -79,37 +83,64 @@ describe("seedSessionSelectionFromRuntime", () => {
   });
 
   test("overwrites an auto-adopted fallback agent with the agent that actually ran", () => {
-    useSessionAgentStore.getState().setAgent(sessionId, "plan");
+    useSessionAgentStore.getState().adoptAgent(sessionId, "plan");
 
     seedSessionSelectionFromRuntime(createSession({
       parentID: "parent-session",
       agent: "general",
       model: { providerID: "openai", id: "gpt-5" },
-    }), "plan");
+    }));
 
     expect(getSessionAgent(sessionId)).toBe("general");
+    expect(isSessionAgentAdopted(sessionId)).toBe(false);
   });
 
-  test("keeps an override that differs from the fallback agent", () => {
+  test("keeps an explicit override", () => {
     useSessionAgentStore.getState().setAgent(sessionId, "build");
 
     seedSessionSelectionFromRuntime(createSession({
       parentID: "parent-session",
       agent: "general",
       model: { providerID: "openai", id: "gpt-5" },
-    }), "plan");
+    }));
 
     expect(getSessionAgent(sessionId)).toBe("build");
   });
 
-  test("does not overwrite the auto-adopted fallback when the runtime recorded the default agent", () => {
+  test("keeps an explicit selection that matches the fallback agent", () => {
     useSessionAgentStore.getState().setAgent(sessionId, "plan");
+
+    seedSessionSelectionFromRuntime(createSession({
+      parentID: "parent-session",
+      agent: "build",
+      model: { providerID: "openai", id: "gpt-5" },
+    }));
+
+    expect(getSessionAgent(sessionId)).toBe("plan");
+  });
+
+  test("keeps the newly selected mode when a stale snapshot still carries the previous run", () => {
+    useSessionAgentStore.getState().setAgent(sessionId, "plan");
+    seedSessionSelectionFromRuntime(createSession({ agent: "plan" }));
+    useSessionAgentStore.getState().setAgent(sessionId, "build");
+    seedSessionSelectionFromRuntime(createSession({ agent: "build" }));
+    useSessionAgentStore.getState().setAgent(sessionId, "plan");
+
+    // The snapshot fetched as the new Plan prompt starts can still report the
+    // Build run that just finished. It must not flip the composer back.
+    seedSessionSelectionFromRuntime(createSession({ agent: "build" }));
+
+    expect(getSessionAgent(sessionId)).toBe("plan");
+  });
+
+  test("does not overwrite the auto-adopted fallback when the runtime recorded the default agent", () => {
+    useSessionAgentStore.getState().adoptAgent(sessionId, "plan");
 
     seedSessionSelectionFromRuntime(createSession({
       parentID: "parent-session",
       agent: "openwork",
       model: { providerID: "openai", id: "gpt-5" },
-    }), "plan");
+    }));
 
     expect(getSessionAgent(sessionId)).toBe("plan");
   });
@@ -121,9 +152,21 @@ describe("seedSessionSelectionFromRuntime", () => {
       parentID: "parent-session",
       agent: "plan",
       model: { providerID: "openai", id: "gpt-5" },
-    }), null);
+    }));
 
     expect(getSessionAgent(sessionId)).toBeNull();
+  });
+
+  test("overwrites an adopted Default agent with the agent that actually ran", () => {
+    useSessionAgentStore.getState().adoptAgent(sessionId, null);
+
+    seedSessionSelectionFromRuntime(createSession({
+      parentID: "parent-session",
+      agent: "plan",
+      model: { providerID: "openai", id: "gpt-5" },
+    }));
+
+    expect(getSessionAgent(sessionId)).toBe("plan");
   });
 
   test("keeps the model override while seeding the missing agent", () => {

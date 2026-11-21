@@ -1557,9 +1557,6 @@ export function SessionSurface(props: SessionSurfaceProps) {
     if (!currentSnapshot) return;
     openingHistory.seedSnapshot(currentSnapshot, () => seedSessionState(props.workspaceId, currentSnapshot, {
       preview: !hasFullHistory,
-      // The agent a memory-less session auto-adopts on open; the seed treats
-      // that value as not a deliberate override so what actually ran wins.
-      fallbackAgent: props.selectedAgent,
     }));
   }, [currentSnapshot, hasFullHistory, openingHistory.seedSnapshot, props.sessionId, props.workspaceId]);
 

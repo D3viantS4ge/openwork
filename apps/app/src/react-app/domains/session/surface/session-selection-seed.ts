@@ -19,16 +19,17 @@ import type { Session } from "@opencode-ai/sdk/v2/client";
 
 import { DEFAULT_AGENT_NAME } from "@/app/constants";
 
-import { getSessionAgent, useSessionAgentStore } from "./session-mode-memory";
+import {
+  getSessionAgent,
+  isSessionAgentAdopted,
+  useSessionAgentStore,
+} from "./session-mode-memory";
 import {
   getSessionModelSelection,
   useSessionModelStore,
 } from "./session-model-store";
 
-export function seedSessionSelectionFromRuntime(
-  session: Session,
-  fallbackAgent?: string | null,
-): void {
+export function seedSessionSelectionFromRuntime(session: Session): void {
   const sessionId = session.id;
 
   if (session.model?.providerID && session.model.id) {
@@ -48,11 +49,10 @@ export function seedSessionSelectionFromRuntime(
     const remembered = getSessionAgent(sessionId);
     // A session without memory adopts the fallback agent on open; that
     // auto-adopted value is not a deliberate override, so the runtime truth
-    // still wins and opening a subsession shows the subagent that ran.
-    const fallbackAdopted = typeof fallbackAgent === "string"
-      && typeof remembered === "string"
-      && remembered === fallbackAgent;
-    if (remembered === undefined || fallbackAdopted) {
+    // still wins and opening a subsession shows the subagent that ran. An
+    // explicit choice — even one that happens to equal the fallback — is never
+    // overwritten by a snapshot that may still describe the previous run.
+    if (remembered === undefined || isSessionAgentAdopted(sessionId)) {
       useSessionAgentStore.getState().setAgent(sessionId, session.agent);
     }
   }
