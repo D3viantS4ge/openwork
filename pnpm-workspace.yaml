@@ -130,3 +130,4 @@ patchedDependencies:
   '@better-auth/sso@1.7.0-beta.10': patches/@better-auth__sso@1.7.0-beta.10.patch
   '@modelcontextprotocol/client@2.0.0': patches/@modelcontextprotocol__client@2.0.0.patch
   '@modelcontextprotocol/sdk': patches/@modelcontextprotocol__sdk.patch
+  '@pierre/trees@1.0.0-beta.6': patches/@pierre__trees@1.0.0-beta.6.patch

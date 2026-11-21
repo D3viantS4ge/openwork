@@ -1,0 +1,24 @@
+diff --git a/dist/render/FileTreeView.js b/dist/render/FileTreeView.js
+index 7d3b818c43a7621ab9170da32b180232ed3c9472..459a97c906462f0f688eb80187007b59abf9e5f1 100644
+--- a/dist/render/FileTreeView.js
++++ b/dist/render/FileTreeView.js
+@@ -3,7 +3,7 @@ import { createFileTreeIconResolver } from "./iconResolver.js";
+ import { FILE_TREE_DEFAULT_ITEM_HEIGHT } from "../model/virtualization.js";
+ import { FILE_TREE_RENAME_VIEW } from "../model/FileTreeController.js";
+ import { Icon } from "../components/Icon.js";
+-import { MiddleTruncate, Truncate } from "../components/OverflowText.js";
++import { Truncate } from "../components/OverflowText.js";
+ import { computeFileTreeLayout, computeStickyRows } from "../model/layout.js";
+ import { GIT_STATUS_DESCENDANT_TITLE, GIT_STATUS_LABEL, GIT_STATUS_TITLE } from "../utils/gitStatusPresentation.js";
+ import { shouldBumpControllerRevision } from "./controllerSnapshotSubscription.js";
+@@ -376,9 +376,7 @@ function renderFileTreeRowContent(row, resolveIcon, { actionLaneEnabled = false,
+ 		}),
+ 		/* @__PURE__ */ jsx("div", {
+ 			"data-item-section": "content",
+-			children: row.isFlattened ? formatFlattenedSegments(row, renameInput, dragTargetFlattenedSegmentPath) : renameInput ?? /* @__PURE__ */ jsx(MiddleTruncate, {
+-				minimumLength: 5,
+-				split: "extension",
++			children: row.isFlattened ? formatFlattenedSegments(row, renameInput, dragTargetFlattenedSegmentPath) : renameInput ?? /* @__PURE__ */ jsx(Truncate, {
+ 				children: row.name
+ 			})
+ 		}),
