@@ -18,6 +18,17 @@ const TREE_CSS = `
     --trees-border-color-override: color-mix(in srgb, currentColor 14%, transparent);
     --trees-font-family-override: var(--font-sans);
     --trees-font-size-override: 12px;
+    --trees-padding-inline-override: 0px;
+    --trees-item-margin-x-override: 2px;
+    --trees-item-padding-x-override: 4px;
+    --trees-scrollbar-gutter-override: 0px;
+  }
+  [data-file-tree-virtualized-scroll="true"] {
+    scrollbar-gutter: auto;
+    scrollbar-width: none;
+  }
+  [data-file-tree-virtualized-scroll="true"]::-webkit-scrollbar {
+    display: none;
   }
   button[data-type='item'] { border-radius: 5px; }
   [data-item-section="content"] {
