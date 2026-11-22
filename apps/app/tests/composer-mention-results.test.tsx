@@ -56,6 +56,8 @@ async function mounted(options: {
   listAgents?: Props["listAgents"];
   commands?: SlashCommandOption[];
   skills?: SkillCard[];
+  commandsLoader?: () => Promise<SlashCommandOption[]>;
+  skillsLoader?: () => Promise<SkillCard[]>;
   mode?: PromptMode;
   newTask?: boolean;
 } = {}) {
@@ -72,8 +74,16 @@ async function mounted(options: {
     return options.search ? options.search(query) : options.files ?? ["notes.md", "docs/start.md", "src/openwork.ts", "docs/cloud-notes.md"];
   };
   const listAgents = options.listAgents ?? (async () => defaultAgents);
-  const listCommands = async () => options.commands ?? [];
-  const listSkills = async () => options.skills ?? [];
+  let commandsCalls = 0;
+  let skillsCalls = 0;
+  const listCommands = async () => {
+    commandsCalls += 1;
+    return options.commandsLoader ? options.commandsLoader() : options.commands ?? [];
+  };
+  const listSkills = async () => {
+    skillsCalls += 1;
+    return options.skillsLoader ? options.skillsLoader() : options.skills ?? [];
+  };
   const attachments = options.attachments ?? [];
   const recentFiles: string[] = [];
   function Harness() {
@@ -149,6 +159,8 @@ async function mounted(options: {
   const slashButtons = () => Array.from(container.querySelectorAll("button")).filter((button) => button.textContent?.startsWith("/"));
   return {
     queries, selectedAgent, sent,
+    commandsCalls: () => commandsCalls,
+    skillsCalls: () => skillsCalls,
     draft: () => currentDraft,
     labels: () => buttons().map((button) => button.textContent ?? ""),
     slashLabels: () => slashButtons().map((button) => button.textContent ?? ""),
@@ -462,6 +474,13 @@ const releaseCommand: SlashCommandOption = {
   source: "command",
 };
 
+const localSkill: SkillCard = {
+  name: "Local Playbook",
+  description: "Local instructions.",
+  path: ".opencode/skills/local-playbook/SKILL.md",
+  origin: "local",
+};
+
 for (const method of ["Tab", "mouse"] as const) {
   test(`typing / in a non-empty draft suggests skills and inserts at the caret (${method})`, async () => {
     const composer = await mounted({ draft: "Summarize the notes", skills: [escalateSkill] });
@@ -501,6 +520,46 @@ test("a whole-draft slash still offers and selects commands", async () => {
     await composer.press("Enter");
     expect(composer.draft()).toBe("/release ");
     expect(composer.sent).not.toHaveBeenCalled();
+  } finally { await composer.close(); }
+});
+
+test("local skills paint in the slash menu while the engine command list is pending", async () => {
+  const composer = await mounted({
+    skills: [localSkill],
+    commandsLoader: () => new Promise<SlashCommandOption[]>(() => {}),
+  });
+  try {
+    await composer.type("/");
+    expect(composer.slashLabels()[0]).toContain("/Local Playbook");
+    expect(composer.commandsCalls()).toBe(1);
+  } finally { await composer.close(); }
+});
+
+test("selecting a local skill from the slash menu inserts a skill token", async () => {
+  const composer = await mounted({ draft: "Keep my draft", skills: [localSkill] });
+  try {
+    await composer.caret("Keep my draft".length);
+    await composer.type(" /local");
+    await composer.press("Tab");
+    expect(composer.draft()).toBe("Keep my draft [skill Local Playbook] ");
+  } finally { await composer.close(); }
+});
+
+test("the first slash uses the prefetched command list without refetching", async () => {
+  let resolveCommands: (commands: SlashCommandOption[]) => void = () => {};
+  const commandsPromise = new Promise<SlashCommandOption[]>((resolve) => {
+    resolveCommands = resolve;
+  });
+  const composer = await mounted({ commandsLoader: () => commandsPromise });
+  try {
+    expect(composer.commandsCalls()).toBe(1);
+    await act(async () => {
+      resolveCommands([releaseCommand]);
+      await commandsPromise;
+    });
+    await composer.type("/rel");
+    expect(composer.slashLabels()[0]).toContain("/release");
+    expect(composer.commandsCalls()).toBe(1);
   } finally { await composer.close(); }
 });
 

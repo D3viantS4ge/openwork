@@ -588,6 +588,8 @@ export type SessionSurfaceProps = {
   workspaceRoot: string;
   sessionId: string;
   draftScope: string | null;
+  /** Workspace + engine generation key for the composer's capability cache. */
+  capabilityCacheKey?: string;
   isControlTarget: boolean;
   chatPane?: "primary" | "secondary";
   opencodeBaseUrl: string;
@@ -3777,6 +3779,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
         onSelectAgent={sessionAgent.setAgent}
         listCommands={props.listCommands}
         listSkills={listSkills}
+        capabilityCacheKey={props.capabilityCacheKey}
         skills={toolSkills}
         listMcp={listMcp}
         mcpServers={toolMcpServers}

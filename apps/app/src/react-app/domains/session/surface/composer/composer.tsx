@@ -39,6 +39,7 @@ import {
   composerConnectionSignIn,
   mergeComposerConnectionInventory,
 } from "./composer-connections";
+import { loadCachedCapability, readCachedCapability } from "./capability-cache";
 import { DevProfiler } from "@/react-app/shell/dev-profiler";
 
 type MentionItem = {
@@ -127,6 +128,13 @@ type ComposerProps = {
   isSandboxWorkspace: boolean;
   onUploadInboxFiles?: ((files: File[]) => void | Promise<unknown>) | null;
   draftScopeKey?: string;
+  /**
+   * Stable key for the workspace + engine generation backing `listCommands`
+   * and `listSkills`. The composer prefetches both lists once per key so the
+   * first `/` paints from cache instead of paying the engine's cold command
+   * index. Callers that omit it get a per-composer key.
+   */
+  capabilityCacheKey?: string;
   compactTopSpacing?: boolean;
   /** Render inline in a page (new-task hero): no sticky dock chrome or inner max-width, aligning with sibling content. */
   flush?: boolean;
@@ -151,6 +159,13 @@ function isNonDefaultAgent(agent: Agent) {
 
 function stripTrailingSlashQuery(value: string) {
   return value.replace(/(?<!\S)\/[A-Za-z0-9_-]*$/, "");
+}
+
+let composerCapabilityCacheSequence = 0;
+
+function nextComposerCapabilityCacheKey() {
+  composerCapabilityCacheSequence += 1;
+  return `composer:${composerCapabilityCacheSequence}`;
 }
 
 /**
@@ -256,6 +271,10 @@ function pluginSlashCommandName(file: CloudImportedPluginFile) {
 export const ReactSessionComposer = memo(function ReactSessionComposer(props: ComposerProps) {
   let fileInput: HTMLInputElement | undefined;
   const orgMcp = useOrgMcpConnections();
+  const [fallbackCapabilityCacheKey] = useState(() => nextComposerCapabilityCacheKey());
+  const capabilityCacheKey = props.capabilityCacheKey?.trim() || fallbackCapabilityCacheKey;
+  const commandsCacheKey = `${capabilityCacheKey}:commands`;
+  const skillsCacheKey = `${capabilityCacheKey}:skills`;
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const [refreshingOrganizationModels, setRefreshingOrganizationModels] = useState(false);
@@ -275,10 +294,6 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
   const [mentionOpen, setMentionOpen] = useState(false);
   const [menuIndex, setMenuIndex] = useState(0);
   const menuItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const commandsCacheRef = useRef<SlashCommandOption[] | null>(null);
-  const commandsRequestRef = useRef<Promise<SlashCommandOption[]> | null>(null);
-  const skillsRequestRef = useRef<Promise<SkillCard[]> | null>(null);
-  const commandsLoadVersionRef = useRef(0);
   const listCommandsRef = useRef(props.listCommands);
   const listSkillsRef = useRef(props.listSkills);
   const listImportedPluginsRef = useRef(props.listImportedPlugins);
@@ -469,44 +484,29 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
     target?.scrollIntoView({ block: "nearest" });
   }, [agentMenuIndex, agentMenuOpen]);
 
-  useEffect(() => {
-    commandsLoadVersionRef.current += 1;
-    commandsCacheRef.current = null;
-    commandsRequestRef.current = null;
-  }, [props.listCommands]);
-
   const loadCommands = useCallback(() => {
-    if (commandsCacheRef.current !== null) {
-      return Promise.resolve(commandsCacheRef.current);
-    }
-    if (commandsRequestRef.current) {
-      return commandsRequestRef.current;
-    }
-    const version = commandsLoadVersionRef.current;
-    const request = listCommandsRef.current().then((next) => {
-      if (commandsLoadVersionRef.current === version) {
-        commandsCacheRef.current = next;
-      }
-      return next;
-    }).finally(() => {
-      if (commandsLoadVersionRef.current === version) {
-        commandsRequestRef.current = null;
-      }
-    });
-    commandsRequestRef.current = request;
-    return request;
-  }, []);
+    return loadCachedCapability(commandsCacheKey, listCommandsRef.current);
+  }, [commandsCacheKey]);
 
   const loadSkills = useCallback(() => {
-    if (skillsRequestRef.current) return skillsRequestRef.current;
     const listSkills = listSkillsRef.current;
     if (!listSkills) return Promise.resolve([]);
-    const request = listSkills().finally(() => {
-      if (skillsRequestRef.current === request) skillsRequestRef.current = null;
-    });
-    skillsRequestRef.current = request;
-    return request;
-  }, []);
+    // Skills are cheap to enumerate but can change without an engine reload
+    // (a newly saved skill). Always revalidate on an explicit open; the cache
+    // is only there to paint the previous list synchronously.
+    return loadCachedCapability(skillsCacheKey, listSkills, { maxAgeMs: 0 });
+  }, [skillsCacheKey]);
+
+  // Warm both lists in the background so the first `/` paints from cache
+  // instead of waiting for the engine's cold command index. Fire-and-forget:
+  // nothing here blocks render or the composer.
+  useEffect(() => {
+    void loadCommands().catch(() => {});
+  }, [loadCommands]);
+
+  useEffect(() => {
+    void loadSkills().catch(() => {});
+  }, [loadSkills]);
 
   useEffect(() => {
     if (!toolMenuOpen) return;
@@ -529,7 +529,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
     if (toolMenuOpen && toolMenuLoadRef.current.commands) return;
     if (toolMenuOpen) toolMenuLoadRef.current.commands = true;
     let cancelled = false;
-    const cached = commandsCacheRef.current;
+    const cached = readCachedCapability<SlashCommandOption[]>(commandsCacheKey);
     if (cached !== null) {
       setCommands(cached);
       setCommandsLoading(false);
@@ -558,7 +558,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
     return () => {
       cancelled = true;
     };
-  }, [slashOpen, toolMenuOpen, loadCommands]);
+  }, [commandsCacheKey, slashOpen, toolMenuOpen, loadCommands]);
 
   useEffect(() => {
     if (!mentionOpen) return;
@@ -721,7 +721,14 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
     if ((slashOpen || toolMenuSection === "skills") && (!toolMenuOpen || !toolMenuLoadRef.current.skills)) {
       let cancelled = false;
       if (toolMenuOpen) toolMenuLoadRef.current.skills = true;
-      setSkillsLoading(true);
+      const cached = readCachedCapability<SkillCard[]>(skillsCacheKey);
+      if (cached !== null) {
+        setSkills(cached);
+        setSkillsLoaded(true);
+        setSkillsLoading(false);
+      } else {
+        setSkillsLoading(true);
+      }
       void loadSkills()
         .then((next) => {
           if (!cancelled && (!toolMenuOpen || toolMenuLoadRef.current.openId === openId)) {
@@ -731,7 +738,8 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
         })
         .catch(() => {
           if (!cancelled && (!toolMenuOpen || toolMenuLoadRef.current.openId === openId)) {
-            setSkills([]);
+            // Keep the cached list when a background revalidation fails.
+            if (cached === null) setSkills([]);
             setSkillsLoaded(true);
           }
         })
@@ -746,10 +754,32 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
       };
     }
     return undefined;
-  }, [loadSkills, slashOpen, toolMenuOpen, toolMenuSection]);
+  }, [loadSkills, skillsCacheKey, slashOpen, toolMenuOpen, toolMenuSection]);
 
   const slashItems = useMemo<ComposerSlashCommandOption[]>(() => {
-    const items: ComposerSlashCommandOption[] = [...commands, ...connectSkillSlashCommandOptions(skills)];
+    // Local skills normally arrive through the engine command list (source
+    // "skill"). Add any skill that is not there yet from the much faster
+    // `/skills` response so the menu can paint while the engine command index
+    // is still cold.
+    const commandSkillNames = new Set(
+      commands
+        .filter((command) => command.source === "skill")
+        .map((command) => command.name),
+    );
+    const localSkillItems: ComposerSlashCommandOption[] = skills
+      .filter((skill) => skill.origin !== "openwork-connect" && !commandSkillNames.has(skill.name))
+      .map((skill) => ({
+        id: `skill:${skill.path || skill.name}`,
+        name: skillMenuSlashCommandName(skill),
+        description: skill.description,
+        source: "skill" as const,
+        skill,
+      }));
+    const items: ComposerSlashCommandOption[] = [
+      ...commands,
+      ...localSkillItems,
+      ...connectSkillSlashCommandOptions(skills),
+    ];
     if (wholeDraftSlashQuery !== null) return items;
     return items.filter((command) => Boolean(command.skill) || command.source === "skill");
   }, [commands, skills, wholeDraftSlashQuery]);

@@ -1453,6 +1453,7 @@ export function SessionRoute() {
     return {
       workspaceRoot: selectedWorkspaceRoot,
       draftScope: sessionDraftScope,
+      capabilityCacheKey: `${selectedWorkspaceId}:${opencodeBaseUrl}:${engineReloadVersion}`,
       developerMode,
       modelLabel,
       onModelClick: (sessionId?: string) => {
@@ -1768,6 +1769,7 @@ export function SessionRoute() {
     modelBehaviorOptions,
     cloudMcpSubmissionState,
     developerMode,
+    engineReloadVersion,
     modelLabel,
     modelUnavailableMessage,
     organizationModelsEmpty,
@@ -1857,6 +1859,7 @@ export function SessionRoute() {
         });
       },
       onOpenConnect: () => handleOpenExtensions("", workspace.id),
+      capabilityCacheKey: `${workspace.id}:${endpoint.opencodeBaseUrl}:${engineReloadVersion}`,
       listCommands: async (): Promise<SlashCommandOption[]> => {
         void engineReloadVersion;
         return listCommands(workspaceOpencodeClient, workspaceRoot || undefined);
@@ -2106,6 +2109,7 @@ export function SessionRoute() {
         selectedWorkspaceId || null,
       ]),
       draftScope: sessionDraftScope,
+      capabilityCacheKey: `${selectedWorkspaceId || "none"}:${selectedWorkspaceEndpoint?.opencodeBaseUrl ?? ""}:${engineReloadVersion}`,
       selectedModel: local.prefs.defaultModel ?? { providerID: "", modelID: "" },
       modelOptions: organizationAssignedModelOptions,
       modelUnavailable: selectedModelUnavailable,
@@ -2169,6 +2173,7 @@ export function SessionRoute() {
     };
   }, [
     client,
+    engineReloadVersion,
     handleOpenExtensions,
     handleOpenSettings,
     listAgents,

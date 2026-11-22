@@ -41,6 +41,8 @@ export type NewTaskComposerContext = {
   draftOwnerKey?: string;
   /** Account/organization scope the persisted new-task draft is stored under; null while unverified. */
   draftScope?: string | null;
+  /** Workspace + engine generation key for the composer's capability cache. */
+  capabilityCacheKey?: string;
   selectedModel: ModelRef;
   modelOptions?: readonly ModelOption[];
   modelUnavailable?: boolean;
@@ -482,6 +484,7 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
       onSelectAgent={context?.onSelectAgent ?? noop}
       listCommands={context?.listCommands ?? emptyCommands}
       listSkills={listSkills}
+      capabilityCacheKey={context?.capabilityCacheKey}
       skills={skills}
       listMcp={listMcp}
       mcpServers={mcpServers}
