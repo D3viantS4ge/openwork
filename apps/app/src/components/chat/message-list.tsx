@@ -733,7 +733,7 @@ const UserMessage = React.memo(
     const hasContent = inlineParts.length > 0
     const menuActions: MenuAction[] = []
     if (messageText) menuActions.push(
-      { type: "item", id: "edit", label: "Edit message", icon: <Pencil className="size-4" />, disabled: readOnly, onSelect: () => onEditUserMessage(message.id, messageText) },
+      { type: "item", id: "edit", label: "Edit message", icon: <Pencil className="size-4" />, disabled: readOnly, onSelect: () => onEditUserMessage(message) },
       { type: "item", id: "copy", label: "Copy", icon: <Copy className="size-4" />, onSelect: () => void copyTextToClipboard(messageText) },
     )
     menuActions.push(
@@ -812,7 +812,7 @@ const UserMessage = React.memo(
                           size="icon"
                           aria-label="Edit message"
                           disabled={readOnly}
-                          onClick={() => onEditUserMessage(message.id, messageText)}
+                          onClick={() => onEditUserMessage(message)}
                         >
                           <Pencil />
                         </Button>

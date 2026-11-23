@@ -513,6 +513,6 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
 }
 
 function revokeAttachmentPreview(attachment: { previewUrl?: string | undefined }) {
-  if (!attachment.previewUrl) return;
+  if (!attachment.previewUrl?.startsWith("blob:")) return;
   URL.revokeObjectURL(attachment.previewUrl);
 }

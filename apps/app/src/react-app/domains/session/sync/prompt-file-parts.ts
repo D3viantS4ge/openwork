@@ -37,6 +37,12 @@ function normalizeFileUri(value: string) {
   }
 }
 
+export function filePathFromFileUrl(value: string): string | null {
+  const path = normalizeFileUri(value);
+  if (!path) return null;
+  return /^\/[A-Za-z]:\//.test(path) ? path.slice(1) : path;
+}
+
 function homeFromWorkspaceRoot(workspaceRoot: string) {
   const normalized = workspaceRoot.trim().replace(/\\/g, "/");
   const macMatch = normalized.match(/^(\/Users\/[^/]+)(?:\/|$)/);

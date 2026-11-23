@@ -1498,7 +1498,8 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
                   (props.isRemoteWorkspace || props.isSandboxWorkspace) &&
                   /file:\/\/|(^|\s)\/(Users|home|var|etc|opt|tmp|private|Volumes|Applications)\//.test(text)
                 ) {
-                  const attachedFiles = props.attachments.map((attachment) => attachment.file);
+                  const attachedFiles = props.attachments.flatMap((attachment) =>
+                    attachment.restoredFilePart ? [] : [attachment.file]);
                   toast.warning(t("composer.remote_worker_paste_warning"), {
                     action:
                       props.onUploadInboxFiles && attachedFiles.length > 0

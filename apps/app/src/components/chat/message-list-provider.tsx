@@ -7,6 +7,7 @@ import type {
   ChatToolReconnectResult,
 } from "@/components/tools/error-attribution"
 import * as React from "react"
+import type { UIMessage } from "ai"
 import type { ConnectorToolIdentity } from "@/react-app/domains/connections/connector-tool-identity"
 import type { OpenworkServerClient } from "@/app/lib/openwork-server"
 import type { McpAppOrigin } from "./mcp-app-origin"
@@ -37,7 +38,7 @@ interface MessageListContextValue {
   onForkAtMessage: (messageId: string) => void | Promise<void>
   forkingMessageId?: string
   editingMessageId?: string | null
-  onEditUserMessage: (messageId: string, text: string) => void
+  onEditUserMessage: (message: UIMessage) => void
   /** Open a sub-agent (child) session in the main chat surface. */
   onOpenSubagentSession?: (sessionId: string) => void
   /** Re-submit an interrupted run by sending its recovery prompt. */
@@ -69,7 +70,7 @@ interface MessageListProviderProps {
   onForkAtMessage: (messageId: string) => void | Promise<void>
   forkingMessageId?: string
   editingMessageId?: string | null
-  onEditUserMessage: (messageId: string, text: string) => void
+  onEditUserMessage: (message: UIMessage) => void
   onOpenSubagentSession?: (sessionId: string) => void
   onResumeInterrupted?: (recoveryPrompt: string) => void
   onMcpReconnect: (
@@ -164,7 +165,7 @@ export function MessageListProvider({
     setPrompt: (prompt: string) => handlersRef.current.setPrompt(prompt),
     onRevertToUserMessage: (messageId: string) => handlersRef.current.onRevertToUserMessage(messageId),
     onForkAtMessage: (messageId: string) => handlersRef.current.onForkAtMessage(messageId),
-    onEditUserMessage: (messageId: string, text: string) => handlersRef.current.onEditUserMessage(messageId, text),
+    onEditUserMessage: (message: UIMessage) => handlersRef.current.onEditUserMessage(message),
     onOpenSubagentSession: (sessionId: string) => handlersRef.current.onOpenSubagentSession?.(sessionId),
     onResumeInterrupted: (recoveryPrompt: string) => handlersRef.current.onResumeInterrupted?.(recoveryPrompt),
     onMcpReconnect: (

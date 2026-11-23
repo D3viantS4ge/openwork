@@ -7,6 +7,7 @@ import { act, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router";
 import type { SessionStatus } from "@opencode-ai/sdk/v2/client";
+import type { UIMessage } from "ai";
 
 import type { OpenworkSessionSnapshot } from "../src/app/lib/openwork-server";
 import type { NativeContextMenuRequest } from "../src/app/lib/desktop-types";
@@ -27,7 +28,26 @@ afterAll(async () => {
 const workspaceId = "workspace-focus-continuity";
 const sessionId = "session-focus-continuity";
 
-function createSnapshot(status: SessionStatus, updated: number, id = sessionId): OpenworkSessionSnapshot {
+function createSnapshot(
+  status: SessionStatus,
+  updated: number,
+  id = sessionId,
+  withAttachment = false,
+): OpenworkSessionSnapshot {
+  const parts: OpenworkSessionSnapshot["messages"][number]["parts"] = [
+    { id: "existing-user-part", sessionID: id, messageID: "existing-user-message", type: "text", text: "Keep this session mounted." },
+  ];
+  if (withAttachment) {
+    parts.push({
+      id: "existing-user-file",
+      sessionID: id,
+      messageID: "existing-user-message",
+      type: "file",
+      mime: "text/plain",
+      filename: "notes.txt",
+      url: `file:///tmp/project-focus-continuity/.opencode/openwork/inbox/chat-attachments/${id}/nonce-a-notes.txt`,
+    });
+  }
   return {
     session: {
       id,
@@ -43,7 +63,7 @@ function createSnapshot(status: SessionStatus, updated: number, id = sessionId):
         id: "existing-user-message", sessionID: id, role: "user", time: { created: 1 },
         agent: "build", model: { providerID: "test", modelID: "test-model" },
       },
-      parts: [{ id: "existing-user-part", sessionID: id, messageID: "existing-user-message", type: "text", text: "Keep this session mounted." }],
+      parts,
     }],
     todos: [],
     status,
@@ -153,6 +173,9 @@ test.each([
       admissionStatusRequests.push(request);
       return Response.json({});
     }
+    if (request.method === "POST" && path.endsWith("/artifacts/resolve")) {
+      return Response.json({ items: [] });
+    }
     if (request.method === "POST" && path.endsWith("/fork")) {
       forkRequests.push(request);
       await forkCompletion;
@@ -205,11 +228,20 @@ test.each([
   const { claimQueuedSend, dispatchQueuedDrain, getQueuedDrainState, resetQueuedDrainForTests, subscribeQueuedDrain } = await import("../src/react-app/domains/session/surface/queued-drain-machine");
   const queryClient = getReactQueryClient();
   queryClient.clear();
-  queryClient.setQueryData(snapshotKey(workspaceId, sessionId), createSnapshot({ type: "busy" }, 1));
+  queryClient.setQueryData(snapshotKey(workspaceId, sessionId), createSnapshot({ type: "busy" }, 1, sessionId, editHighlight));
+  const transcriptParts: UIMessage["parts"] = [{ type: "text", text: "Keep this session mounted." }];
+  if (editHighlight) {
+    transcriptParts.push({
+      type: "file",
+      mediaType: "text/plain",
+      filename: "notes.txt",
+      url: `file:///tmp/project-focus-continuity/.opencode/openwork/inbox/chat-attachments/${sessionId}/nonce-a-notes.txt`,
+    });
+  }
   queryClient.setQueryData(transcriptKey(workspaceId, sessionId), [{
     id: "existing-user-message",
     role: "user",
-    parts: [{ type: "text", text: "Keep this session mounted." }],
+    parts: transcriptParts,
   }]);
   const client = createOpenworkServerClient({ baseUrl: "http://127.0.0.1:1", token: "test-token" });
   const container = document.createElement("div");
@@ -472,7 +504,7 @@ test.each([
 
     if (editHighlight) {
       // Re-render idle so the transcript (with its message actions) renders.
-      queryClient.setQueryData(snapshotKey(workspaceId, sessionId), createSnapshot({ type: "idle" }, 2));
+      queryClient.setQueryData(snapshotKey(workspaceId, sessionId), createSnapshot({ type: "idle" }, 2, sessionId, true));
       queryClient.setQueryData(statusKey(workspaceId, sessionId), { type: "idle" });
       await act(async () => renderSurface());
       await waitFor(
@@ -487,6 +519,16 @@ test.each([
         "the edited-message highlight",
       );
       expect(useComposerStateStore.getState().sessions[sessionId]?.revertMessageId).toBe("existing-user-message");
+      await waitFor(
+        () => (useComposerStateStore.getState().sessions[sessionId]?.attachments.length ?? 0) === 1,
+        "the restored attachment",
+      );
+      expect(useComposerStateStore.getState().sessions[sessionId]?.attachments[0]?.name).toBe("notes.txt");
+      expect(useComposerStateStore.getState().sessions[sessionId]?.draft).toContain("[attachment ");
+      await waitFor(
+        () => container.querySelector("[data-attachment-id]") !== null,
+        "the restored attachment chip",
+      );
 
       // The draft-persistence -> hydration re-sync must not rebuild the
       // composer session from scratch: that would drop the edit target and

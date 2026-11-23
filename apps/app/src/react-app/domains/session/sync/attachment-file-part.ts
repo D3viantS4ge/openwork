@@ -3,7 +3,7 @@ import type { FilePartInput, TextPartInput } from "@opencode-ai/sdk/v2/client";
 import type { OpenworkServerPlatform } from "@/app/lib/openwork-server";
 import type { ComposerAttachment } from "../../../../app/types";
 import { compressImageFile } from "./image-compression";
-import { joinWorkspaceRelativePath, isValidLocalFileUrl, toFileUrl } from "./prompt-file-parts";
+import { filePathFromFileUrl, joinWorkspaceRelativePath, isValidLocalFileUrl, toFileUrl } from "./prompt-file-parts";
 
 type AttachmentKind = "image" | "file";
 
@@ -311,6 +311,17 @@ export function workspaceInboxPath(inboxRelativePath: string) {
   return joinWorkspaceRelativePath(WORKSPACE_INBOX_ROOT, inboxRelativePath);
 }
 
+function workspacePathForAttachmentUrl(url: string, workspaceRoot: string) {
+  const absolute = filePathFromFileUrl(url);
+  if (!absolute) return "";
+  const root = workspaceRoot.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  const path = absolute.replace(/\\/g, "/");
+  if (root && (path === root || path.startsWith(`${root}/`))) {
+    return path.slice(root.length).replace(/^\/+/, "");
+  }
+  return path;
+}
+
 function uploadErrorMessage(filename: string, error: unknown) {
   const detail = error instanceof Error ? error.message : String(error || "Unknown upload error");
   return `Failed to copy attachment "${filename}" into this worker workspace: ${detail}`;
@@ -329,7 +340,9 @@ function attachmentPathNotePart(uploaded: UploadedChatAttachment[]): TextPartInp
     },
     text: [
       "Attached files were copied into this worker workspace for tool access:",
-      ...uploaded.map((item) => `- ${item.filename}: ${item.workspacePath} (${item.url})`),
+      ...uploaded
+        .filter((item) => item.workspacePath)
+        .map((item) => `- ${item.filename}: ${item.workspacePath} (${item.url})`),
       "Use these paths with Read/Bash/MCP/Docling when a tool needs the file bytes.",
     ].join("\n"),
   };
@@ -379,25 +392,43 @@ export async function composerAttachmentsToWorkspaceFileParts(input: {
 }): Promise<WorkspaceAttachmentParts | null> {
   if (input.attachments.length === 0) return null;
 
+  const needsUpload = input.attachments.some((attachment) => !attachment.restoredFilePart);
   const workspaceRoot = input.workspaceRoot.trim();
-  if (!workspaceRoot) {
+  if (needsUpload && !workspaceRoot) {
     throw new Error("Workspace path is unavailable; attachments could not be copied for tool access.");
   }
 
   const workspaceId = input.endpoint.workspaceId.trim();
-  if (!workspaceId) {
+  if (needsUpload && !workspaceId) {
     throw new Error("Workspace endpoint is unavailable; attachments could not be copied for tool access.");
   }
 
   const uploaded: UploadedChatAttachment[] = [];
+  const files: Array<FilePartInput | null | Promise<FilePartInput | null>> = [];
 
   // The engine that consumes the file parts runs on the workspace server, not
   // necessarily on the browser's platform (Windows browser + WSL2/Linux
   // server). Resolve the server platform once per send so the URL validity
   // check below accepts the paths the server actually owns.
-  const enginePlatform = await resolveEnginePlatform(input.endpoint);
+  const enginePlatform = needsUpload ? await resolveEnginePlatform(input.endpoint) : undefined;
 
   for (const attachment of input.attachments) {
+    if (attachment.restoredFilePart) {
+      const filePart = attachment.restoredFilePart;
+      const filename = attachment.name.trim() || filePart.filename?.trim() || "attachment";
+      const displayMime = attachment.mimeType.trim() || filePart.mime;
+      uploaded.push({
+        filename,
+        mime: displayMime,
+        bytes: attachment.size,
+        workspacePath: workspacePathForAttachmentUrl(filePart.url, workspaceRoot),
+        url: filePart.url,
+        file: attachment.file,
+      });
+      files.push(modelFacingAttachmentMime(displayMime) ? { ...filePart, filename } : null);
+      continue;
+    }
+
     // Oversized images are re-encoded here, at send time, so the composer chip
     // appears instantly at attach time and the canvas work happens while the
     // chip already shows its uploading state. When the transport uploads the
@@ -442,23 +473,31 @@ export async function composerAttachmentsToWorkspaceFileParts(input: {
         `Attachment "${metadata.filename}" resolved to an invalid file URL${url ? ` (${url})` : " (empty)"}; send aborted`,
       );
     }
-    uploaded.push({
+    const uploadedItem: UploadedChatAttachment = {
       filename: metadata.filename,
       mime: metadata.mime,
       bytes: result.bytes,
       workspacePath,
       url,
       file,
-    });
+    };
+    uploaded.push(uploadedItem);
+    files.push(uploadedAttachmentFilePart(uploadedItem));
   }
 
   return {
     note: attachmentPathNotePart(uploaded),
-    files: await Promise.all(uploaded.map(uploadedAttachmentFilePart)),
+    files: await Promise.all(files),
   };
 }
 
 export async function composerAttachmentToFilePart(attachment: ComposerAttachment): Promise<FilePartInput | null> {
+  if (attachment.restoredFilePart) {
+    const displayMime = attachment.mimeType.trim() || attachment.restoredFilePart.mime;
+    if (!modelFacingAttachmentMime(displayMime)) return null;
+    const filename = attachment.name.trim() || attachment.restoredFilePart.filename;
+    return filename ? { ...attachment.restoredFilePart, filename } : attachment.restoredFilePart;
+  }
   const file = await compressImageFile(attachment.file);
   const metadata = resolveAttachmentFileMetadata(file);
   const modelMime = modelFacingAttachmentMime(metadata.mime);

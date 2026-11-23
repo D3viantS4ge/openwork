@@ -93,6 +93,7 @@ import { describeOpencodeSessionError, interruptedTaskRecoveryPrompt, presentOpe
 import { createSessionErrorUIMessage } from "@/react-app/domains/session/sync/usechat-adapter";
 import { useLocal } from "@/react-app/kernel/local-provider";
 import { resolveAttachmentFileMetadata } from "@/react-app/domains/session/sync/attachment-file-part";
+import { restorePromptFromMessageParts } from "@/react-app/domains/session/sync/message-prompt-restore";
 import { deriveSessionRenderModel } from "@/react-app/domains/session/sync/transition-controller";
 import { setQueuedSendContext } from "@/react-app/domains/session/sync/queued-send-context";
 import { useSessionScrollController } from "./scroll-controller";
@@ -968,7 +969,7 @@ function RevertedMessagesBanner(props: { hiddenCount: number; restoring: boolean
 }
 
 function revokeAttachmentPreview(attachment: { previewUrl?: string | undefined }) {
-  if (!attachment.previewUrl) return;
+  if (!attachment.previewUrl?.startsWith("blob:")) return;
   URL.revokeObjectURL(attachment.previewUrl);
 }
 
@@ -1038,6 +1039,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
   const setComposerDraft = useComposerStateStore((state) => state.setDraft);
   const setComposerMode = useComposerStateStore((state) => state.setMode);
   const replaceComposerDraft = useComposerStateStore((state) => state.replaceDraft);
+  const replaceComposerPrompt = useComposerStateStore((state) => state.replacePrompt);
   const hydrateComposerDraft = useComposerStateStore((state) => state.hydrateDraft);
   const clearComposerRevertTarget = useComposerStateStore((state) => state.clearRevertTarget);
   const setComposerAttachments = useComposerStateStore((state) => state.setAttachments);
@@ -2401,7 +2403,9 @@ export function SessionSurface(props: SessionSurfaceProps) {
     dispatchQueuedDrain(props.sessionId, { type: "user_retry" });
     if (!claimQueuedSend(props.sessionId, nextDraft.messageId, true)) return;
     for (const attachment of sentAttachments) {
-      if (attachment.kind === "image" && !attachment.previewUrl) attachment.previewUrl = URL.createObjectURL(attachment.file);
+      if (attachment.kind === "image" && !attachment.previewUrl && !attachment.restoredFilePart) {
+        attachment.previewUrl = URL.createObjectURL(attachment.file);
+      }
     }
     // Only a normal prompt anchors the scroll controller to its new bubble.
     // A shell (`!`) run renders no user bubble (the engine emits a synthetic,
@@ -2877,9 +2881,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
 
   const handleRemoveAttachment = useCallback((id: string) => {
     const target = attachments.find((item) => item.id === id);
-    if (target?.previewUrl) {
-      URL.revokeObjectURL(target.previewUrl);
-    }
+    if (target) revokeAttachmentPreview(target);
     setComposerAttachments(props.sessionId, attachments.filter((item) => item.id !== id));
     setComposerDraft(props.sessionId, draft.replaceAll(`[attachment ${id}]`, ""));
   }, [attachments, draft, props.sessionId, setComposerAttachments, setComposerDraft]);
@@ -2962,6 +2964,19 @@ export function SessionSurface(props: SessionSurfaceProps) {
     replaceComposerDraft(props.sessionId, text, revertMessageId);
     await waitForControl(40);
   }, [archived, archiveStateKnown, props.opencodeBaseUrl, props.sessionId, replaceComposerDraft]);
+
+  const typeComposerPrompt = useCallback(async (
+    text: string,
+    nextAttachments: ComposerAttachment[],
+    revertMessageId?: string | null,
+  ) => {
+    if (archived || !archiveStateKnown || sessionWorkHeld(props.opencodeBaseUrl, props.sessionId)) return;
+    const previousAttachments = getComposerAttachments(useComposerStateStore.getState(), props.sessionId);
+    window.dispatchEvent(new Event("openwork:focusPrompt"));
+    replaceComposerPrompt(props.sessionId, text, nextAttachments, revertMessageId);
+    revokeUnownedAttachmentPreviews(previousAttachments);
+    await waitForControl(40);
+  }, [archived, archiveStateKnown, props.opencodeBaseUrl, props.sessionId, replaceComposerPrompt]);
 
   const composerSetTextControlAction = useMemo<OpenworkControlAction>(() => ({
     id: "composer.set_text",
@@ -3403,12 +3418,14 @@ export function SessionSurface(props: SessionSurfaceProps) {
     });
   }, [openingHistory.runWithFullSnapshot, props.onForkAtMessage, props.sessionId, sessionOwner, setError]);
 
-  const handleEditUserMessage = useCallback((messageId: string, text: string) => {
+  const handleEditUserMessage = useCallback((message: UIMessage) => {
     if (archived) return;
+    const restored = restorePromptFromMessageParts(message.parts);
+    if (!restored.text && restored.attachments.length === 0) return;
     // Preserve the boundary with the draft; the destructive revert is deferred
     // until the replacement prompt is actually sent.
-    void typeComposerText(text, messageId);
-  }, [archived, typeComposerText]);
+    void typeComposerPrompt(restored.text, restored.attachments, message.id);
+  }, [archived, typeComposerPrompt]);
 
   const handleRestoreRevertedSession = useCallback(() => {
     if (archived || !archiveStateKnown || sessionWorkHeld(props.opencodeBaseUrl, props.sessionId)) return;

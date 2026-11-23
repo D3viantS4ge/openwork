@@ -55,6 +55,12 @@ export type ComposerStateStore = {
   setDraft: (sessionId: string, draft: string) => void;
   setMode: (sessionId: string, mode: PromptMode) => void;
   replaceDraft: (sessionId: string, draft: string, revertMessageId?: string | null) => void;
+  replacePrompt: (
+    sessionId: string,
+    draft: string,
+    attachments: ComposerAttachment[],
+    revertMessageId?: string | null,
+  ) => void;
   hydrateDraft: (sessionId: string, draft: string, preserveState?: boolean, mode?: PromptMode) => void;
   clearRevertTarget: (sessionId: string) => void;
   setAttachments: (sessionId: string, attachments: ComposerAttachment[]) => void;
@@ -150,6 +156,32 @@ export const useComposerStateStore = create<ComposerStateStore>((set) => ({
     const target = revertMessageId?.trim() || null;
     if (current.draft === draft && current.revertMessageId === target) return state;
     return { sessions: { ...state.sessions, [sessionId]: { ...current, draft, revertMessageId: target } } };
+  }),
+  replacePrompt: (sessionId, draft, attachments, revertMessageId = null) => set((state) => {
+    const current = getWritableSession(state, sessionId);
+    const target = revertMessageId?.trim() || null;
+    if (
+      current.draft === draft
+      && current.attachments === attachments
+      && current.revertMessageId === target
+      && current.mode === "prompt"
+      && Object.keys(current.mentions).length === 0
+      && current.pasteParts.length === 0
+    ) return state;
+    return {
+      sessions: {
+        ...state.sessions,
+        [sessionId]: {
+          ...current,
+          draft,
+          attachments,
+          mode: "prompt",
+          mentions: {},
+          pasteParts: [],
+          revertMessageId: target,
+        },
+      },
+    };
   }),
   hydrateDraft: (sessionId, draft, preserveState = false, mode: PromptMode = "prompt") => set((state) => {
     const current = state.sessions[sessionId];

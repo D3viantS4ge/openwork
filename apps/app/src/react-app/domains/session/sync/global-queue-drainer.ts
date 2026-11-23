@@ -172,7 +172,7 @@ function withoutRevertTarget(draft: ComposerDraft): ComposerDraft {
 // Mirrors revokeAttachmentPreview in ../surface/session-surface.tsx, with a
 // guard for app-less/node execution.
 function revokeAttachmentPreview(attachment: { previewUrl?: string }) {
-  if (!attachment.previewUrl || typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") return;
+  if (!attachment.previewUrl?.startsWith("blob:") || typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") return;
   URL.revokeObjectURL(attachment.previewUrl);
 }
 

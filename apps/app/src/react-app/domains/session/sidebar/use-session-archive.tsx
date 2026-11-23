@@ -161,7 +161,9 @@ export function useSessionArchive(input: {
       consumeComposerAutoSend(id);
       for (const scope of scopes(id)) consumeComposerAutoSend(id, scope);
       for (const item of getComposerQueuedDrafts(useComposerStateStore.getState(), id)) {
-        for (const attachment of item.draft.attachments) if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+        for (const attachment of item.draft.attachments) {
+          if (attachment.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(attachment.previewUrl);
+        }
       }
       dispatchQueuedDrain(id, { type: "queue_cleared" });
       useComposerStateStore.getState().clearQueuedDrafts(id);

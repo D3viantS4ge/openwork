@@ -1,4 +1,5 @@
 import type {
+  FilePartInput,
   Message,
   Part,
   PermissionRequest as ApiPermissionRequest,
@@ -113,6 +114,7 @@ export type ComposerAttachment = {
   kind: "image" | "file";
   file: File;
   previewUrl?: string;
+  restoredFilePart?: FilePartInput;
 };
 
 export type SlashCommandOption = {

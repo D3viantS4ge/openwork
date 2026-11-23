@@ -552,6 +552,101 @@ describe("composer attachment file parts", () => {
   });
 });
 
+function restoredAttachment(input: {
+  name: string;
+  mimeType: string;
+  url: string;
+  kind?: "image" | "file";
+  previewUrl?: string;
+}): ComposerAttachment {
+  return {
+    id: `restored-${input.name}`,
+    name: input.name,
+    mimeType: input.mimeType,
+    size: 0,
+    kind: input.kind ?? (input.mimeType.startsWith("image/") ? "image" : "file"),
+    file: new File([], input.name, { type: input.mimeType }),
+    ...(input.previewUrl ? { previewUrl: input.previewUrl } : {}),
+    restoredFilePart: {
+      type: "file",
+      url: input.url,
+      filename: input.name,
+      mime: input.mimeType,
+    },
+  };
+}
+
+describe("restored attachments", () => {
+  test("reuses the original workspace file part without uploading", async () => {
+    const { endpoint, calls } = uploadRecorder("server-workspace-42");
+    const url = "file:///workspaces/Worker%20Root/.opencode/openwork/inbox/chat-attachments/ses_abc/nonce-a-scan.pdf";
+    const attachment = restoredAttachment({ name: "scan.pdf", mimeType: "application/pdf", url });
+
+    const parts = await composerAttachmentsToWorkspaceFileParts({
+      attachments: [attachment],
+      endpoint,
+      sessionId: "ses_abc",
+      workspaceRoot: "/workspaces/Worker Root",
+    });
+
+    expect(calls).toEqual([]);
+    expect(filePart(parts, 0)).toEqual({
+      type: "file",
+      url,
+      filename: "scan.pdf",
+      mime: "application/pdf",
+    });
+    expect(textPartText(parts)).toContain(".opencode/openwork/inbox/chat-attachments/ses_abc/nonce-a-scan.pdf");
+  });
+
+  test("keeps a text-like attachment's model-facing mime while displaying its original type", async () => {
+    const { endpoint, calls } = uploadRecorder("server-workspace-42");
+    const url = "file:///workspaces/Worker%20Root/.opencode/openwork/inbox/chat-attachments/ses_abc/nonce-a-data.csv";
+    const attachment = restoredAttachment({ name: "data.csv", mimeType: "text/csv", url });
+    attachment.restoredFilePart = { type: "file", url, filename: "data.csv", mime: "text/plain" };
+
+    const parts = await composerAttachmentsToWorkspaceFileParts({
+      attachments: [attachment],
+      endpoint,
+      sessionId: "ses_abc",
+      workspaceRoot: "/workspaces/Worker Root",
+    });
+
+    expect(calls).toEqual([]);
+    expect(filePart(parts, 0)).toMatchObject({ url, filename: "data.csv", mime: "text/plain" });
+  });
+
+  test("keeps a binary attachment in the note without a model-facing file part", async () => {
+    const { endpoint, calls } = uploadRecorder("server-workspace-42");
+    const url = "file:///workspaces/Worker%20Root/.opencode/openwork/inbox/chat-attachments/ses_abc/nonce-a-archive.zip";
+    const attachment = restoredAttachment({ name: "archive.zip", mimeType: "application/zip", url });
+
+    const parts = await composerAttachmentsToWorkspaceFileParts({
+      attachments: [attachment],
+      endpoint,
+      sessionId: "ses_abc",
+      workspaceRoot: "/workspaces/Worker Root",
+    });
+
+    expect(calls).toEqual([]);
+    expect(parts?.files).toEqual([null]);
+    expect(parts?.note.metadata).toMatchObject({
+      openworkAttachments: [{ filename: "archive.zip", mime: "application/zip", url }],
+    });
+    expect(textPartText(parts)).toContain(".opencode/openwork/inbox/chat-attachments/ses_abc/nonce-a-archive.zip");
+  });
+
+  test("composerAttachmentToFilePart returns the restored part and drops binary ones", async () => {
+    const pdfUrl = "file:///workspace/.opencode/openwork/inbox/chat-attachments/ses/pdf.pdf";
+    const pdf = restoredAttachment({ name: "scan.pdf", mimeType: "application/pdf", url: pdfUrl });
+    expect(await composerAttachmentToFilePart(pdf)).toEqual(pdf.restoredFilePart);
+
+    const zipUrl = "file:///workspace/.opencode/openwork/inbox/chat-attachments/ses/archive.zip";
+    const zip = restoredAttachment({ name: "archive.zip", mimeType: "application/zip", url: zipUrl });
+    expect(await composerAttachmentToFilePart(zip)).toBeNull();
+  });
+});
+
 test("video upload preserves a display card without a model-facing binary part", async () => {
   const { endpoint } = uploadRecorder("workspace-a");
   const parts = await composerAttachmentsToWorkspaceFileParts({

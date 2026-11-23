@@ -254,3 +254,63 @@ describe("hydrateDraft preserveState", () => {
     expect(useComposerStateStore.getState().sessions["session-a"]).toBeUndefined();
   });
 });
+
+describe("replacePrompt", () => {
+  test("atomically replaces draft, attachments and revert target", () => {
+    const { replaceDraft, setAttachments, setMentions, setMode, setPasteParts, replacePrompt } = useComposerStateStore.getState();
+    const oldAttachment = {
+      id: "att-old",
+      name: "old.png",
+      mimeType: "image/png",
+      size: 1,
+      kind: "image",
+      file: new File(["x"], "old.png", { type: "image/png" }),
+    } satisfies ComposerAttachment;
+    const nextAttachment = {
+      id: "att-new",
+      name: "notes.txt",
+      mimeType: "text/plain",
+      size: 0,
+      kind: "file",
+      file: new File([], "notes.txt", { type: "text/plain" }),
+      restoredFilePart: {
+        type: "file",
+        url: "file:///tmp/notes.txt",
+        filename: "notes.txt",
+        mime: "text/plain",
+      },
+    } satisfies ComposerAttachment;
+    replaceDraft("session-a", "old[attachment att-old]", "msg-old");
+    setAttachments("session-a", [oldAttachment]);
+    setMentions("session-a", { notes: "file" });
+    setMode("session-a", "shell");
+    setPasteParts("session-a", [{ id: "paste-1", label: "P1", text: "paste", lines: 1 }]);
+
+    replacePrompt("session-a", "edited[attachment att-new]", [nextAttachment], "msg-edit");
+
+    const session = useComposerStateStore.getState().sessions["session-a"];
+    expect(session?.draft).toBe("edited[attachment att-new]");
+    expect(session?.attachments).toEqual([nextAttachment]);
+    expect(session?.mode).toBe("prompt");
+    expect(session?.mentions).toEqual({});
+    expect(session?.pasteParts).toEqual([]);
+    expect(session?.revertMessageId).toBe("msg-edit");
+  });
+
+  test("keeps an attachment-only prompt's revert target", () => {
+    const { replacePrompt } = useComposerStateStore.getState();
+    const attachment = {
+      id: "att-1",
+      name: "a.png",
+      mimeType: "image/png",
+      size: 0,
+      kind: "image",
+      file: new File([], "a.png", { type: "image/png" }),
+    } satisfies ComposerAttachment;
+    replacePrompt("session-a", "[attachment att-1]", [attachment], "msg-edit");
+
+    const session = useComposerStateStore.getState().sessions["session-a"];
+    expect(session?.revertMessageId).toBe("msg-edit");
+    expect(session?.attachments).toEqual([attachment]);
+  });
+});
