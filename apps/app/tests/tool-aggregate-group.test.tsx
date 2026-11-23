@@ -53,6 +53,34 @@ async function withRoot(fn: (container: HTMLDivElement, root: ReturnType<typeof 
   }
 }
 
+function installGeometry(pre: HTMLPreElement, initial: { scrollHeight: number; clientHeight: number; scrollTop: number }) {
+  let scrollTop = initial.scrollTop;
+  let scrollHeight = initial.scrollHeight;
+  const clientHeight = initial.clientHeight;
+  Object.defineProperties(pre, {
+    scrollHeight: { configurable: true, get: () => scrollHeight },
+    clientHeight: { configurable: true, get: () => clientHeight },
+    scrollTop: {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = Math.max(0, Math.min(value, scrollHeight - clientHeight));
+      },
+    },
+  });
+  return {
+    get scrollTop() {
+      return scrollTop;
+    },
+    set scrollTop(value: number) {
+      scrollTop = value;
+    },
+    set scrollHeight(value: number) {
+      scrollHeight = value;
+    },
+  };
+}
+
 describe("tool aggregate running feedback", () => {
   test("classifies only lifecycle facts the aggregate can prove", () => {
     expect(getToolAggregateLifecycle([runningCommand], "running")).toBe("running");
@@ -634,6 +662,69 @@ describe("tool aggregate live bash output", () => {
       await act(async () => toggle.click());
       expect(container.textContent).toContain("final output");
       expect(container.textContent).not.toContain("streaming tail");
+    });
+  });
+
+  test("an expanded running command starts at the bottom and follows streamed output until the reader scrolls up", async () => {
+    await withRoot(async (container, root) => {
+      const render = (output: string) => root.render(
+        <CurrentToolLifecycleProvider
+          activityStatus="responding"
+          currentToolCallIds={new Set([runningWithOutput.toolCallId])}
+        >
+          <ToolAggregateGroup parts={[{ ...runningWithOutput, metadata: { output } }]} />
+        </CurrentToolLifecycleProvider>,
+      );
+
+      await act(async () => render("one\ntwo"));
+      const header = container.querySelector<HTMLButtonElement>("[data-tool-aggregate] > button");
+      if (!header) throw new Error("Expected the aggregate summary button");
+      await act(async () => header.click());
+
+      const pre = container.querySelector<HTMLPreElement>("[data-shell-output]");
+      if (!pre) throw new Error("Expected the shell output");
+      const geometry = installGeometry(pre, { scrollHeight: 800, clientHeight: 200, scrollTop: 0 });
+
+      await act(async () => render("one\ntwo\nthree"));
+      expect(geometry.scrollTop).toBe(600);
+
+      await act(async () => {
+        pre.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -10 }));
+        geometry.scrollTop = 100;
+        pre.dispatchEvent(new Event("scroll"));
+      });
+
+      geometry.scrollHeight = 1000;
+      await act(async () => render("one\ntwo\nthree\nfour"));
+      expect(geometry.scrollTop).toBe(100);
+    });
+  });
+
+  test("a completed command's long output starts at the top", async () => {
+    const completed: DynamicToolUIPart = {
+      ...runningWithOutput,
+      toolCallId: "completed-scroll-output",
+      state: "output-available",
+      output: "one\ntwo\nthree",
+      metadata: { output: "one\ntwo\nthree" },
+    };
+
+    await withRoot(async (container, root) => {
+      await act(async () => root.render(<ToolAggregateGroup parts={[completed]} />));
+      const header = container.querySelector<HTMLButtonElement>("[data-tool-aggregate] > button");
+      if (!header) throw new Error("Expected the aggregate summary button");
+      await act(async () => header.click());
+
+      const toggle = container.querySelector<HTMLElement>("[data-tool-aggregate-command]");
+      if (!toggle) throw new Error("Expected the command block");
+      await act(async () => toggle.click());
+
+      const pre = container.querySelector<HTMLPreElement>("[data-shell-output]");
+      if (!pre) throw new Error("Expected the shell output");
+      const geometry = installGeometry(pre, { scrollHeight: 800, clientHeight: 200, scrollTop: 0 });
+
+      await act(async () => root.render(<ToolAggregateGroup parts={[{ ...completed }]} />));
+      expect(geometry.scrollTop).toBe(0);
     });
   });
 });

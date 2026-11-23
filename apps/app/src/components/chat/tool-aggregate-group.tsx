@@ -15,6 +15,7 @@ import { DiffView, getToolInputDiff, isDiffText } from "@/components/ui/diff-vie
 import { parseShellMetadata } from "@/app/lib/shell-metadata"
 import { ShellCommandText } from "@/components/chat/shell-command-text"
 import { ReasoningBlock } from "@/components/chat/reasoning-block"
+import { useStickyBottomScroll } from "@/components/chat/use-sticky-bottom-scroll"
 import { useWorkbenchDisclosure } from "@/react-app/domains/session/chat/workbench-ui-state"
 import { useOptionalMessageList } from "@/components/chat/message-list-provider"
 import { useCurrentToolLifecycleResolver } from "@/components/chat/current-tool-lifecycle-context"
@@ -40,8 +41,9 @@ import { cn } from "@/lib/utils"
 const ROW_CAP = 8
 
 /** Bash output with engine shell_metadata notes (abort, timeout) surfaced as styled messages. */
-function ShellMetadataOutput({ output }: { output: string }) {
+function ShellMetadataOutput({ output, live = false }: { output: string; live?: boolean }) {
   const parsed = parseShellMetadata(output)
+  const outputScroll = useStickyBottomScroll<HTMLPreElement>({ startAtBottom: live })
   return (
     <>
       {parsed.notes.length > 0 ? (
@@ -52,7 +54,12 @@ function ShellMetadataOutput({ output }: { output: string }) {
         </div>
       ) : null}
       {parsed.body ? (
-        <pre className="max-h-80 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] opacity-70">
+        <pre
+          {...outputScroll.scrollProps}
+          ref={outputScroll.ref}
+          data-shell-output=""
+          className="max-h-80 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] opacity-70"
+        >
           {parsed.body}
         </pre>
       ) : null}
@@ -611,7 +618,7 @@ export function ToolAggregateGroup({ parts, messageId, thoughts = [], className 
                     bash && part.state === "output-available" && part.output
                       ? <ShellMetadataOutput output={part.output} />
                       : bashLiveOutput
-                        ? <ShellMetadataOutput output={bashLiveOutput} />
+                        ? <ShellMetadataOutput output={bashLiveOutput} live />
                         : undefined,
                     // A running command's box starts open so the streamed
                     // output is visible as soon as the chevron is expanded;

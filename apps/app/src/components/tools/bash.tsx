@@ -9,6 +9,7 @@ import {
   CollapsibleToolTrigger,
 } from "@/components/tools/collapsible-tool"
 import { parseShellMetadata } from "@/app/lib/shell-metadata"
+import { useStickyBottomScroll } from "@/components/chat/use-sticky-bottom-scroll"
 import type { BashToolPart } from "@/lib/build-in-tools"
 import { isToolPartInFlight } from "@/lib/tool-activity"
 
@@ -24,6 +25,7 @@ export function BashTool({ part }: BashToolProps) {
   // state metadata; show it live instead of waiting for the final output.
   const liveOutput = inFlight && typeof part.metadata?.output === "string" ? part.metadata.output : ""
   const parsed = useMemo(() => parseShellMetadata(liveOutput || part.output || ""), [liveOutput, part.output])
+  const outputScroll = useStickyBottomScroll<HTMLPreElement>({ startAtBottom: inFlight })
 
   return (
     <CollapsibleTool>
@@ -75,7 +77,12 @@ export function BashTool({ part }: BashToolProps) {
               </div>
             ) : null}
             {parsed.body ? (
-              <pre className="max-h-[32rem] overflow-auto whitespace-pre-wrap wrap-break-word opacity-80">
+              <pre
+                {...outputScroll.scrollProps}
+                ref={outputScroll.ref}
+                data-bash-output=""
+                className="max-h-[32rem] overflow-auto whitespace-pre-wrap wrap-break-word opacity-80"
+              >
                 {parsed.body}
               </pre>
             ) : null}
