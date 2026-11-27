@@ -32,6 +32,9 @@ runtime provider store into it with no reload, while the app keeps using the
 v1 engine. Live status (`GET /experimental/engine-v2-preview/status`) reports
 pid, mirrored and skipped providers, and the sidecar's ingested model ids.
 With the flag off (the default), nothing starts and zero v1 behavior changes.
+`OPENWORK_ENGINE_V2_PREVIEW=0` forces v1 over persisted state and rejects
+runtime v2 enabling with `engine_v2_preview_locked`; `v1` forces v1 only at
+startup, while `1`/`chat` and `sidecar` force the v2 modes.
 
 ## Why now
 

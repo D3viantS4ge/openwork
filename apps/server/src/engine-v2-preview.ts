@@ -84,10 +84,27 @@ export interface EngineV2PreviewState {
   chatRouting?: boolean;
 }
 
+export class EngineV2PreviewLockedError extends Error {
+  constructor() {
+    super("OPENWORK_ENGINE_V2_PREVIEW=0 forces the OpenCode v1 engine.");
+    this.name = "EngineV2PreviewLockedError";
+  }
+}
+
+export function isEngineV2PreviewLocked(env: NodeJS.ProcessEnv): boolean {
+  return env.OPENWORK_ENGINE_V2_PREVIEW === "0";
+}
+
+export function isEngineV2PreviewForcedV1(env: NodeJS.ProcessEnv): boolean {
+  const override = env.OPENWORK_ENGINE_V2_PREVIEW;
+  return override === "0" || override === "v1";
+}
+
 export function resolveInitialEngineV2PreviewState(
   env: NodeJS.ProcessEnv,
   persisted: EngineV2PreviewState,
 ): EngineV2PreviewState {
+  if (isEngineV2PreviewForcedV1(env)) return { enabled: false, chatRouting: false };
   const override = env.OPENWORK_ENGINE_V2_PREVIEW;
   if (override === "1" || override === "chat") return { enabled: true, chatRouting: true };
   if (override === "sidecar") return { enabled: true, chatRouting: false };
@@ -308,11 +325,18 @@ export function mapRuntimeMcpToV2(value: unknown): Record<string, unknown> | und
     ...(oauth === undefined ? {} : { oauth }), ...shared };
 }
 
-export function createEngineV2Preview(options: { config: ServerConfig; env?: Pick<EnvService, "list" | "onChange">; deferStart?: boolean }): EngineV2Preview {
+export function createEngineV2Preview(options: {
+  config: ServerConfig;
+  env?: Pick<EnvService, "list" | "onChange">;
+  deferStart?: boolean;
+  processEnv?: NodeJS.ProcessEnv;
+}): EngineV2Preview {
   const { config } = options;
+  const processEnv = options.processEnv ?? process.env;
+  const locked = isEngineV2PreviewLocked(processEnv);
   const rootDir = join(runtimeStorageDir(config), "opencode-v2", "state");
   const workspaceDir = join(rootDir, "workspace");
-  const initialState = resolveInitialEngineV2PreviewState(process.env, readEngineV2PreviewState(config));
+  const initialState = resolveInitialEngineV2PreviewState(processEnv, readEngineV2PreviewState(config));
   let enabled = initialState.enabled;
   let chatRouting = initialState.chatRouting === true;
   let allowRunning = true;
@@ -575,6 +599,7 @@ export function createEngineV2Preview(options: { config: ServerConfig; env?: Pic
   }
 
   async function start(): Promise<void> {
+    if (locked) return;
     if (sidecar) return;
     if (startPromise) {
       await startPromise;
@@ -605,6 +630,7 @@ export function createEngineV2Preview(options: { config: ServerConfig; env?: Pic
   }
 
   async function setEnabled(nextEnabled: boolean): Promise<EngineV2PreviewStatus> {
+    if (locked && nextEnabled) throw new EngineV2PreviewLockedError();
     if (nextEnabled && enabled && running) return status();
     await writeEngineV2PreviewState(config, { enabled: nextEnabled, chatRouting });
     enabled = nextEnabled;
@@ -622,6 +648,7 @@ export function createEngineV2Preview(options: { config: ServerConfig; env?: Pic
   }
 
   async function setChatRouting(nextChatRouting: boolean): Promise<EngineV2PreviewStatus> {
+    if (locked && nextChatRouting) throw new EngineV2PreviewLockedError();
     await writeEngineV2PreviewState(config, { enabled, chatRouting: nextChatRouting });
     chatRouting = nextChatRouting;
     return status();

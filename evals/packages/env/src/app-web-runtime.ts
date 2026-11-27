@@ -53,7 +53,7 @@ export function isolatedRuntimeEnvironment(root: string): NodeJS.ProcessEnv {
     OPENCODE_CONFIG_DIR: join(config, "opencode"),
     OPENCODE_DB: join(data, "opencode", "opencode.db"),
     OPENWORK_DEV_HEADLESS_WEB_DEN_PROXY: "0",
-    OPENWORK_ENGINE_V2_PREVIEW: resolveEvalEngine() === "v2" ? "1" : "0",
+    OPENWORK_ENGINE_V2_PREVIEW: resolveEvalEngine() === "v2" ? "1" : "v1",
     OPENWORK_PORT: "0",
     OPENWORK_WEB_PORT: "0",
     OPENWORK_REMOTE_ACCESS: "0",

@@ -18,6 +18,18 @@ test("seed app-web runtime remains isolated and Cloud-off", () => {
   assert.equal(env.OPENWORK_HOST_TOKEN, undefined);
 });
 
+test("v1 eval runs force v1 at startup without locking the runtime toggle", () => {
+  const previous = process.env.OPENWORK_EVAL_ENGINE;
+  process.env.OPENWORK_EVAL_ENGINE = "v1";
+  try {
+    const env = isolatedRuntimeEnvironment("/tmp/owned-fixture");
+    assert.equal(env.OPENWORK_ENGINE_V2_PREVIEW, "v1");
+  } finally {
+    if (previous === undefined) delete process.env.OPENWORK_EVAL_ENGINE;
+    else process.env.OPENWORK_EVAL_ENGINE = previous;
+  }
+});
+
 test("remote runtime receipts preserve loopback identity and never expose malformed output", () => {
   const receipt = { webUrl: "http://127.0.0.1:5178", openworkUrl: "http://127.0.0.1:8778", runtimeManifestPath: "/workspace/tmp/worlds/runtime/app-web/runtime.json" };
   assert.deepEqual(parseRemoteRuntime(JSON.stringify(receipt)), receipt);

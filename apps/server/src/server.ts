@@ -158,7 +158,7 @@ import { buildOpenworkRuntimeConfigObject, openworkRuntimeConfigFilePath, writeO
 import { findManagedEngineWorkspace } from "./workspaces.js";
 import { startThreadApprovalReplayer, type ThreadApprovalReplayer } from "./thread-approvals.js";
 import { CloudProviderSync, parseCloudProviderDenSession } from "./cloud-provider-sync.js";
-import { createEngineV2Preview, type EngineV2Preview } from "./engine-v2-preview.js";
+import { createEngineV2Preview, EngineV2PreviewLockedError, type EngineV2Preview } from "./engine-v2-preview.js";
 import pkg from "../package.json" with { type: "json" };
 import constants from "../../../constants.json" with { type: "json" };
 
@@ -3114,8 +3114,15 @@ function createRoutes(
       throw new ApiError(400, "invalid_payload", "chatRouting must be a boolean");
     }
     let status = engineV2Preview.status();
-    if (typeof body.enabled === "boolean") status = await engineV2Preview.setEnabled(body.enabled);
-    if (typeof body.chatRouting === "boolean") status = await engineV2Preview.setChatRouting(body.chatRouting);
+    try {
+      if (typeof body.enabled === "boolean") status = await engineV2Preview.setEnabled(body.enabled);
+      if (typeof body.chatRouting === "boolean") status = await engineV2Preview.setChatRouting(body.chatRouting);
+    } catch (error) {
+      if (error instanceof EngineV2PreviewLockedError) {
+        throw new ApiError(409, "engine_v2_preview_locked", error.message);
+      }
+      throw error;
+    }
     return jsonResponse(status);
   });
 

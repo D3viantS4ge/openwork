@@ -110,11 +110,12 @@ describe("workspace run mode file", () => {
   });
 });
 
-async function startModeServer(options: { readOnly?: boolean; approval?: ServerConfig["approval"]; engine?: boolean } = {}) {
+async function startModeServer(options: { readOnly?: boolean; approval?: ServerConfig["approval"]; engine?: boolean; engineV2Preview?: string } = {}) {
   const root = await workspaceRoot('{"permission":{"edit":"deny"},"model":"local/model"}');
   process.env.OPENWORK_DATA_DIR = join(root, "data");
   process.env.OPENWORK_TOKEN_STORE = join(root, "tokens.json");
-  delete process.env.OPENWORK_ENGINE_V2_PREVIEW;
+  if (options.engineV2Preview === undefined) delete process.env.OPENWORK_ENGINE_V2_PREVIEW;
+  else process.env.OPENWORK_ENGINE_V2_PREVIEW = options.engineV2Preview;
   const engineState: { statuses: unknown; permissions: unknown[]; questions: unknown[]; statusCode: number; disposeCode: number; agentCode: number; disposals: number; probes: string[] } = {
     statuses: {}, permissions: [], questions: [], statusCode: 200, disposeCode: 200, agentCode: 200, disposals: 0, probes: [],
   };
@@ -233,6 +234,15 @@ describe("workspace run mode API", () => {
     expect((await put("run-everything")).status).toBe(409);
     expect(await readFile(opencodeConfigPath(root), "utf8")).toBe(valid);
     expect(engineState.disposals).toBe(0);
+  });
+
+  test("rejects enabling the v2 preview when OPENWORK_ENGINE_V2_PREVIEW=0", async () => {
+    const { origin } = await startModeServer({ engineV2Preview: "0" });
+    const response = await fetch(`${origin}/experimental/engine-v2-preview`, {
+      method: "PUT", headers, body: JSON.stringify({ enabled: true, chatRouting: true }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "engine_v2_preview_locked" });
   });
 
   test("keeps the read-only and config.write approval gates", async () => {

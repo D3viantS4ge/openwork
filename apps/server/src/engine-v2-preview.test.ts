@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import {
   createEngineV2Preview,
+  EngineV2PreviewLockedError,
   mapRuntimeProvidersToV2Specs,
   mapRuntimeMcpToV2,
   readEngineV2PreviewState,
@@ -80,6 +81,51 @@ test("enables engine v2 preview and chat routing when the override is 1", () => 
     { OPENWORK_ENGINE_V2_PREVIEW: "1" },
     { enabled: false, chatRouting: false },
   )).toEqual({ enabled: true, chatRouting: true });
+});
+
+test("forces v1 over persisted state when the override is 0", () => {
+  expect(resolveInitialEngineV2PreviewState(
+    { OPENWORK_ENGINE_V2_PREVIEW: "0" },
+    { enabled: true, chatRouting: true },
+  )).toEqual({ enabled: false, chatRouting: false });
+});
+
+test("forces v1 at startup when the override is v1", () => {
+  expect(resolveInitialEngineV2PreviewState(
+    { OPENWORK_ENGINE_V2_PREVIEW: "v1" },
+    { enabled: true, chatRouting: true },
+  )).toEqual({ enabled: false, chatRouting: false });
+});
+
+test("locks runtime v2 enabling when the override is 0", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openwork-engine-v2-preview-"));
+  const config = testConfig(root);
+  await writeEngineV2PreviewState(config, { enabled: true, chatRouting: true });
+  const preview = createEngineV2Preview({ config, processEnv: { OPENWORK_ENGINE_V2_PREVIEW: "0" } });
+  try {
+    expect(preview.status()).toMatchObject({ enabled: false, chatRouting: false, running: false });
+    await expect(preview.setEnabled(true)).rejects.toBeInstanceOf(EngineV2PreviewLockedError);
+    await expect(preview.setChatRouting(true)).rejects.toBeInstanceOf(EngineV2PreviewLockedError);
+    expect(preview.status()).toMatchObject({ enabled: false, chatRouting: false, running: false });
+    expect(await preview.setEnabled(false)).toMatchObject({ enabled: false, chatRouting: false, running: false });
+  } finally {
+    await preview.stop();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("does not lock runtime toggles when the override is v1", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openwork-engine-v2-preview-"));
+  const config = testConfig(root);
+  await writeEngineV2PreviewState(config, { enabled: true, chatRouting: true });
+  const preview = createEngineV2Preview({ config, processEnv: { OPENWORK_ENGINE_V2_PREVIEW: "v1" } });
+  try {
+    expect(preview.status()).toMatchObject({ enabled: false, chatRouting: false, running: false });
+    expect(await preview.setChatRouting(true)).toMatchObject({ enabled: false, chatRouting: true, running: false });
+  } finally {
+    await preview.stop();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("keeps persisted engine v2 preview state for an invalid override", () => {
